@@ -1,6 +1,6 @@
 {
   "name": "rdsh-pwa",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "type": "module",
   "license": "MIT",
   "description": "DSH Web GUI をインストール可能なアプリにし、スマホ幅のUX・通知・小物をまとめて改善する統合プラグイン",

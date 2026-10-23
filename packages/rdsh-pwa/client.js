@@ -43,9 +43,17 @@ window.__ModuleLoader__.load({
     const ROOT_ATTR = "data-rdsh-pwa";
     const UPDATE_POLL_MS = 30 * 60 * 1000;
     const UPDATE_MIN_GAP_MS = 5 * 60 * 1000;
+    // Phone layout, in one place for both halves of this file.
+    //
+    // Width alone called a landscape phone (852x393, 844x390) a desktop even
+    // though upstream DSH still treats everything below 1024 as narrow, which
+    // left the 768-1023 band hybrid: stock rail on the left, no drawer, no
+    // swipe, no floating button. The second clause covers that orientation
+    // without catching a narrow desktop window (a mouse reports
+    // `pointer: fine`) or a landscape tablet (short side above 500px).
+    const NARROW_QUERY = "(max-width: 767px), (orientation: landscape) and (max-width: 1023px) and (max-height: 500px) and (pointer: coarse)";
     const INSTALL_PROMPT_KEY = "rdsh-pwa:install-prompt-dismissed";
     const INSTALL_PROMPT_SNOOZE_MS = 30 * 24 * 60 * 60 * 1000;
-    const NARROW_QUERY = "(max-width: 767px)";
 
     const STANDALONE_QUERY = "(display-mode: standalone)";
     const FULLSCREEN_QUERY = "(display-mode: fullscreen)";
@@ -80,7 +88,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
 
 /* Phones: keep the toast column clear of the 64px sidebar header, and hang the
    install card on the right so the logo (session list) stays tappable. */
-@media (max-width: 767px) {
+@media ${NARROW_QUERY} {
   .rdsh-pwa-toasts { top: calc(env(safe-area-inset-top, 0px) + 8px); padding-top: 56px; }
   .rdsh-pwa-install { align-self: flex-end; max-width: min(330px, calc(100vw - 24px)); flex-wrap: wrap; row-gap: 8px; }
   .rdsh-pwa-install .rdsh-pwa-card-text { flex: 1 1 100%; }
@@ -893,7 +901,9 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     const useState = React.useState;
     const useEffect = React.useEffect;
 
-    const NARROW_QUERY = "(max-width: 767px)";
+    // Same predicate as the PWA part above: a landscape phone is a phone.
+    // Both halves must agree or the shell and the layout disagree on width.
+    const NARROW_QUERY = "(max-width: 767px), (orientation: landscape) and (max-width: 1023px) and (max-height: 500px) and (pointer: coarse)";
     const HIDE_OVERRIDE_KEY = "rdsh-mobile-ux:hide-disabled";
     const HIDE_EXTRA_KEY = "rdsh-mobile-ux:hide-extra";
     const CONFIG = globalThis.__RDSH_MOBILE_UX_CONFIG__ && typeof globalThis.__RDSH_MOBILE_UX_CONFIG__ === "object"
@@ -2747,11 +2757,14 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       const panelOpen = document.documentElement.hasAttribute("data-rdsh-rightpanel-open");
       // While the preview is open, a rightward swipe anywhere on it goes back
       // to the chat, the way a pushed iOS screen does. This is checked before
-      // the edge rules below, which would otherwise return first.
-      if (panelOpen && !drawerOpen) {
+      // the edge rules below, which would otherwise return first. The left
+      // 36px stays the drawer's: a swipe from there is the open-the-session-
+      // list gesture, and letting the preview eat it made the drawer
+      // unreachable whenever the preview happened to be open.
+      if (panelOpen && !drawerOpen && touch.clientX > 36) {
         if (target instanceof Element) {
           if (scrolledLeftAncestor(target) !== null) return;
-          if (target.closest("input, textarea, [contenteditable=true]") !== null) return;
+          if (target.closest("input, textarea, [contenteditable=true], .xterm, [class*='xterm']") !== null) return;
         }
         edgeSwipe = { x: touch.clientX, y: touch.clientY, fromRight: false, closesPanel: true };
         return;
@@ -2771,6 +2784,12 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     }
     function onEdgeSwipeMove(event) {
       if (edgeSwipe === null || event.touches.length !== 1) return;
+      // A rotation can end the phone layout in the middle of a gesture; the
+      // stored start point then belongs to a layout that no longer exists.
+      if (!narrow()) {
+        edgeSwipe = null;
+        return;
+      }
       const touch = event.touches[0];
       const dx = touch.clientX - edgeSwipe.x;
       const dy = touch.clientY - edgeSwipe.y;
@@ -2793,7 +2812,28 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       if (event.cancelable) event.preventDefault();
       toggleDrawer();
     }
-    function onEdgeSwipeEnd() { edgeSwipe = null; }
+    /**
+     * Drop the in-flight gestures.
+     *
+     * A rotation (or the keyboard opening) can swallow the `touchend` that
+     * would have cleared these, and a stale start point turns the next
+     * touchmove into a jump-sized swipe: the drawer opens or the preview
+     * closes without a gesture. Also called when the phone layout turns off,
+     * so coordinates from the old layout cannot fire in the new one.
+     */
+    function resetGestures() {
+      edgeSwipe = null;
+      touchStart = null;
+      terminalDrag = null;
+      tapCandidate = null;
+      tabCandidate = null;
+      clearTimeout(tabReplayTimer);
+      cancelLongPress();
+    }
+    function onEdgeSwipeEnd() {
+      edgeSwipe = null;
+      endTerminalDrag();
+    }
 
     // ---------------------------------------------------------------------
     // Input: Enter inserts a newline unless the user opts into sending
@@ -4992,7 +5032,7 @@ html[data-rdsh-safe-bottom] #root { box-sizing: border-box; padding-bottom: env(
    below the web view, so an inner bottom safe-area pad only widens the blank. */
 html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !important; }
 
-@media (max-width: 767px) {
+@media ${NARROW_QUERY} {
   /* The mockup proved 100% is the layout viewport (844) while the native web
      view is 797 on iOS 26; the body could pan 47px. 100dvh is the web view
      height, and the grid makes the app fill exactly that one row. */
@@ -5544,7 +5584,11 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         document.documentElement.setAttribute("data-rdsh-anim", ANIMATION);
 
         const observer = new MutationObserver(scheduleDecorate);
-        observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["aria-label", "aria-selected", "data-state", "draggable"] });
+        // `data-sidebar-collapsed` / `data-rightbar-collapsed` are upstream's
+        // own open/close signals on the app frame. They change without a
+        // resize when the user toggles a sidebar, so without them the drawer
+        // and right-panel state only caught up on the next unrelated mutation.
+        observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["aria-label", "aria-selected", "data-state", "draggable", "data-sidebar-collapsed", "data-rightbar-collapsed"] });
 
         document.addEventListener("pointerdown", onPointerDown, true);
         document.addEventListener("pointermove", onPointerMove, true);
@@ -5565,13 +5609,30 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         document.addEventListener("touchstart", onTouchStart, { capture: true, passive: true });
         document.addEventListener("touchmove", onTouchMove, { capture: true, passive: false });
         measureSafeArea();
+        // A rotation changes both the query and the geometry, and iOS reports
+        // the new safe-area insets a frame or two after the event. Re-measure,
+        // forget the gestures that were in flight, and decorate twice: once
+        // now (so the drawer/button state follows the new width) and once
+        // after the transition has settled.
+        let rotationTimer = 0;
         const onResize = () => {
           // Do not close the attach sheet here: opening it blurs the composer,
           // and the resulting keyboard-close resize would remove it instantly.
+          resetGestures();
           measureSafeArea();
+          scheduleDecorate();
+          clearTimeout(rotationTimer);
+          rotationTimer = window.setTimeout(() => {
+            measureSafeArea();
+            scheduleDecorate();
+          }, 350);
         };
         window.addEventListener("resize", onResize);
         window.addEventListener("orientationchange", onResize);
+        // The visual viewport reports the keyboard and the rotation's own
+        // resize; without it an iPhone keyboard can leave the layout sized for
+        // the covered viewport.
+        window.visualViewport?.addEventListener("resize", onResize);
         patchCommandUi(ctx);
         document.addEventListener("dragstart", onDragStartCapture, true);
         document.addEventListener("dragend", onDragEndCapture, true);
@@ -5623,6 +5684,8 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           document.removeEventListener("touchmove", onTouchMove, true);
           window.removeEventListener("resize", onResize);
           window.removeEventListener("orientationchange", onResize);
+          window.visualViewport?.removeEventListener("resize", onResize);
+          clearTimeout(rotationTimer);
           document.removeEventListener("dragstart", onDragStartCapture, true);
           document.removeEventListener("dragend", onDragEndCapture, true);
           document.removeEventListener("dblclick", onSessionTitleDoubleClick, true);

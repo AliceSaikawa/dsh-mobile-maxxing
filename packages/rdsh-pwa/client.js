@@ -903,7 +903,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       ? CONFIG.runningAnimation
       : "none";
     /** Shown in Settings so a stale PWA bundle is easy to spot. */
-    const BUILD = "2026-10-24.1000-notify-inapp";
+    const BUILD = "2026-10-24.1440-grid-both-states";
 
     /** Controls that have no meaning inside an installed app on a phone. */
     const HIDE_DEFAULT = [
@@ -5012,8 +5012,13 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
 
   /* The drawer floats above the chat; the grid never gives it a column. */
   [data-rdsh-frame] { grid-template-columns: 0 minmax(0, 1fr) 0 !important; }
-  [data-rdsh-frame]:not([data-sidebar-collapsed]) [data-rdsh-center-col] { grid-column: 2 !important; }
-  [data-rdsh-frame]:not([data-sidebar-collapsed]) [data-rdsh-rightbar-col] { grid-column: 3 !important; }
+  /* Pin both columns in every state. The app switches between explicit
+     placement and auto-placement as the sidebar opens and closes, and auto
+     placement shifts everything one column left once our drawer leaves the
+     flow: the chat lands on the 0px column and the empty right column fills
+     the screen. Pinning only the open state left the closed state broken. */
+  [data-rdsh-frame] [data-rdsh-center-col] { grid-column: 2 !important; }
+  [data-rdsh-frame] [data-rdsh-rightbar-col] { grid-column: 3 !important; }
   [data-rdsh-frame][data-rightbar-fullscreen] { grid-template-columns: 0 minmax(0, 1fr) 0 !important; }
   [data-rdsh-sidebar] {
     position: fixed !important; inset: 0 auto 0 0 !important;

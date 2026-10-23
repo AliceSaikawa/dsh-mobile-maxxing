@@ -39,16 +39,18 @@ const OFFLINE_HTML = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>オフライン — DSH</title>
 <style>
-:root{color-scheme:dark}
+/* The worker cannot read the stored theme (no DOM, no profile), so the
+   offline page follows the OS preference through the system colours. */
+:root{color-scheme:light dark}
 html,body{height:100%}
-body{margin:0;display:grid;place-items:center;background:#151517;color:#f9fafb;
+body{margin:0;display:grid;place-items:center;background:Canvas;color:CanvasText;
   font:16px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;
   padding:calc(env(safe-area-inset-top,0px) + 24px) 24px calc(env(safe-area-inset-bottom,0px) + 24px)}
 main{max-width:22rem;text-align:center}
 h1{margin:0 0 8px;font-size:18px;font-weight:600}
-p{margin:0 0 20px;color:#adb2b8;font-size:14px}
+p{margin:0 0 20px;color:GrayText;font-size:14px}
 button{font:inherit;font-size:14px;padding:10px 18px;border-radius:999px;border:0;
-  background:#4d6bfe;color:#fff;cursor:pointer}
+  background:LinkText;color:Canvas;cursor:pointer}
 button:active{transform:scale(.98)}
 </style></head>
 <body><main>

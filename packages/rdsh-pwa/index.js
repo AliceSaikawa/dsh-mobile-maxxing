@@ -23,7 +23,6 @@ import { createHash } from "node:crypto";
 import { applyNotify, normalizeNotifyConfig } from "./notify/host.js";
 import { apply as applyMobileUx } from "./lib/mobile-ux.js";
 import { apply as applyMarkdownCjk } from "./lib/markdown-cjk.js";
-import { apply as applyOpenWith } from "./lib/open-with.js";
 import { apply as applySessionIdCopy } from "./lib/session-id-copy.js";
 import { readFile } from "node:fs/promises";
 
@@ -289,8 +288,6 @@ export function apply(ctx, config) {
 	// mobile-ux and markdown-cjk inject what they need inside their own apply.
 	mountPart("rdsh-mobile-ux", [], applyMobileUx, config?.mobileUx);
 	mountPart("rdsh-markdown-cjk", [], applyMarkdownCjk, config?.markdownCjk);
-	// open-with reads ctx.webServer and ctx.connection directly.
-	mountPart("rdsh-open-with", ["webServer", "connection"], applyOpenWith, config?.openWith);
 	// Registers nothing: its whole contribution is the browser half.
 	mountPart("rdsh-session-id-copy", [], applySessionIdCopy, undefined);
 	// Read once per activation: a deployment restart is what makes new bytes

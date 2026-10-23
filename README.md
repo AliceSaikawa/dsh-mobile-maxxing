@@ -5,7 +5,7 @@ DeepSeek Harness（DSH）の Web UI をスマホで最大限に使い倒すた�
 
 ## 何が入るか
 
-**1パッケージ・1インストール**です。中身は次の6つで、すべて `rdsh-pwa` の中で動きます。
+**1パッケージ・1インストール**です。中身は次の5つで、すべて `rdsh-pwa` の中で動きます。
 
 | 機能 | 内容 |
 | --- | --- |
@@ -13,7 +13,6 @@ DeepSeek Harness（DSH）の Web UI をスマホで最大限に使い倒すた�
 | 通知 | 前面ならアプリ内バナー、背面なら Web Push。通知音5種 |
 | スマホUX | ドロワー、設定の1タップ表示、入力欄、コード表示の折り返し |
 | CJK表示 | `**https://x**（メモ）` のような自動リンク崩れを修正 |
-| 外部アプリで開く | トランスクリプトのパス/URL を右クリックして開く |
 | セッションIDのコピー | セッションメニューに1行追加 |
 
 分けていない理由は、DSH のクライアントモジュールシステムが**1パッケージ＝1ブラウザモジュール**
@@ -26,7 +25,7 @@ DeepSeek Harness（DSH）の Web UI をスマホで最大限に使い倒すた�
 ```sh
 cd ~/.dsh/profiles/web
 dsh plugin add \
-  https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.2.0/rdsh-pwa-0.2.0.tgz
+  https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.2.1/rdsh-pwa-0.2.1.tgz
 # DSH を再起動（環境に合わせて）
 systemctl --user restart dsh-web.service
 ```
@@ -38,7 +37,7 @@ systemctl --user restart dsh-web.service
 ```json
 {
   "dependencies": {
-    "rdsh-pwa": "https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.2.0/rdsh-pwa-0.2.0.tgz"
+    "rdsh-pwa": "https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.2.1/rdsh-pwa-0.2.1.tgz"
   },
   "dsh": {
     "profile": {
@@ -62,7 +61,7 @@ node scripts/pack-all.mjs     # dist/ に tarball を作る
 ```
 
 **ビルド工程はありません。** `client.js` はブラウザにそのまま配信され、`index.js` は
-Node 標準モジュールだけで動きます。`client.js` は6つの機能を1つのモジュールにまとめた
+Node 標準モジュールだけで動きます。`client.js` は3つの機能を1つのモジュールにまとめた
 ファイルで、冒頭に各部の出どころが書いてあります。
 
 ローカルのチェックアウトをそのまま使う場合:

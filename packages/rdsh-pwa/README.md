@@ -12,14 +12,13 @@ DSH Web GUI を「インストールできるアプリ」にし、スマホ幅�
 
 ## このパッケージについて
 
-もともと別々だった5つのプラグインを1つにまとめたものです。
+もともと別々だった4つのプラグインを1つにまとめたものです。
 
 | 元 | いま |
 | --- | --- |
 | `rdsh-pwa` | PWA（インストール可能化・オフライン起動・通知の送受信・通知音） |
 | `rdsh-mobile-ux` | スマホ幅のUX（ドロワー・設定・入力・コード表示・アプリ内バナー） |
 | `rdsh-markdown-cjk` | CJK の自動リンク崩れ修正（ホスト専用） |
-| `rdsh-open-with` | パスや URL を外部アプリで開く |
 | `rdsh-session-id-copy` | セッションメニューにセッションIDのコピー行を足す |
 
 **分けていない理由**: DSH のクライアントモジュールシステムは1パッケージ＝1ブラウザモジュールです。
@@ -65,7 +64,7 @@ DSH Web GUI を「インストールできるアプリ」にし、スマホ幅�
 
 ```sh
 cd ~/.dsh/profiles/web
-dsh plugin add https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.2.0/rdsh-pwa-0.2.0.tgz
+dsh plugin add https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.2.1/rdsh-pwa-0.2.1.tgz
 # DSH を再起動
 ```
 
@@ -99,7 +98,7 @@ ln -sfn /path/to/dsh-mobile-maxxing/packages/rdsh-pwa ~/.dsh/profiles/web/node_m
 
 **このパッケージ1つで完結**します。他の `rdsh-*` プラグイン（rdsh-settings /
 rdsh-mobile-ui / rdsh-answer-guard など）は不要で、素の DSH にそのまま入ります。
-スマホUX・通知・CJK修正・外部アプリ連携・IDコピーはすべてこの中にあります。
+スマホUX・通知・CJK修正・IDコピーはすべてこの中にあります。
 
 クライアント側が必要とするのは DSH 本体が提供する `react` と
 `@deepseek-ai/dsh-client-ui-primitives` だけ、ホスト側は Node 標準モジュールだけです。

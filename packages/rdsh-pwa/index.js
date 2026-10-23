@@ -24,6 +24,7 @@ import { applyNotify, normalizeNotifyConfig } from "./notify/host.js";
 import { apply as applyMobileUx } from "./lib/mobile-ux.js";
 import { apply as applyMarkdownCjk } from "./lib/markdown-cjk.js";
 import { apply as applySessionIdCopy } from "./lib/session-id-copy.js";
+import { COPY, PROBES, copyFor, serviceWorkerCopy } from "./lib/copy.js";
 import { readFile } from "node:fs/promises";
 
 /** Stable Cordis plugin name. */
@@ -45,8 +46,8 @@ const DISPLAY_MODES = new Set(["standalone", "minimal-ui", "fullscreen", "browse
 export const DEFAULTS = {
 	name: "DeepSeek Harness",
 	shortName: "DSH",
-	description: "DeepSeek Harness をアプリのように起動します。",
-	lang: "ja",
+	description: COPY.en["manifest.description"],
+	lang: "en",
 	display: "standalone",
 	themeColor: "#151517",
 	backgroundColor: "#151517",
@@ -97,11 +98,16 @@ export function normalizeConfig(input) {
 	const src = input !== null && typeof input === "object" && !Array.isArray(input) ? input : {};
 	const display = text(src.display, DEFAULTS.display, 32);
 	const timeout = Number(src.navigationTimeoutMs);
+	// Only languages the dictionary carries are accepted, so the manifest and
+	// the injected copy can never disagree about what `lang` means.
+	const requested = text(src.lang, DEFAULTS.lang, 12);
+	const lang = Object.hasOwn(COPY, requested) ? requested : DEFAULTS.lang;
+	const strings = copyFor(lang);
 	return {
 		name: text(src.name, DEFAULTS.name, 80),
 		shortName: text(src.shortName, DEFAULTS.shortName, 24),
-		description: text(src.description, DEFAULTS.description, 300),
-		lang: text(src.lang, DEFAULTS.lang, 12),
+		description: text(src.description, strings["manifest.description"], 300),
+		lang,
 		display: DISPLAY_MODES.has(display) ? display : DEFAULTS.display,
 		themeColor: color(src.themeColor, DEFAULTS.themeColor),
 		backgroundColor: color(src.backgroundColor, DEFAULTS.backgroundColor),
@@ -124,6 +130,7 @@ export function normalizeConfig(input) {
  */
 export function buildManifest(config) {
 	const cfg = normalizeConfig(config);
+	const strings = copyFor(cfg.lang);
 	return {
 		id: "./",
 		name: cfg.name,
@@ -156,10 +163,15 @@ export function buildManifest(config) {
 		screenshots: [
 			// `sizes` is the intrinsic pixel size of the file, which is the CSS
 			// size times the capture scale (3x on a phone, 2x on a desktop).
-			{ src: "pwa/screenshot-mobile.png", sizes: "1170x2532", type: "image/png", form_factor: "narrow", label: "チャット画面" },
-			{ src: "pwa/screenshot-desktop.png", sizes: "2560x1600", type: "image/png", form_factor: "wide", label: "デスクトップ表示" },
+			{ src: "pwa/screenshot-mobile.png", sizes: "1170x2532", type: "image/png", form_factor: "narrow", label: strings["manifest.screenshot.chat"] },
+			{ src: "pwa/screenshot-desktop.png", sizes: "2560x1600", type: "image/png", form_factor: "wide", label: strings["manifest.screenshot.desktop"] },
 		],
 	};
+}
+
+/** JSON safe to embed in an inline script (`<` would open a tag). */
+function scriptJson(value) {
+	return JSON.stringify(value).replaceAll("<", "\\u003c");
 }
 
 function escapeAttribute(value) {
@@ -207,6 +219,10 @@ export function decorateIndex(html, config) {
 	const cfg = normalizeConfig(config);
 	const head = [
 		INDEX_MARKER,
+		// The browser half reads its strings from here; nothing else in the
+		// client carries UI copy. PROBES are upstream label vocabularies, not
+		// copy, so they travel separately.
+		`<script>globalThis.__RDSH_PWA_COPY__=${scriptJson(COPY)};globalThis.__RDSH_PWA_PROBES__=${scriptJson(PROBES)}<\/script>`,
 		// The standard set of "this is a capable app" meta tags, plus
 		// the install manifest, but NOT apple-mobile-web-app-capable/title.
 		// iOS 26 uses a mis-sized legacy frame when the Apple-specific capable
@@ -303,7 +319,11 @@ export function apply(ctx, config) {
 		if (build !== undefined) return build;
 		const source = await readFile(assetPath("sw.js"), "utf8");
 		const hash = createHash("sha256").update(source).digest("hex").slice(0, 12);
-		const header = `self.__RDSH_PWA_BUILD__=${JSON.stringify(hash)};self.__RDSH_PWA_CONFIG__=${JSON.stringify({ navigationTimeoutMs: cfg.navigationTimeoutMs })};\n`;
+		const header = `self.__RDSH_PWA_BUILD__=${JSON.stringify(hash)};self.__RDSH_PWA_CONFIG__=${JSON.stringify({
+			navigationTimeoutMs: cfg.navigationTimeoutMs,
+			lang: cfg.lang,
+			copy: serviceWorkerCopy(cfg.lang),
+		})};\n`;
 		build = header + source;
 		return build;
 	};

@@ -199,7 +199,8 @@ async function checkRuntime() {
 		root: !!document.getElementById('root'),
 	}))()`);
 	check("an offline reload still serves the app shell", offline.title === "DeepSeek Harness" && offline.root === true, offline);
-	check("offline state is visible", /オフライン/.test(offline.pill || ""), offline.pill);
+	// Text is localised, so assert the element rendered rather than its wording.
+	check("offline state is visible", typeof offline.pill === "string" && offline.pill.length > 0, offline.pill);
 	await cdp.send("Network.emulateNetworkConditions", { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
 	check("the plugin logs no errors", pluginErrors.length === 0, pluginErrors);
 	return cdp;

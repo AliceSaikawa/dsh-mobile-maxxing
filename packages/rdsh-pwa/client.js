@@ -15,6 +15,76 @@ window.__ModuleLoader__.load({
     // Nothing here depends on a build step: this file is loaded verbatim by
     // the client module loader.
     // ---------------------------------------------------------------------
+    // UI copy
+    //
+    // The host half injects one dictionary (lib/copy.js) into the index and
+    // into the service-worker config, so the strings this package renders have
+    // a single source. A future Japanese pack fills COPY.ja: every lookup
+    // falls back to English per key, so a partial pack is safe.
+    // ---------------------------------------------------------------------
+    const COPY = globalThis.__RDSH_PWA_COPY__ ?? { en: {}, ja: {} };
+    /** Upstream label vocabularies (never rendered), for language-independent matching. */
+    const PROBES = globalThis.__RDSH_PWA_PROBES__ ?? {};
+
+    /** The document's language when this dictionary carries it, else `en`. */
+    function currentLang() {
+      const lang = String(document.documentElement.lang || "").toLowerCase().split("-")[0];
+      return lang !== "" && COPY[lang] !== undefined ? lang : "en";
+    }
+
+    /**
+     * One UI string, falling back to English and then to the key itself.
+     *
+     * @param {string} key - a key from lib/copy.js.
+     * @param {object} [params] - values for `{name}` placeholders.
+     * @returns {string}
+     */
+    function t(key, params) {
+      const localized = COPY[currentLang()];
+      const value = localized !== null && localized !== undefined
+        && typeof localized[key] === "string" && localized[key] !== ""
+        ? localized[key]
+        : COPY.en?.[key];
+      if (typeof value !== "string") return key;
+      if (params === undefined || params === null) return value;
+      return value.replace(/\{(\w+)\}/g, (match, name) => (name in params ? String(params[name]) : match));
+    }
+
+    /** Probe labels, or the English fallbacks when the host sent no dictionary. */
+    function probeValues(key, fallback) {
+      if (Array.isArray(PROBES[key]) && PROBES[key].length > 0) return PROBES[key];
+      if (fallback === undefined) return [];
+      return Array.isArray(fallback) ? fallback : [fallback];
+    }
+
+    /**
+     * A regex over one probe vocabulary, or null when nothing is known.
+     *
+     * @param {string} key - a PROBES entry.
+     * @param {string} [flags] - regex flags.
+     * @param {string|string[]} [fallback] - English labels when PROBES is absent.
+     * @param {boolean} [exact] - anchor to a whole label instead of a substring.
+     */
+    function probeRegex(key, flags = "i", fallback, exact = false) {
+      const values = probeValues(key, fallback);
+      if (values.length === 0) return null;
+      const source = values.join("|");
+      return new RegExp(exact ? `^(?:${source})$` : source, flags);
+    }
+
+    const cssValue = (value) => String(value).replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+
+    /** A CSS attribute selector for one probe vocabulary. */
+    function ariaLabelSelector(tag, key, fallback) {
+      return probeValues(key, fallback).map((value) => `${tag}[aria-label="${cssValue(value)}"]`).join(", ");
+    }
+
+    /** A CSS "aria-label contains" selector for one probe vocabulary. */
+    function ariaContainsSelector(tag, key, fallback) {
+      return probeValues(key, fallback).map((value) => `${tag}[aria-label*="${cssValue(value)}"]`).join(", ");
+    }
+
+    // ---------------------------------------------------------------------
     // rdsh-pwa — PWA shell: manifest, service worker, install prompt, notification transport.
     // ---------------------------------------------------------------------
     function pwaPart() {
@@ -523,16 +593,16 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         const text = document.createElement("span");
         text.className = "rdsh-pwa-card-text";
         text.textContent = state.installable
-          ? "DSH をアプリとしてインストールできます"
-          : "Safari の共有 → 「ホーム画面に追加」でアプリにできます";
+          ? t("pwa.install.promptable")
+          : t("pwa.install.iosHint");
         const installButton = document.createElement("button");
         installButton.type = "button";
-        installButton.textContent = "インストール";
+        installButton.textContent = t("pwa.install.button");
         installButton.addEventListener("click", () => void promptInstall());
         const dismiss = document.createElement("button");
         dismiss.type = "button";
         dismiss.className = "rdsh-pwa-quiet";
-        dismiss.textContent = "あとで";
+        dismiss.textContent = t("pwa.later");
         dismiss.addEventListener("click", snoozeInstallPrompt);
         const actions = document.createElement("div");
         actions.className = "rdsh-pwa-install-actions";
@@ -546,15 +616,15 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         card.className = "rdsh-pwa-card";
         const text = document.createElement("span");
         text.className = "rdsh-pwa-card-text";
-        text.textContent = "新しいバージョンがあります";
+        text.textContent = t("pwa.update.available");
         const reload = document.createElement("button");
         reload.type = "button";
-        reload.textContent = "再読み込み";
+        reload.textContent = t("pwa.update.reload");
         reload.addEventListener("click", () => void applyUpdate());
         const dismiss = document.createElement("button");
         dismiss.type = "button";
         dismiss.className = "rdsh-pwa-quiet";
-        dismiss.textContent = "あとで";
+        dismiss.textContent = t("pwa.later");
         dismiss.addEventListener("click", () => emit({ updateDismissed: true }));
         card.append(text, reload, dismiss);
         toastRoot.append(card);
@@ -562,7 +632,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       if (state.offline) {
         const pill = document.createElement("div");
         pill.className = "rdsh-pwa-pill";
-        pill.textContent = "オフライン — 再接続を待っています";
+        pill.textContent = t("pwa.offline");
         toastRoot.append(pill);
       }
     }
@@ -599,38 +669,38 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
           type: "button",
           className: "rdsh-pwa-foot",
           "data-wide": wide ? "true" : "false",
-          title: "アプリとしてインストール",
-          "aria-label": "アプリとしてインストール",
+          title: t("pwa.install.title"),
+          "aria-label": t("pwa.install.title"),
           onClick: () => void promptInstall(),
         },
         h(InstallIcon, { size: wide ? 16 : 18 }),
-        wide ? h("span", null, "インストール") : null,
+        wide ? h("span", null, t("pwa.install.button")) : null,
       );
     }
 
     function swLabel(s) {
       switch (s.sw) {
         case "active":
-          return s.updateReady ? "有効（更新待ち）" : "有効";
+          return s.updateReady ? t("pwa.sw.activeUpdate") : t("pwa.sw.active");
         case "unsupported":
-          return "このブラウザは非対応";
+          return t("pwa.sw.unsupported");
         case "insecure":
-          return "無効（HTTPS または localhost で有効）";
+          return t("pwa.sw.insecure");
         case "shared":
-          return "他のサービスワーカーが制御中（キャッシュ無効）";
+          return t("pwa.sw.shared");
         case "error":
-          return "登録に失敗";
+          return t("pwa.sw.error");
         default:
-          return "準備中";
+          return t("pwa.sw.pending");
       }
     }
 
     function installLabel(s) {
-      if (s.standalone) return "インストール済み（アプリとして起動中）";
-      if (s.installable) return "インストールできます";
-      if (s.ios) return "Safari の共有メニュー →「ホーム画面に追加」";
-      if (!s.secure) return "HTTPS で開くとインストールできます";
-      return "このブラウザでは未対応";
+      if (s.standalone) return t("pwa.install.state.standalone");
+      if (s.installable) return t("pwa.install.state.installable");
+      if (s.ios) return t("pwa.install.state.ios");
+      if (!s.secure) return t("pwa.install.state.insecure");
+      return t("pwa.install.state.unsupported");
     }
 
     function PwaSettingsSection() {
@@ -640,7 +710,9 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
 
       const install = async () => {
         const outcome = await promptInstall();
-        setMessage(outcome === "accepted" ? "インストールしました。" : outcome === "dismissed" ? "キャンセルしました。" : "この環境ではプロンプトを出せません。");
+        setMessage(outcome === "accepted"
+          ? t("pwa.install.accepted")
+          : outcome === "dismissed" ? t("pwa.install.dismissed") : t("pwa.install.unavailable"));
       };
       const check = async () => {
         setBusy(true);
@@ -648,15 +720,15 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         try {
           const reg = registration ?? (await navigator.serviceWorker.getRegistration());
           if (reg === null || reg === undefined) {
-            setMessage("サービスワーカーが未登録です。");
+            setMessage(t("pwa.check.noWorker"));
           } else {
             await reg.update();
             const waiting = reg.waiting !== null;
             emit({ updateReady: waiting && navigator.serviceWorker.controller !== null });
-            setMessage(waiting ? "新しいバージョンがあります。" : "最新です。");
+            setMessage(waiting ? t("pwa.check.available") : t("pwa.check.latest"));
           }
         } catch {
-          setMessage("確認できませんでした（オフラインの可能性があります）。");
+          setMessage(t("pwa.check.failed"));
         } finally {
           setBusy(false);
           void pingWorker();
@@ -669,34 +741,34 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         h(
           "div",
           { className: "rdsh-pwa-cardbox" },
-          h("h3", { className: "rdsh-pwa-title" }, "アプリ（PWA）"),
-          h("p", { className: "rdsh-pwa-desc" }, "DSH を独立したアプリウィンドウで起動し、オフライン時も画面を表示できるようにします。"),
+          h("h3", { className: "rdsh-pwa-title" }, t("pwa.section.title")),
+          h("p", { className: "rdsh-pwa-desc" }, t("pwa.section.desc")),
           h(
             "dl",
             { className: "rdsh-pwa-rows" },
-            h("dt", null, "表示モード"),
-            h("dd", null, s.standalone ? "アプリ（スタンドアロン）" : "ブラウザ"),
-            h("dt", null, "インストール"),
+            h("dt", null, t("pwa.row.displayMode")),
+            h("dd", null, s.standalone ? t("pwa.row.displayMode.standalone") : t("pwa.row.displayMode.browser")),
+            h("dt", null, t("pwa.row.install")),
             h("dd", null, installLabel(s)),
-            h("dt", null, "オフライン起動"),
+            h("dt", null, t("pwa.row.offline")),
             h("dd", null, swLabel(s)),
-            s.build !== "" ? h("dt", null, "ビルド") : null,
+            s.build !== "" ? h("dt", null, t("pwa.row.build")) : null,
             s.build !== "" ? h("dd", { className: "rdsh-pwa-code" }, s.build) : null,
           ),
           h(
             "div",
             { className: "rdsh-pwa-actions" },
-            s.installable ? h("button", { type: "button", className: "rdsh-pwa-primary", onClick: install, disabled: busy }, "インストール") : null,
-            s.updateReady ? h("button", { type: "button", className: "rdsh-pwa-primary", onClick: () => void applyUpdate() }, "再読み込みして更新") : null,
-            h("button", { type: "button", onClick: check, disabled: busy }, busy ? "確認中…" : "更新を確認"),
+            s.installable ? h("button", { type: "button", className: "rdsh-pwa-primary", onClick: install, disabled: busy }, t("pwa.install.button")) : null,
+            s.updateReady ? h("button", { type: "button", className: "rdsh-pwa-primary", onClick: () => void applyUpdate() }, t("pwa.action.reloadUpdate")) : null,
+            h("button", { type: "button", onClick: check, disabled: busy }, busy ? t("pwa.action.checking") : t("pwa.action.check")),
           ),
           message !== "" ? h("p", { className: "rdsh-pwa-note" }, message) : null,
           s.ios && !s.standalone
-            ? h("p", { className: "rdsh-pwa-note" }, "iPhone / iPad: Safari の共有ボタンから「ホーム画面に追加」を選ぶと、アプリとして起動できます。")
+            ? h("p", { className: "rdsh-pwa-note" }, t("pwa.note.ios"))
             : null,
-          !s.secure ? h("p", { className: "rdsh-pwa-note" }, "オフライン起動とインストールは HTTPS または localhost でのみ有効になります。") : null,
-          s.sw === "error" && s.swError !== "" ? h("p", { className: "rdsh-pwa-note" }, `サービスワーカーの登録に失敗しました: ${s.swError}`) : null,
-          s.bootError !== "" ? h("p", { className: "rdsh-pwa-note" }, `起動時にエラーが発生しました: ${s.bootError}`) : null,
+          !s.secure ? h("p", { className: "rdsh-pwa-note" }, t("pwa.note.insecure")) : null,
+          s.sw === "error" && s.swError !== "" ? h("p", { className: "rdsh-pwa-note" }, t("pwa.note.swError", { error: s.swError })) : null,
+          s.bootError !== "" ? h("p", { className: "rdsh-pwa-note" }, t("pwa.note.bootError", { error: s.bootError })) : null,
         ),
       );
     }
@@ -862,7 +934,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
           name: "settings.section",
           id: "pwa",
           order: 80,
-          label: () => "アプリ",
+          label: () => t("tab.pwa"),
         }, PwaSettingsSection));
       },
     };
@@ -917,6 +989,15 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     /** Shown in Settings so a stale PWA bundle is easy to spot. */
     const BUILD = "2026-10-23.review-fixes";
 
+    // Upstream labels are matched through PROBES (all known locales). The
+    // English fallbacks keep decoration working if the host's probe script
+    // never landed; the injected vocabularies cover every known locale.
+    const STOP_PROBE = probeRegex("stop", "i", "stop");
+    const ACTIONS_PROBE = probeRegex("actions", "i", "actions");
+    const TURNS_PROBE = probeRegex("turns", "i", ["turns", "turn", "steps", "step"]);
+    const CACHE_PROBE = probeRegex("cacheHit", "i", "cache hit");
+    const CONTEXT_PROBE = probeRegex("context", "i", "context");
+
     /** Controls that have no meaning inside an installed app on a phone. */
     const HIDE_DEFAULT = [
       "Open in Files",
@@ -942,11 +1023,13 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     /** Browser-local theme choice; also read while the store initialises. */
     const DEVICE_THEME_KEY = "rdsh-pwa:device-theme";
     const DEVICE_THEME_MODES = ["", "light", "dark", "system"];
-    const DEVICE_THEME_LABELS = {
-      "": "共有設定に従う",
-      light: "ライト",
-      dark: "ダーク",
-      system: "端末に合わせる",
+    // The device-theme choices are rendered through the copy table so a future
+    // Japanese pack can translate them without touching this file.
+    const DEVICE_THEME_KEYS = {
+      "": "mux.deviceTheme.follow",
+      light: "mux.deviceTheme.light",
+      dark: "mux.deviceTheme.dark",
+      system: "mux.deviceTheme.system",
     };
 
     const state = {
@@ -1386,7 +1469,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         if (modal !== null) {
           for (const button of modal.querySelectorAll("nav button")) {
             const label = (button.textContent || "").trim();
-            const merged = label === "アプリ" || label === "入力";
+            const merged = label === t("tab.pwa") || label === t("tab.input");
             const hideTab = merged || (!disabled && shouldHide(label, labels));
             button.toggleAttribute("data-rdsh-settings-tab-hidden", hideTab);
             if (hideTab) hidden.add(label);
@@ -1418,7 +1501,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       const menu = document.querySelector("[role='menu']");
       if (menu !== null && !disabled) {
         const items = [...menu.querySelectorAll("[role='menuitem']")];
-        const localised = items.find((item) => /セッションIDをコピー/.test(item.textContent || ""));
+        const localised = items.find((item) => (item.textContent || "").includes(t("sessionId.label")));
         const stock = items.find((item) => /^Copy Session ID$/i.test(labelOf(item)));
         if (localised !== undefined && stock !== undefined) {
           stock.setAttribute("data-rdsh-hidden", "");
@@ -1447,12 +1530,12 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
 
     const SESSION_FRAME_KEY = "rdsh-mobile-ux:session-frames";
     const FRAME_COLORS = [
-      { id: "blue", label: "ブルー", value: "#7aaaff" },
-      { id: "green", label: "グリーン", value: "#5bd6a5" },
-      { id: "amber", label: "アンバー", value: "#ffd166" },
-      { id: "red", label: "レッド", value: "#ff6b6b" },
-      { id: "purple", label: "パープル", value: "#b48cff" },
-      { id: "pink", label: "ピンク", value: "#ff8fc7" },
+      { id: "blue", label: t("frame.color.blue"), value: "#7aaaff" },
+      { id: "green", label: t("frame.color.green"), value: "#5bd6a5" },
+      { id: "amber", label: t("frame.color.amber"), value: "#ffd166" },
+      { id: "red", label: t("frame.color.red"), value: "#ff6b6b" },
+      { id: "purple", label: t("frame.color.purple"), value: "#b48cff" },
+      { id: "pink", label: t("frame.color.pink"), value: "#ff8fc7" },
     ];
     function readSessionFrames() {
       try {
@@ -1868,7 +1951,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
           const button = document.createElement("button");
           button.type = "button";
           button.setAttribute("data-rdsh-settings-nav-arrow", side);
-          button.setAttribute("aria-label", side === "left" ? "設定タブを左へスクロール" : "設定タブを右へスクロール");
+          button.setAttribute("aria-label", side === "left" ? t("mux.nav.scrollLeft") : t("mux.nav.scrollRight"));
           button.innerHTML = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${side === "left" ? "M10 3L5 8l5 5" : "M6 3l5 5-5 5"}"/></svg>`;
           button.addEventListener("click", (event) => {
             event.preventDefault();
@@ -1913,9 +1996,9 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       if (dock === null) return;
       const buttons = [...dock.querySelectorAll("button")].filter((button) => button.getAttribute("aria-label") !== null);
       const ariaOf = (button) => button.getAttribute("aria-label") || "";
-      const activity = buttons.find((button) => /turns?|steps?|ターン|ステップ/i.test(ariaOf(button)));
-      const usage = buttons.find((button) => /cache hit|キャッシュ/i.test(ariaOf(button)));
-      const context = buttons.find((button) => /context|コンテキスト/i.test(ariaOf(button)));
+      const activity = buttons.find((button) => TURNS_PROBE.test(ariaOf(button)));
+      const usage = buttons.find((button) => CACHE_PROBE.test(ariaOf(button)));
+      const context = buttons.find((button) => CONTEXT_PROBE.test(ariaOf(button)));
 
       const set = (button, text) => {
         if (button === undefined) return;
@@ -1928,14 +2011,17 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         const numbers = aria.match(/\d[\d,.]*(?:\s*[KMB])?/gi) || [];
         const turns = numbers[0];
         const tok = numbers.length > 1 ? numbers[numbers.length - 1] : undefined;
-        set(activity, turns === undefined
+        const turnsLabel = turns === undefined
           ? ""
-          : `${turns} turn${turns === "1" ? "" : "s"}${tok === undefined ? "" : ` · ${tok} tok/s`}`);
+          : t(turns === "1" ? "mux.stats.turn" : "mux.stats.turns", { count: turns });
+        set(activity, tok === undefined || turnsLabel === ""
+          ? turnsLabel
+          : `${turnsLabel} · ${t("mux.stats.tokPerSec", { speed: tok })}`);
       }
       if (usage !== undefined) {
         const percents = [...ariaOf(usage).matchAll(/(\d+)%/g)];
         const hit = percents.length > 0 ? percents[percents.length - 1][1] : undefined;
-        set(usage, hit === undefined ? "" : `Cache hit ${hit}%`);
+        set(usage, hit === undefined ? "" : t("mux.stats.cacheHit", { percent: hit }));
       }
       if (context !== undefined) {
         const percent = ariaOf(context).match(/(\d+)%/);
@@ -2012,8 +2098,8 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       else bar.removeAttribute("data-rdsh-goal-editing");
     }
 
-    /** Labels a session shows before it has been named. */
-    const UNTITLED = /^(?:new session|new chat|untitled|新しいセッション|新しいチャット|無題|未命名|新会话)$/i;
+    /** Labels a session shows before it has been named (all known locales). */
+    const UNTITLED = probeRegex("untitled", "i", ["new session", "new chat", "untitled"], true);
     /** Last title seen per target, so only the first naming animates. */
     const titleSeen = new Map();
     /** How many passes each target has played; a session is named twice. */
@@ -2401,8 +2487,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
 
     /** Add a Settings row to the sidebar panel list, matching Plugins. */
     function openSettingsViaAccountMenu() {
-      const trigger = document.querySelector('button[aria-label="Account menu"]')
-        ?? document.querySelector('button[aria-label="設定"]');
+      const trigger = document.querySelector(ariaLabelSelector("button", "accountMenu", "Account menu"));
       if (trigger === null) return;
       settingsPendingUntil = Date.now() + 2000;
       trigger.click();
@@ -2416,7 +2501,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       const nav = document.querySelector("nav.hHd-Xa_panelList");
       if (nav === null) return;
       // The account "More" row is not used on the phone.
-      const account = document.querySelector('button[aria-label="Account menu"]')
+      const account = document.querySelector(ariaLabelSelector("button", "accountMenu", "Account menu"))
         ?? [...document.querySelectorAll("button")].find((button) => button.innerText.trim() === "More");
       if (account !== null) {
         const moreRow = account.closest('[class*="yHnPSG_anchor"]') ?? account.parentElement;
@@ -2428,9 +2513,9 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         row = document.createElement("button");
         row.type = "button";
         row.className = "hHd-Xa_panelRow";
-        row.setAttribute("aria-label", "Settings");
+        row.setAttribute("aria-label", t("mux.settingsRow"));
         row.setAttribute("data-rdsh-settings-row", "");
-        row.innerHTML = '<span class="hHd-Xa_panelGlyph" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2.1"/><path d="M6.9 1.9h2.2l.35 1.5 1.28.74 1.45-.5 1.1 1.9-1.05 1.1.1 1.48 1.05 1.1-1.1 1.9-1.45-.5-1.28.74-.35 1.5H6.9l-.35-1.5-1.28-.74-1.45.5-1.1-1.9 1.05-1.1-.1-1.48-1.05-1.1 1.1-1.9 1.45.5 1.28-.74z"/></svg></span><span class="hHd-Xa_panelTitle hHd-Xa_wide">Settings</span>';
+        row.innerHTML = `<span class="hHd-Xa_panelGlyph" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2.1"/><path d="M6.9 1.9h2.2l.35 1.5 1.28.74 1.45-.5 1.1 1.9-1.05 1.1.1 1.48 1.05 1.1-1.1 1.9-1.45-.5-1.28.74-.35 1.5H6.9l-.35-1.5-1.28-.74-1.45.5-1.1-1.9 1.05-1.1-.1-1.48-1.05-1.1 1.1-1.9 1.45.5 1.28-.74z"/></svg></span><span class="hHd-Xa_panelTitle hHd-Xa_wide">${t("mux.settingsRow")}</span>`;
         row.addEventListener("click", (event) => {
           event.preventDefault();
           event.stopPropagation();
@@ -2450,8 +2535,8 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       }
     }
 
-    const ADD_LABEL = "画像やファイルを追加";
-    const ADD_STOCK_LABEL = "Add files or run commands";
+    const ADD_LABEL = t("add.label");
+    const ADD_STOCK_LABEL = t("add.stock");
     const ADD_SELECTOR = `[data-rdsh-add], [aria-label="${ADD_LABEL}"], [aria-label="${ADD_STOCK_LABEL}"]`;
 
     function addButton() {
@@ -2497,9 +2582,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       let hasDock = false;
       for (const sibling of card.parentElement.children) {
         if (sibling === card) continue;
-        const stats = sibling.querySelector(
-          'button[aria-label*="tok"], button[aria-label*="turns"], button[aria-label*="context"], button[aria-label*="ターン"], button[aria-label*="コンテキスト"]',
-        );
+        const stats = sibling.querySelector(ariaContainsSelector("button", "stats", ["tok", "turns", "context"]));
         if (stats !== null) {
           sibling.setAttribute("data-rdsh-composer-dock", "");
           hasDock = true;
@@ -2693,8 +2776,8 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         badge.toggleAttribute("data-visible", notificationTotal > 0);
       }
       fab.setAttribute("aria-label", notificationTotal > 0
-        ? `セッション一覧を開く（未読・質問待ち ${notificationTotal}件）`
-        : "セッション一覧を開く");
+        ? t("mux.fab.openWithCount", { count: notificationTotal })
+        : t("mux.fab.open"));
     }
 
     function countSessionStatuses(statuses, mainIds) {
@@ -2750,7 +2833,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       fab = document.createElement("button");
       fab.type = "button";
       fab.className = "rdsh-mux-fab";
-      fab.setAttribute("aria-label", "セッション一覧を開く");
+      fab.setAttribute("aria-label", t("mux.fab.open"));
       fab.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 6.5h16M4 12h16M4 17.5h16"/></svg><span class="rdsh-mux-fab-badge" aria-hidden="true"></span>';
       fab.addEventListener("click", toggleDrawer);
 
@@ -2784,7 +2867,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       const input = (card === null ? null : card.querySelector('input[type="file"]'))
         || document.querySelector('input[type="file"]');
       if (input === null || input.disabled) {
-        mobileToast("添付できるファイル入力がありません");
+        mobileToast(t("mux.toast.noFileInput"));
         return;
       }
       // iOS reads accept when the picker opens, so set it for this one gesture
@@ -2838,7 +2921,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     function sessionMenuButton(row) {
       const scoped = row.querySelector('[class*="_rowActions"] button');
       if (scoped !== null) return scoped;
-      return [...row.querySelectorAll("button")].find((button) => /actions|操作/i.test(button.getAttribute("aria-label") || "")) ?? null;
+      return [...row.querySelectorAll("button")].find((button) => ACTIONS_PROBE.test(button.getAttribute("aria-label") || "")) ?? null;
     }
 
     function cancelLongPress() {
@@ -2894,7 +2977,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         if (input !== null) input.focus({ preventScroll: true });
       }
       const send = event.target.closest && event.target.closest('[data-rdsh-composer-root] [class*="primary"]');
-      if (send !== null && send !== undefined && send.disabled !== true && !/stop|停止/i.test(send.getAttribute("aria-label") || "")) {
+      if (send !== null && send !== undefined && send.disabled !== true && !STOP_PROBE.test(send.getAttribute("aria-label") || "")) {
         markMobileSession();
       }
       // Right panel tabs: same native-drag problem as the session rows below.
@@ -3323,7 +3406,8 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       }
       const menu = document.querySelector("[role='menu']");
       if (menu === null) return;
-      const item = [...menu.querySelectorAll("[role='menuitem']")].find((entry) => /^Settings$|^設定$/.test(labelOf(entry)));
+      const settingsProbe = probeRegex("settingsMenu", "", ["Settings"], true) ?? /^Settings$/;
+      const item = [...menu.querySelectorAll("[role='menuitem']")].find((entry) => settingsProbe.test(labelOf(entry)));
       if (item === undefined) return;
       settingsPendingUntil = 0;
       item.click();
@@ -3413,7 +3497,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       // Fallback for keyboard activation of the send/queue button.
       if (narrow()) {
         const primary = target.closest && target.closest('[data-rdsh-composer-root] [class*="primary"]');
-        if (primary !== null && primary !== undefined && primary.disabled !== true && !/stop|停止/i.test(primary.getAttribute("aria-label") || "")) {
+        if (primary !== null && primary !== undefined && primary.disabled !== true && !STOP_PROBE.test(primary.getAttribute("aria-label") || "")) {
           markMobileSession();
         }
       }
@@ -3430,7 +3514,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       if (todoItem !== null && narrow()) {
         event.preventDefault();
         event.stopImmediatePropagation();
-        showDetailPopover(todoItem, "Todo", todoItem.getAttribute("data-rdsh-todo-text"), todoItem.getAttribute("data-rdsh-todo-status"));
+        showDetailPopover(todoItem, t("mux.detail.todo"), todoItem.getAttribute("data-rdsh-todo-text"), todoItem.getAttribute("data-rdsh-todo-status"));
         return;
       }
       const goalObjective = target.closest("[data-rdsh-goal-objective]");
@@ -3439,7 +3523,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         event.stopImmediatePropagation();
         const goalBar = goalObjective.closest("[data-goal-bar]");
         const goalLabel = goalBar === null ? null : goalBar.querySelector('[class*="_label"]');
-        showDetailPopover(goalObjective, "Goal", goalObjective.getAttribute("data-rdsh-goal-text"), goalLabel === null ? null : goalLabel.textContent.trim());
+        showDetailPopover(goalObjective, t("mux.detail.goal"), goalObjective.getAttribute("data-rdsh-goal-text"), goalLabel === null ? null : goalLabel.textContent.trim());
         return;
       }
       // Right sidebar: its class does not change on open/close, so re-read the
@@ -3548,7 +3632,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       const todoItem = target.closest("[data-rdsh-todo-item]");
       if (todoItem !== null) {
         event.preventDefault();
-        showDetailPopover(todoItem, "Todo", todoItem.getAttribute("data-rdsh-todo-text"), todoItem.getAttribute("data-rdsh-todo-status"));
+        showDetailPopover(todoItem, t("mux.detail.todo"), todoItem.getAttribute("data-rdsh-todo-text"), todoItem.getAttribute("data-rdsh-todo-status"));
         return;
       }
       const goalObjective = target.closest("[data-rdsh-goal-objective]");
@@ -3556,7 +3640,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         event.preventDefault();
         const goalBar = goalObjective.closest("[data-goal-bar]");
         const goalLabel = goalBar === null ? null : goalBar.querySelector('[class*="_label"]');
-        showDetailPopover(goalObjective, "Goal", goalObjective.getAttribute("data-rdsh-goal-text"), goalLabel === null ? null : goalLabel.textContent.trim());
+        showDetailPopover(goalObjective, t("mux.detail.goal"), goalObjective.getAttribute("data-rdsh-goal-text"), goalLabel === null ? null : goalLabel.textContent.trim());
       }
     }
 
@@ -3583,11 +3667,11 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       const pop = document.createElement("div");
       pop.className = "rdsh-frame-pop";
       pop.setAttribute("role", "dialog");
-      pop.setAttribute("aria-label", "セッションの枠色");
+      pop.setAttribute("aria-label", t("frame.paletteAria"));
       const current = sessionFrames[sessionId];
       const title = document.createElement("div");
       title.className = "rdsh-frame-pop-title";
-      title.textContent = "枠の色";
+      title.textContent = t("frame.paletteTitle");
       const swatches = document.createElement("div");
       swatches.className = "rdsh-frame-swatches";
       for (const color of FRAME_COLORS) {
@@ -3600,18 +3684,18 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         swatch.addEventListener("click", () => {
           saveSessionFrame(sessionId, color.value);
           closeFramePalette();
-          mobileToast(`枠の色を${color.label}にしました`);
+          mobileToast(t("frame.applied", { color: color.label }));
         });
         swatches.append(swatch);
       }
       const clear = document.createElement("button");
       clear.type = "button";
       clear.className = "rdsh-frame-clear";
-      clear.textContent = "枠を外す";
+      clear.textContent = t("frame.clear");
       clear.addEventListener("click", () => {
         saveSessionFrame(sessionId, null);
         closeFramePalette();
-        mobileToast("枠を外しました");
+        mobileToast(t("frame.cleared"));
       });
       pop.append(title, swatches, clear);
       document.body.append(pop);
@@ -3646,7 +3730,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
           if (typeof setMenuOpen === "function") setMenuOpen(false);
           setTimeout(() => showFramePalette(sessionId, anchorRect), 0);
         },
-      }, h("span", { className: "rdsh-frame-menu-icon", "aria-hidden": "true" }, frameIcon()), h("span", null, "色枠"));
+      }, h("span", { className: "rdsh-frame-menu-icon", "aria-hidden": "true" }, frameIcon()), h("span", null, t("frame.menu")));
     }
 
     // ---------------------------------------------------------------------
@@ -3778,18 +3862,18 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       overlay.className = "rdsh-crop-overlay";
       overlay.setAttribute("data-rdsh-crop-overlay", "");
       overlay.setAttribute("role", "dialog");
-      overlay.setAttribute("aria-label", "画像をトリミング");
+      overlay.setAttribute("aria-label", t("crop.aria"));
       overlay.innerHTML = `
         <div class="rdsh-crop-head">
-          <strong>画像をトリミング</strong>
+          <strong>${t("crop.title")}</strong>
           <div class="rdsh-crop-head-actions">
-            <button type="button" class="rdsh-crop-rotate" data-rotate="-90" aria-label="左に90度回転"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg></button>
-            <button type="button" class="rdsh-crop-rotate" data-rotate="90" aria-label="右に90度回転"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg></button>
-            <button type="button" class="rdsh-crop-close" aria-label="トリミングを閉じる">×</button>
+            <button type="button" class="rdsh-crop-rotate" data-rotate="-90" aria-label="${t("crop.rotateLeft")}"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg></button>
+            <button type="button" class="rdsh-crop-rotate" data-rotate="90" aria-label="${t("crop.rotateRight")}"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg></button>
+            <button type="button" class="rdsh-crop-close" aria-label="${t("crop.close")}">×</button>
           </div>
         </div>
         <div class="rdsh-crop-stage"><div class="rdsh-crop-wrap"><img class="rdsh-crop-image" alt="" draggable="false"><div class="rdsh-crop-box"><span class="rdsh-crop-handle" data-corner="nw"></span><span class="rdsh-crop-handle" data-corner="ne"></span><span class="rdsh-crop-handle" data-corner="sw"></span><span class="rdsh-crop-handle" data-corner="se"></span></div></div></div>
-        <div class="rdsh-crop-actions"><button type="button" class="rdsh-crop-cancel">キャンセル</button><button type="button" class="rdsh-crop-save">クエリに追加</button></div>`;
+        <div class="rdsh-crop-actions"><button type="button" class="rdsh-crop-cancel">${t("crop.cancel")}</button><button type="button" class="rdsh-crop-save">${t("crop.save")}</button></div>`;
       const image = overlay.querySelector(".rdsh-crop-image");
       const wrap = overlay.querySelector(".rdsh-crop-wrap");
       const stage = overlay.querySelector(".rdsh-crop-stage");
@@ -3978,7 +4062,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
             const current = composerImageFor(oldSrc);
             current?.remove?.click();
             if (!attachFileToComposer(file)) {
-              mobileToast("クエリに画像を追加できませんでした");
+              mobileToast(t("crop.addFailed"));
               return;
             }
             const name = file.name;
@@ -3998,18 +4082,18 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
                 clearInterval(timer);
               }
             }, 100);
-            mobileToast("編集した画像をクエリに反映しました");
+            mobileToast(t("crop.updated"));
           } else {
             if (!attachFileToComposer(file)) {
-              mobileToast("クエリに画像を追加できませんでした");
+              mobileToast(t("crop.addFailed"));
               return;
             }
-            mobileToast("トリミングした画像をクエリに追加しました");
+            mobileToast(t("crop.added"));
           }
           close();
           closePreview();
         } catch {
-          mobileToast("クエリに画像を追加できませんでした");
+          mobileToast(t("crop.addFailed"));
         }
       });
       document.body.append(overlay);
@@ -4026,7 +4110,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         const button = document.createElement("button");
         button.type = "button";
         button.setAttribute("data-rdsh-crop-button", "");
-        button.setAttribute("aria-label", "画像をトリミング");
+        button.setAttribute("aria-label", t("crop.aria"));
         button.innerHTML = CROP_ICON;
         button.addEventListener("click", (event) => {
           event.preventDefault();
@@ -4075,12 +4159,12 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     }
 
     async function enableNotifications() {
-      if (typeof Notification === "undefined") throw new Error("このブラウザは通知に対応していません");
+      if (typeof Notification === "undefined") throw new Error(t("notify.unsupported"));
       const permission = await Notification.requestPermission();
-      if (permission !== "granted") throw new Error("通知の許可が得られませんでした");
+      if (permission !== "granted") throw new Error(t("notify.permissionMissing"));
       const registration = await navigator.serviceWorker.ready;
       const response = await fetch(`${PUSH_API}/vapid`, { cache: "no-store" });
-      if (!response.ok) throw new Error("通知サーバーがありません（dsh-notify-push が必要です）");
+      if (!response.ok) throw new Error(t("notify.unavailable"));
       const { publicKey } = await response.json();
       const existing = await registration.pushManager.getSubscription();
       const subscription = existing === null
@@ -4094,7 +4178,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         // https origin.
         body: JSON.stringify({ subscription: subscription.toJSON(), label: navigator.userAgent, origin: location.origin }),
       });
-      if (!saved.ok) throw new Error(`購読の登録に失敗しました (${saved.status})`);
+      if (!saved.ok) throw new Error(t("notify.subscribeFailed", { status: saved.status }));
       await refreshNotificationStatus();
     }
 
@@ -4139,23 +4223,23 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         const result = Array.isArray(pushed.results) ? pushed.results[0] : null;
         if (pushed.ok === true) return;
         const detail = result === null || result === undefined
-          ? String(pushed.error ?? "不明なエラー")
+          ? String(pushed.error ?? t("notify.unknownError"))
           : `${result.status || "-"} ${result.error ?? ""}`.trim();
-        throw new Error(`プッシュが拒否されました（${detail}）`);
+        throw new Error(t("notify.rejected", { detail }));
       }
       // No host route: still prove the two local paths, which is what the
       // user will actually see.
       const shown = notifyUser({
-        title: "DSH のテスト通知",
-        body: "アプリを開いているときは、このバナーで届きます。",
+        title: t("notify.testTitle"),
+        body: t("notify.testBody"),
         sessionId: currentSessionId ?? "",
         kind: "test",
       });
       if (!shown) {
         const registration = await navigator.serviceWorker.getRegistration();
-        if (registration === null || registration === undefined) throw new Error("サービスワーカーが未登録です");
-        await registration.showNotification("DSH のテスト通知", {
-          body: "通知が有効です。エージェントが質問したときにここへ届きます。",
+        if (registration === null || registration === undefined) throw new Error(t("notify.noWorker"));
+        await registration.showNotification(t("notify.testTitle"), {
+          body: t("notify.testLocalBody"),
           icon: "pwa/icon-192.png",
           badge: "pwa/badge-96.png",
           tag: "rdsh-mobile-ux:test",
@@ -4180,15 +4264,15 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
 
     /** Preset notification sounds, synthesised — no audio files to ship. */
     const SOUND_PRESETS = {
-      none: { label: "なし", notes: [[0, 0, 0]] },
+      none: { label: t("mux.sound.none"), notes: [[0, 0, 0]] },
       // A short two-note rise: the "something finished" shape.
-      chime: { label: "チャイム", notes: [[880, 0.09, 0.5], [1320, 0.16, 0.16]] },
+      chime: { label: t("mux.sound.chime"), notes: [[880, 0.09, 0.5], [1320, 0.16, 0.16]] },
       // One soft blip, for questions that should not startle.
-      pop: { label: "ポップ", notes: [[660, 0.05, 0.35]] },
+      pop: { label: t("mux.sound.pop"), notes: [[660, 0.05, 0.35]] },
       // Three descending notes: distinct without being loud.
-      drop: { label: "ドロップ", notes: [[1175, 0.07, 0.34], [880, 0.07, 0.1], [660, 0.12, 0.1]] },
+      drop: { label: t("mux.sound.drop"), notes: [[1175, 0.07, 0.34], [880, 0.07, 0.1], [660, 0.12, 0.1]] },
       // A quiet double tap for "still working".
-      tick: { label: "タップ", notes: [[1500, 0.03, 0.42], [1500, 0.03, 0.1]] },
+      tick: { label: t("mux.sound.tick"), notes: [[1500, 0.03, 0.42], [1500, 0.03, 0.1]] },
     };
 
     const SOUND_KEY = "rdsh-mobile-ux:notify-sound";
@@ -4332,7 +4416,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
           holdMs: kind === "question" ? 6000 : 4200,
           actions: sessionId === ""
             ? undefined
-            : [{ label: "開く", prefix: " ", onClick: openSession }],
+            : [{ label: t("notify.open"), prefix: " ", onClick: openSession }],
           // The component owns its lifetime; this clears the tree afterwards.
           onDone: () => {
             noticeRoot?.render(null);
@@ -4506,10 +4590,10 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     // UI: Settings section
     // ---------------------------------------------------------------------
     function PermissionLabel(status) {
-      if (!status.supported) return "このブラウザは非対応";
-      if (status.permission === "granted") return status.subscribed ? "有効（購読済み）" : "許可済み（未購読）";
-      if (status.permission === "denied") return "ブロックされています（ブラウザ設定から許可）";
-      return "未許可";
+      if (!status.supported) return t("notify.permission.unsupported");
+      if (status.permission === "granted") return status.subscribed ? t("notify.permission.granted") : t("notify.permission.allowed");
+      if (status.permission === "denied") return t("notify.permission.blocked");
+      return t("notify.permission.default");
     }
 
     function MobileSection() {
@@ -4547,7 +4631,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
           /* private mode: the list only lives for this page */
         }
         scheduleDecorate();
-        setMessage("非表示リストを保存しました。");
+        setMessage(t("notify.hideListSaved"));
       };
 
       const toggleDisabled = (value) => {
@@ -4567,12 +4651,12 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         h(
           "div",
           { className: "rdsh-mux-card" },
-          h("h3", { className: "rdsh-mux-title" }, "テーマ（この端末だけ）"),
-          h("p", { className: "rdsh-mux-desc" }, "PC と共通のテーマとは別に、このブラウザだけの配色を選べます。選んだ値はこのブラウザに保存され、ほかの端末には影響しません。"),
+          h("h3", { className: "rdsh-mux-title" }, t("mux.deviceTheme.title")),
+          h("p", { className: "rdsh-mux-desc" }, t("mux.deviceTheme.desc")),
           h(
             "label",
             { className: "rdsh-mux-slider" },
-            h("span", null, "配色"),
+            h("span", null, t("mux.deviceTheme.label")),
             h(
               "select",
               {
@@ -4580,33 +4664,33 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
                 value: s.deviceTheme,
                 onChange: (event) => writeDeviceTheme(event.target.value),
               },
-              Object.entries(DEVICE_THEME_LABELS).map(([id, label]) => h("option", { key: id, value: id }, label)),
+              Object.entries(DEVICE_THEME_KEYS).map(([id, key]) => h("option", { key: id, value: id }, t(key))),
             ),
           ),
-          h("p", { className: "rdsh-mux-note" }, "PC と共通のテーマは 設定 → 一般 → 外観 で変わります。ここで選ぶと、この端末だけその上書きになります。"),
+          h("p", { className: "rdsh-mux-note" }, t("mux.deviceTheme.note")),
           s.deviceThemeNote === "custom"
-            ? h("p", { className: "rdsh-mux-note" }, "カスタムテーマ（登録テーマ）を使用中のため、この端末だけの上書きは無効です。")
+            ? h("p", { className: "rdsh-mux-note" }, t("mux.deviceTheme.custom"))
             : null,
           s.deviceThemeNote === "unsupported"
-            ? h("p", { className: "rdsh-mux-note" }, "この DSH のバージョンでは端末ごとの配色を適用できませんでした。共有テーマを使用します。")
+            ? h("p", { className: "rdsh-mux-note" }, t("mux.deviceTheme.unsupported"))
             : null,
         ),
         h(
           "div",
           { className: "rdsh-mux-card" },
-          h("h3", { className: "rdsh-mux-title" }, "モバイルUI"),
-          h("p", { className: "rdsh-mux-desc" }, "スマホ幅の表示と操作を整えます。設定はこのブラウザに保存されます。"),
-          h("p", { className: "rdsh-mux-note" }, "＋ は画像とファイルの添付だけを開きます（コマンドは / から）。"),
+          h("h3", { className: "rdsh-mux-title" }, t("mux.section.title")),
+          h("p", { className: "rdsh-mux-desc" }, t("mux.section.desc")),
+          h("p", { className: "rdsh-mux-note" }, t("mux.section.plusNote")),
           h(
             "dl",
             { className: "rdsh-mux-rows" },
-            h("dt", null, "レイアウト"),
-            h("dd", null, s.narrow ? "スマホ幅（ドロワー表示）" : "デスクトップ幅"),
-            h("dt", null, "セッション一覧"),
-            h("dd", null, s.drawerOpen ? "開いています" : "閉じています"),
-            h("dt", null, "通知"),
+            h("dt", null, t("mux.row.layout")),
+            h("dd", null, s.narrow ? t("mux.row.layout.narrow") : t("mux.row.layout.wide")),
+            h("dt", null, t("mux.row.sessions")),
+            h("dd", null, s.drawerOpen ? t("mux.row.sessions.open") : t("mux.row.sessions.closed")),
+            h("dt", null, t("mux.row.notifications")),
             h("dd", null, PermissionLabel(s.notifications)),
-            h("dt", null, "UIビルド"),
+            h("dt", null, t("mux.row.build")),
             h("dd", null, BUILD),
           ),
           h(
@@ -4616,26 +4700,26 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
               type: "button",
               className: "rdsh-mux-primary",
               disabled: busy || !s.notifications.supported,
-              onClick: () => run(enableNotifications, "通知を有効にしました。"),
-            }, s.notifications.permission === "granted" ? "通知を再登録" : "通知を有効にする"),
+              onClick: () => run(enableNotifications, t("mux.message.enabled")),
+            }, s.notifications.permission === "granted" ? t("mux.action.reRegister") : t("mux.action.enable")),
             h("button", {
               type: "button",
               disabled: busy || s.notifications.permission !== "granted",
-              onClick: () => run(sendTestNotification, "テスト通知を送りました（プッシュ経由）。"),
-            }, "テスト通知"),
+              onClick: () => run(sendTestNotification, t("mux.message.testSent")),
+            }, t("mux.action.test")),
             s.notifications.permission === "granted"
               ? h("button", {
                 type: "button",
                 disabled: busy,
-                onClick: () => run(disableNotifications, "通知を解除しました。"),
-              }, "通知を解除")
+                onClick: () => run(disableNotifications, t("mux.message.disabled")),
+              }, t("mux.action.disable"))
               : null,
           ),
           s.notifications.permission === "denied"
-            ? h("p", { className: "rdsh-mux-note" }, "通知がブロックされています。ブラウザのサイト設定 → 通知 を「許可」に変更してください。")
+            ? h("p", { className: "rdsh-mux-note" }, t("mux.note.blocked"))
             : null,
-          h("h4", { className: "rdsh-mux-subtitle" }, "通知音"),
-          h("p", { className: "rdsh-mux-desc" }, "アプリを開いているときに鳴ります。音はブラウザが合成するので、音声ファイルは不要です。"),
+          h("h4", { className: "rdsh-mux-subtitle" }, t("mux.sound.title")),
+          h("p", { className: "rdsh-mux-desc" }, t("mux.sound.desc")),
           h(
             "div",
             { className: "rdsh-mux-sound-row" },
@@ -4663,12 +4747,12 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
               type: "button",
               className: "rdsh-mux-secondary",
               onClick: () => playNoticeSound(sound, volume),
-            }, "試聴"),
+            }, t("mux.sound.preview")),
           ),
           h(
             "label",
             { className: "rdsh-mux-slider" },
-            h("span", null, "音量"),
+            h("span", null, t("mux.sound.volume")),
             h("input", {
               type: "range",
               min: "0",
@@ -4688,29 +4772,29 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
             }),
             h("span", { className: "rdsh-mux-slider-value" }, `${Math.round(volume * 100)}%`),
           ),
-          h("p", { className: "rdsh-mux-note" }, "回答終了時と質問時に通知します。メインエージェントのみ、このスマホから送ったターンだけが対象です。"),
+          h("p", { className: "rdsh-mux-note" }, t("mux.note.notifyScope")),
           message !== "" ? h("p", { className: "rdsh-mux-note" }, message) : null,
         ),
         h(
           "div",
           { className: "rdsh-mux-card" },
-          h("h3", { className: "rdsh-mux-title" }, "非表示にした操作"),
-          h("p", { className: "rdsh-mux-desc" }, "スマホでは使えない操作（エディタ／ターミナルで開く、フィードバック、サインインなど）を隠しています。"),
+          h("h3", { className: "rdsh-mux-title" }, t("mux.hidden.title")),
+          h("p", { className: "rdsh-mux-desc" }, t("mux.hidden.desc")),
           h(
             "div",
             { className: "rdsh-mux-chips" },
             s.hidden.length === 0
-              ? h("span", { className: "rdsh-mux-chip" }, "（現在は該当なし）")
+              ? h("span", { className: "rdsh-mux-chip" }, t("mux.hidden.none"))
               : s.hidden.map((label) => h("span", { className: "rdsh-mux-chip", key: label }, label)),
           ),
           h(
             "label",
             { className: "rdsh-mux-check" },
             h("input", { type: "checkbox", checked: disabled, onChange: (event) => toggleDisabled(event.target.checked) }),
-            "非表示をやめる（デバッグ用）",
+            t("mux.hidden.disable"),
           ),
           h("div", null,
-            h("div", { className: "rdsh-mux-label" }, "追加で非表示にするラベル（1行1件）"),
+            h("div", { className: "rdsh-mux-label" }, t("mux.hidden.extra")),
             h("textarea", {
               value: extra,
               rows: 3,
@@ -4720,14 +4804,14 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
             }),
           ),
           h("div", { className: "rdsh-mux-actions" },
-            h("button", { type: "button", onClick: saveExtra }, "保存して反映"),
+            h("button", { type: "button", onClick: saveExtra }, t("mux.hidden.save")),
           ),
         ),
         h(InputSection),
         typeof globalThis.__RDSH_PWA_SETTINGS_SECTION__ === "function"
           ? h(globalThis.__RDSH_PWA_SETTINGS_SECTION__)
           : null,
-        s.bootError !== "" ? h("p", { className: "rdsh-mux-note" }, `起動時エラー: ${s.bootError}`) : null,
+        s.bootError !== "" ? h("p", { className: "rdsh-mux-note" }, t("mux.bootError", { error: s.bootError })) : null,
       );
     }
 
@@ -4739,8 +4823,8 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         h(
           "div",
           { className: "rdsh-mux-card" },
-          h("h3", { className: "rdsh-mux-title" }, "入力"),
-          h("p", { className: "rdsh-mux-desc" }, "メッセージ入力欄で Enter を押したときの動作を選びます。"),
+          h("h3", { className: "rdsh-mux-title" }, t("mux.input.title")),
+          h("p", { className: "rdsh-mux-desc" }, t("mux.input.desc")),
           h(
             "label",
             { className: "rdsh-mux-check" },
@@ -4749,11 +4833,11 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
               checked: s.enterToSend,
               onChange: (event) => writeEnterToSend(event.target.checked),
             }),
-            "Enterで送信する（OFFなら改行）",
+            t("mux.input.enterToSend"),
           ),
           h("p", { className: "rdsh-mux-note" }, s.enterToSend
-            ? "現在: Enter で送信、Shift+Enter で改行。"
-            : "現在: Enter で改行。送信は送信ボタンから（Shift+Enter も改行）。"),
+            ? t("mux.input.current.enterSends")
+            : t("mux.input.current.enterNewline")),
         ),
       );
     }
@@ -4799,8 +4883,8 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       if (!phone || speed === null) return null;
       return h("span", {
         className: "rdsh-mux-live-speed",
-        title: "出力速度（ストリーム差分からの概算）",
-        "aria-label": `推定速度 ${speed} tok/s`,
+        title: t("mux.liveSpeed.title"),
+        "aria-label": t("mux.liveSpeed.aria", { speed }),
       }, `≈ ${speed} tok/s`);
     }
 
@@ -6063,13 +6147,13 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           name: "settings.section",
           id: "mobile-ux",
           order: 81,
-          label: () => "モバイル",
+          label: () => t("tab.mobile"),
         }, MobileSection));
         ctx.slots.inject("settings.section", () => ctx.slots.register({
           name: "settings.section",
           id: "mobile-ux-input",
           order: 82,
-          label: () => "入力",
+          label: () => t("tab.input"),
         }, InputSection));
       },
     };
@@ -6088,9 +6172,9 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
     const ENTRY_ID = "rdsh-session-id-copy";
     // After the shipped rows (pin 100 / rename 200 / fork 300 / archive 400).
     const ORDER = 500;
-    const LABEL = "セッションIDをコピー";
-    const COPIED = "セッションIDをコピーしました";
-    const MANUAL_PROMPT = "セッションID（手動でコピーしてください）";
+    const LABEL = t("sessionId.label");
+    const COPIED = t("sessionId.copied");
+    const MANUAL_PROMPT = t("sessionId.manualPrompt");
     const TOAST_HOST_ID = "rdsh-session-id-copy-toast";
     const TOAST_ROOT_KEY = "__rdshSessionIdCopyToastRoot";
 

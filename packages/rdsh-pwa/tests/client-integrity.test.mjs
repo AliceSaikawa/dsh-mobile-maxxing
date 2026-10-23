@@ -417,3 +417,107 @@ test("the right panel tabs are tappable on a phone", () => {
 		assert.match(CLIENT, rule, `missing tab CSS: ${rule}`);
 	}
 });
+
+import { COPY, PROBES, copyFor } from "../lib/copy.js";
+/** Files that render or serve UI copy. `lib/copy.js` is the only exception. */
+const UI_FILES = ["client.js", "index.js", "sw.js", "notify/host.js"];
+
+/** CJK kana, ideographs and compatibility ideographs. */
+const CJK = /[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]/;
+
+/**
+ * Extract every string and template literal, skipping comments.
+ *
+ * Regex literals are deliberately not collected: the one CJK literal left in
+ * `client.js` is a punctuation character class used to pace the title typing
+ * animation, not copy. Everything a user can read must be a string.
+ */
+function stringLiterals(source) {
+	const literals = [];
+	let index = 0;
+	while (index < source.length) {
+		const character = source[index];
+		if (character === "/" && source[index + 1] === "/") {
+			const newline = source.indexOf("\n", index);
+			index = newline === -1 ? source.length : newline;
+			continue;
+		}
+		if (character === "/" && source[index + 1] === "*") {
+			const end = source.indexOf("*/", index + 2);
+			index = end === -1 ? source.length : end + 2;
+			continue;
+		}
+		if (character !== '"' && character !== "'" && character !== "`") {
+			index += 1;
+			continue;
+		}
+		const quote = character;
+		let text = "";
+		index += 1;
+		while (index < source.length) {
+			if (source[index] === "\\") {
+				text += source.slice(index, index + 2);
+				index += 2;
+				continue;
+			}
+			if (source[index] === quote) {
+				index += 1;
+				break;
+			}
+			text += source[index];
+			index += 1;
+		}
+		literals.push(text);
+	}
+	return literals;
+}
+
+
+
+test("no UI copy carries CJK outside the dictionary", () => {
+	// The original bug: Japanese literals shipped in a shell that renders in
+	// English. Copy now lives in lib/copy.js; a CJK string anywhere else is a
+	// regression, whatever the reason.
+	const offenders = [];
+	for (const file of UI_FILES) {
+		const source = readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
+		for (const literal of stringLiterals(source)) {
+			if (CJK.test(literal)) offenders.push(`${file}: ${literal.slice(0, 60)}`);
+		}
+	}
+	assert.deepEqual(offenders, [], "a string literal outside lib/copy.js contains CJK");
+});
+
+test("every t() key exists in the English dictionary", () => {
+	const keys = new Set([...CLIENT.matchAll(/\bt\(\s*"([^"]+)"/g)].map((match) => match[1]));
+	assert.ok(keys.size > 50, "the client uses the dictionary for its UI");
+	const missing = [...keys].filter((key) => !(key in COPY.en));
+	assert.deepEqual(missing, [], "a t() key has no English string");
+});
+
+test("the English dictionary has no CJK and no empty strings", () => {
+	const empty = Object.entries(COPY.en).filter(([, value]) => typeof value !== "string" || value === "");
+	assert.deepEqual(empty, [], "English keys carry a string");
+	const cjk = Object.entries(COPY.en).filter(([, value]) => CJK.test(value));
+	assert.deepEqual(cjk, [], "English copy is English");
+});
+
+test("a language pack can only override English keys", () => {
+	// ja is empty today; whatever a later pack adds must stay within the key
+	// set the code knows, or it would never be rendered.
+	const unknown = Object.keys(COPY.ja).filter((key) => !(key in COPY.en));
+	assert.deepEqual(unknown, []);
+	assert.equal(copyFor("ja")["tab.mobile"], COPY.en["tab.mobile"], "an empty ja pack falls back to English");
+	assert.equal(copyFor("xx")["tab.mobile"], COPY.en["tab.mobile"], "an unknown language falls back to English");
+});
+
+test("upstream label probes cover English and Japanese", () => {
+	// These are never rendered: they are how decoration finds the shell's
+	// controls. A single-language probe would silently stop matching if the
+	// shell's locale changed, so every known locale stays listed.
+	for (const key of ["actions", "stop", "settingsMenu", "untitled"]) {
+		assert.ok(Array.isArray(PROBES[key]) && PROBES[key].length >= 2, `${key} is bilingual`);
+	}
+	assert.ok(PROBES.untitled.includes("new session"));
+	assert.ok(PROBES.untitled.includes("新しいセッション"));
+});

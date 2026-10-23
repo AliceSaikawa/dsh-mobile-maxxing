@@ -63,7 +63,20 @@ test("turn-end and question payloads carry the session id", () => {
 
 test("an unnamed session falls back to the app prefix", () => {
 	const payload = buildTurnEndPayload("s", { kind: "completed" }, { session: "" });
-	assert.equal(payload.title, "DSH: 作業完了");
+	assert.equal(payload.title, "DSH: Work finished");
+});
+
+test("payload copy follows the configured language", () => {
+	// `ja` is an empty pack today, so a ja payload must fall back to English
+	// rather than leak a key. The status vocabulary itself is exercised too.
+	const english = buildTurnEndPayload("s", { kind: "aborted" }, { session: "" });
+	assert.equal(english.title, "DSH: Stopped (interrupted)");
+	assert.equal(english.body, "End reason: aborted");
+	const japanese = buildTurnEndPayload("s", { kind: "completed" }, { session: "", lang: "ja" });
+	assert.equal(japanese.title, "DSH: Work finished", "an empty pack falls back to English");
+
+	const question = buildQuestionPayload({ agent: { id: "q" }, questions: [{ question: "Proceed?" }] });
+	assert.equal(question.title, "DSH: Confirm", "the default question header is English");
 });
 
 test("encryption round-trips against an independent receiver", () => {

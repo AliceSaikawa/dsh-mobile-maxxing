@@ -903,7 +903,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       ? CONFIG.runningAnimation
       : "none";
     /** Shown in Settings so a stale PWA bundle is easy to spot. */
-    const BUILD = "2026-10-24.1440-grid-both-states";
+    const BUILD = "2026-10-24.1500-header-inset";
 
     /** Controls that have no meaning inside an installed app on a phone. */
     const HIDE_DEFAULT = [
@@ -5186,6 +5186,12 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
   [data-rdsh-status-empty] { display: none; }
   [data-rdsh-header-chip] > span:nth-child(2) { display: none; }
   [data-rdsh-header-chip] > svg:last-child { display: none; }
+  /* Clear the floating drawer button.
+     It sits at x:8 with a 40px width, so the title needs a 64px left inset;
+     without it the crumb starts at 20px and runs under the button. This inset
+     used to come from rdsh-mobile-ui, so a profile without that plugin drew
+     the session name straight through the button. */
+  [data-rdsh-header] { padding-left: 64px !important; }
   [data-rdsh-header] [class*="_titleCluster"] { min-width: 0; flex: 1 1 auto; }
   /* Pin the activity chips to the right edge of the header. Without this the
      actions block sits directly after the title, so a short session name drags

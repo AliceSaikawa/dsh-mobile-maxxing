@@ -10,7 +10,7 @@ PWA・通知・モバイルUX・CJK表示の修正・セッションIDのコピ�
 
 ```sh
 cd ~/.dsh/profiles/web
-dsh plugin add https://github.com/kuraneko1/dsh-mobile-maxxing/releases/latest/download/rdsh-pwa.tgz
+dsh plugin add https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.3.1/rdsh-pwa-0.3.1.tgz
 # DSH を再起動（例: systemctl --user restart dsh-web.service）
 ```
 
@@ -58,8 +58,14 @@ node scripts/pack-all.mjs
 gh release create vX.Y.Z dist/*.tgz
 ```
 
-`dist/` には版付き（`rdsh-pwa-0.2.4.tgz`）と版なし（`rdsh-pwa.tgz`）の両方ができます。
-README は**版なし**を指しているので、`releases/latest/download/rdsh-pwa.tgz` が常に最新を返します。
+`dist/` には版付き（`rdsh-pwa-<version>.tgz`）と版なし（`rdsh-pwa.tgz`）の両方ができます。
+
+**README が指すのは版付きの URL です。** 版なしの `releases/latest/download/rdsh-pwa.tgz` は
+人が手で落とすには便利ですが、`dsh plugin add`（pnpm）は URL 単位でキャッシュするため、
+同じ URL のまま更新すると古い tarball が入ります。版付き URL ならリリースごとに別 URL になり、
+この問題が起きません。
+
+README の URL は `node scripts/pack-all.mjs` が `package.json` の版に合わせて書き換えます。
 
 ---
 
@@ -73,7 +79,7 @@ row. **It installs on a stock DSH** — no other `rdsh-*` plugin and no external
 
 ```sh
 cd ~/.dsh/profiles/web
-dsh plugin add https://github.com/kuraneko1/dsh-mobile-maxxing/releases/latest/download/rdsh-pwa.tgz
+dsh plugin add https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.3.1/rdsh-pwa-0.3.1.tgz
 # then restart DSH (e.g. systemctl --user restart dsh-web.service)
 ```
 
@@ -113,9 +119,15 @@ node scripts/pack-all.mjs
 gh release create vX.Y.Z dist/*.tgz
 ```
 
-`dist/` holds both a versioned tarball (`rdsh-pwa-0.2.4.tgz`) and a version-free alias
-(`rdsh-pwa.tgz`). The READMEs link the alias, so `releases/latest/download/rdsh-pwa.tgz`
-always serves the newest build.
+`dist/` holds both a versioned tarball (`rdsh-pwa-<version>.tgz`) and a version-free alias
+(`rdsh-pwa.tgz`).
+
+**The READMEs link the versioned URL.** The alias
+(`releases/latest/download/rdsh-pwa.tgz`) is handy for a manual download, but
+`dsh plugin add` (pnpm) caches by URL, so updating behind the same URL installs the old
+tarball. A versioned URL changes every release and avoids that.
+
+`node scripts/pack-all.mjs` rewrites the URLs in the READMEs to match `package.json`.
 
 ## License
 

@@ -64,7 +64,7 @@ ln -sfn /path/to/dsh-mobile-maxxing/packages/rdsh-pwa ~/.dsh/profiles/web/node_m
 ## 開発
 
 ```sh
-npm test     # ブラウザ不要のテスト46件
+npm test     # ブラウザ不要のテスト55件
 ```
 
 ビルド工程はありません。`client.js` はブラウザにそのまま配信され、`index.js` は Node

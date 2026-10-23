@@ -38,7 +38,7 @@ dsh plugin add https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download
 ## 開発
 
 ```sh
-npm test                    # テスト46件（ブラウザ不要）
+npm test                    # テスト55件（ブラウザ不要）
 node scripts/pack-all.mjs   # dist/ に tarball を作る
 ```
 

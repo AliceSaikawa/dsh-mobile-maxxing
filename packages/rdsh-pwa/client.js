@@ -1354,11 +1354,44 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     let rightPanelWatch = null;
     let rightPanelIO = null;
 
+    /**
+     * Upstream's own wrapper for the right sidebar.
+     *
+     * Everything below searches inside this subtree only. Without a boundary
+     * the collapse button of a hidden `SessionView` (the full-screen Plugins
+     * and Automation-tasks routes keep one mounted at 0x0) walked up past its
+     * own panel to the app frame, and the frame then looked like an open
+     * panel: the header and the drawer button were hidden by CSS and there was
+     * no way back on a phone.
+     */
+    const RIGHT_PANEL_ROOT = "[data-sidebar-right-panel]";
+
+    /** The collapse button of a panel that is actually laid out. */
+    function visibleCollapseButton() {
+      for (const button of document.querySelectorAll('[aria-label="Collapse right sidebar"]')) {
+        // Visibility is deliberately not part of this: the real panel keeps
+        // its chrome mounted while closed (clipped to a zero-width column and
+        // parked off-screen), and its rect stays non-zero. Only a panel that
+        // never rendered is 0x0.
+        const rect = button.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) continue;
+        if (button.closest(RIGHT_PANEL_ROOT) === null) continue;
+        return button;
+      }
+      return null;
+    }
+
     function syncRightPanelOpen() {
       const panel = rightPanelNode;
-      const open = panel !== null && panel.isConnected
-        && getComputedStyle(panel).visibility !== "hidden"
-        && panel.getBoundingClientRect().width > 0;
+      let open = false;
+      if (panel !== null && panel.isConnected) {
+        // A panel inside a `[hidden]` subtree is upstream saying "another route
+        // owns the screen"; its own box may still measure, so check the host.
+        const host = panel.closest(RIGHT_PANEL_ROOT) ?? panel;
+        open = host.closest("[hidden]") === null
+          && getComputedStyle(panel).visibility !== "hidden"
+          && panel.getBoundingClientRect().width > 0;
+      }
       document.documentElement.toggleAttribute("data-rdsh-rightpanel-open", open);
     }
 
@@ -1373,6 +1406,23 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         rightPanelIO.observe(panel);
       }
       syncRightPanelOpen();
+    }
+
+    /**
+     * Drop every right-panel hook.
+     *
+     * The panel node is replaced when the route or the pane changes, and the
+     * old tag has to go with it: two tagged nodes at once apply the panel's
+     * phone layout (max-width, overflow, padding) to the whole app.
+     */
+    function forgetRightPanel() {
+      for (const node of document.querySelectorAll("[data-rdsh-rightpanel]")) node.removeAttribute("data-rdsh-rightpanel");
+      rightPanelWatch?.disconnect();
+      rightPanelIO?.disconnect();
+      rightPanelWatch = null;
+      rightPanelIO = null;
+      rightPanelNode = null;
+      document.documentElement.removeAttribute("data-rdsh-rightpanel-open");
     }
 
     /**
@@ -1397,19 +1447,48 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     }
 
     function decorateRightPanel() {
-      const collapse = document.querySelector('[aria-label="Collapse right sidebar"]');
-      if (collapse === null) return;
+      const collapse = visibleCollapseButton();
+      if (collapse === null) {
+        // No laid-out panel anywhere: close the state instead of keeping the
+        // last one. A full-screen route (Plugins, Automation tasks) leaves the
+        // chat's panel mounted but unrendered, and a stale "open" hides the
+        // header and the drawer button.
+        if (rightPanelNode !== null) forgetRightPanel();
+        return;
+      }
+      const boundary = collapse.closest(RIGHT_PANEL_ROOT);
       // The panel is the nearest ancestor that already spans the phone (the
       // fullscreen layer), not a hash-named class that changes per release.
       let node = collapse.parentElement;
-      while (node !== null && node !== document.body) {
+      while (node !== null && node !== boundary && node !== document.body) {
         const rect = node.getBoundingClientRect();
         if (rect.width >= window.innerWidth * 0.85 && rect.height >= window.innerHeight * 0.5) {
+          // A rotation changes those thresholds, so the next pass can pick a
+          // different node; exactly one may carry the hook.
+          for (const stale of document.querySelectorAll("[data-rdsh-rightpanel]")) {
+            if (stale !== node) stale.removeAttribute("data-rdsh-rightpanel");
+          }
           node.setAttribute("data-rdsh-rightpanel", "");
           watchRightPanel(node);
           return;
         }
         node = node.parentElement;
+      }
+      if (rightPanelNode !== null) forgetRightPanel();
+    }
+
+    /**
+     * Mark the right panel's tabs.
+     *
+     * dockkit draws them as `[role="tab"][data-dockkit-tab]`; the attribute is
+     * the stable part (the class is hashed per release), and the stylesheet
+     * needs its own hook to size and pan them on a phone. The tap compensation
+     * lives in the pointer handlers below and keys off the same attribute.
+     */
+    function decorateRightPanelTabs() {
+      if (!narrow()) return;
+      for (const tab of document.querySelectorAll('[data-rdsh-rightpanel] [role="tab"][data-dockkit-tab]')) {
+        tab.setAttribute("data-rdsh-rtab", "");
       }
     }
 
@@ -2669,7 +2748,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         if (dx < 64 || Math.abs(dy) > Math.abs(dx)) return;
         edgeSwipe = null;
         if (event.cancelable) event.preventDefault();
-        document.querySelector('[aria-label="Collapse right sidebar"]')?.click();
+        visibleCollapseButton()?.click();
         return;
       }
       if (edgeSwipe.fromRight) {

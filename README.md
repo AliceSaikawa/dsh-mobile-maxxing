@@ -1,7 +1,7 @@
-# dsh-extensions
+# dsh-mobile-maxxing
 
-DeepSeek Harness（DSH）の拡張プラグイン置き場です。**素の DSH にそのまま入ります** —
-他の `rdsh-*` プラグインや外部 npm パッケージは不要です。
+DeepSeek Harness（DSH）の Web UI をスマホで最大限に使い倒すための統合プラグインです。
+**素の DSH にそのまま入ります** — 他の `rdsh-*` プラグインや外部 npm パッケージは不要です。
 
 ## 何が入るか
 
@@ -26,7 +26,7 @@ DeepSeek Harness（DSH）の拡張プラグイン置き場です。**素の DSH 
 ```sh
 cd ~/.dsh/profiles/web
 dsh plugin add \
-  https://github.com/kuraneko1/dsh-extensions/releases/download/v0.2.0/rdsh-pwa-0.2.0.tgz
+  https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.2.0/rdsh-pwa-0.2.0.tgz
 # DSH を再起動（環境に合わせて）
 systemctl --user restart dsh-web.service
 ```
@@ -38,7 +38,7 @@ systemctl --user restart dsh-web.service
 ```json
 {
   "dependencies": {
-    "rdsh-pwa": "https://github.com/kuraneko1/dsh-extensions/releases/download/v0.2.0/rdsh-pwa-0.2.0.tgz"
+    "rdsh-pwa": "https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.2.0/rdsh-pwa-0.2.0.tgz"
   },
   "dsh": {
     "profile": {
@@ -68,7 +68,7 @@ Node 標準モジュールだけで動きます。`client.js` は6つの機能�
 ローカルのチェックアウトをそのまま使う場合:
 
 ```sh
-ln -sfn /path/to/dsh-extensions/packages/rdsh-pwa ~/.dsh/profiles/web/node_modules/rdsh-pwa
+ln -sfn /path/to/dsh-mobile-maxxing/packages/rdsh-pwa ~/.dsh/profiles/web/node_modules/rdsh-pwa
 ```
 
 ## 通知について

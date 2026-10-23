@@ -53,11 +53,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/kuraneko1/dsh-extensions.git",
+    "url": "git+https://github.com/kuraneko1/dsh-mobile-maxxing.git",
     "directory": "packages/rdsh-pwa"
   },
-  "homepage": "https://github.com/kuraneko1/dsh-extensions/tree/main/packages/rdsh-pwa#readme",
+  "homepage": "https://github.com/kuraneko1/dsh-mobile-maxxing/tree/main/packages/rdsh-pwa#readme",
   "bugs": {
-    "url": "https://github.com/kuraneko1/dsh-extensions/issues"
+    "url": "https://github.com/kuraneko1/dsh-mobile-maxxing/issues"
   }
 }

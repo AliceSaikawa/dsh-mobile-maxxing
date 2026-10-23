@@ -85,7 +85,7 @@ ln -sfn /path/to/dsh-extensions/packages/rdsh-pwa ~/.dsh/profiles/web/node_modul
 ## クレジット
 
 設計の参考にした実装は [`packages/rdsh-pwa/README.md` のクレジット](packages/rdsh-pwa/README.md#クレジット)
-にまとめています。コードの流用はしていません。
+にまとめています（作者名も記載）。コードの流用はしていません。
 
 ## ライセンス
 

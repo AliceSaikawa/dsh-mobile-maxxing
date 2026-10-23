@@ -207,8 +207,8 @@ Web Push の標準化部分は外部ライブラリを使わず、`node:crypto` 
 
 | 参考元 | 参考にした点 |
 | --- | --- |
-| [`dsh-notify-push`](https://www.npmjs.com/package/dsh-notify-push)（MIT） | 通知の全体設計。VAPID の `sub` にオリジンを使う回避策、`session/event` の `turn/end` と `user-questions/request` での発火、セッションを `openSession` で選び直す際の再入ガードと再主張、通知タップの `postMessage` 経路 |
-| [`dsh-sound-notifications`](https://github.com/cwd514/dsh-sound-notifications)（MIT） | 効果音の考え方（イベント種別ごとの音、`onlyWhenHidden` のような前面判定） |
+| [`dsh-notify-push`](https://github.com/hikarioyama/Smart-DSH)（MIT, © hikarioyama） | 通知の全体設計。VAPID の `sub` にオリジンを使う回避策、`session/event` の `turn/end` と `user-questions/request` での発火、セッションを `openSession` で選び直す際の再入ガードと再主張、通知タップの `postMessage` 経路 |
+| [`dsh-sound-notifications`](https://github.com/cwd514/dsh-sound-notifications)（MIT, © cwd514） | 効果音の考え方（イベント種別ごとの音、`onlyWhenHidden` のような前面判定） |
 | [`web-push`](https://github.com/web-push-libs/web-push)（MIT） | RFC 8291/8292 の解釈の確認（実装は自前） |
 | DSH 本体（`@deepseek-ai/dsh-*`） | トースト部品（`primitives.Toast`）、`uiWorkspace` / `sessions` / `agents` / `webServer` の各サービス |
 

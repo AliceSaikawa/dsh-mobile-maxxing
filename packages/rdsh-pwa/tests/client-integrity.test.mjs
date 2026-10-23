@@ -83,8 +83,10 @@ function declaredNames(code) {
 		for (const part of match[1].split(",")) add(part.trim());
 	}
 	// Arrow parameters, parenthesised and single.
-	for (const match of code.matchAll(/function\s*[A-Za-z_$\w]*\s*\(([^()]*)\)/g)) addParameters(match[1]);
-	for (const match of code.matchAll(/\(([^()]*)\)\s*=>/g)) addParameters(match[1]);
+	// One level of nesting covers a default parameter that is itself a call:
+	// `function f(a = read(), b = read2())`.
+	for (const match of code.matchAll(/function\s*[A-Za-z_$\w]*\s*\(((?:[^()]|\([^()]*\))*)\)/g)) addParameters(match[1]);
+	for (const match of code.matchAll(/\(((?:[^()]|\([^()]*\))*)\)\s*=>/g)) addParameters(match[1]);
 	for (const match of code.matchAll(/([A-Za-z_$][\w$]*)\s*=>/g)) add(match[1]);
 	return declared;
 }
@@ -126,6 +128,27 @@ test("no call targets an undeclared identifier", () => {
 	// This is what a deleted helper looks like: the definition goes, one call
 	// site stays, and nothing notices until that line runs.
 	assert.deepEqual(undefinedCalls(stripLiterals(CLIENT)), []);
+});
+
+/** Names assigned without ever being declared — the state a bulk edit drops. */
+function undefinedAssignments(code) {
+	const declared = declaredNames(code);
+	const keywords = new Set([
+		"if", "for", "while", "switch", "catch", "return", "typeof", "new", "function", "await", "yield",
+		"delete", "void", "in", "of", "instanceof", "do", "else", "try", "throw", "case", "super", "import",
+		"export", "async", "class", "extends",
+	]);
+	const host = new Set(["globalThis", "window", "document", "navigator", "location", "localStorage",
+		"sessionStorage", "screen", "history", "self", "console", "performance", "crypto", "module", "exports"]);
+	const assigned = new Set();
+	for (const match of code.matchAll(/(?<![.?\w$])([A-Za-z_$][\w$]*)\s*=(?!=)/g)) assigned.add(match[1]);
+	return [...assigned].filter((name) => !declared.has(name) && !keywords.has(name) && !host.has(name)).sort();
+}
+
+test("no assignment targets an undeclared variable", () => {
+	// `allowFocusElement = field` with the `let` above it deleted is a
+	// ReferenceError on the first focus event, not at load time.
+	assert.deepEqual(undefinedAssignments(stripLiterals(CLIENT)), []);
 });
 
 test("every addEventListener handler is defined", () => {

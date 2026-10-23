@@ -2894,6 +2894,12 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
 
     }
 
+    // ---------------------------------------------------------------------
+    // Focus: opening a session must not steal the composer
+    // ---------------------------------------------------------------------
+    let allowFocusElement = null;
+    let allowFocusUntil = 0;
+
     function textBoxOf(element) {
       if (!(element instanceof Element)) return null;
       const field = element.closest('input, textarea, [contenteditable="true"]');

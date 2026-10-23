@@ -966,6 +966,20 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       return window.matchMedia(NARROW_QUERY).matches;
     }
 
+    /**
+     * Is the primary pointer a finger?
+     *
+     * Enter handling keys off this rather than off `narrow()`: a desktop
+     * window dragged narrow is still driven by a keyboard, and losing Enter
+     * there (the stock composer sends on plain Enter) is a real regression.
+     * A tablet in landscape is a phone for gestures but may have a keyboard
+     * attached; `pointer` describes the primary input, which is what the
+     * gesture came from.
+     */
+    function coarsePointer() {
+      return typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches;
+    }
+
     const ENTER_TO_SEND_KEY = "rdsh-mobile-ux:enter-to-send";
 
     function readEnterToSend() {
@@ -1227,6 +1241,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     }
 
     function decorateSessionRows() {
+      rowHooksActive = true;
       for (const row of document.querySelectorAll('[data-row-key^="session:"]')) {
         row.setAttribute("data-rdsh-session", "");
         const children = [...row.children];
@@ -1260,6 +1275,58 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
           }
         }
       }
+    }
+
+    /** Whether the last pass wrote session-row hooks (so a wide pass is cheap). */
+    let rowHooksActive = false;
+
+    const SESSION_ROW_HOOKS = [
+      "data-rdsh-running",
+      "data-rdsh-ring-row",
+      "data-rdsh-open-row",
+      "data-rdsh-session-frame",
+      "data-rdsh-row-minor",
+      "data-rdsh-row-menu",
+      "data-rdsh-dragging",
+    ];
+
+    /**
+     * Strip every session-row hook.
+     *
+     * Reached when the window widens (or a rotation leaves the phone layout):
+     * the styling is inside the phone query, so the attributes are inert, but
+     * leaving them behind means a later narrow pass starts from another
+     * layout's leftovers, and `[data-rdsh-running]` on a desktop row is a lie
+     * to anything that reads the DOM.
+     */
+    function clearSessionRowHooks() {
+      rowHooksActive = false;
+      for (const attribute of SESSION_ROW_HOOKS) {
+        for (const element of document.querySelectorAll(`[${attribute}]`)) element.removeAttribute(attribute);
+      }
+      for (const element of document.querySelectorAll("[data-rdsh-session], [data-rdsh-status], [data-rdsh-session-title], [data-rdsh-ringed]")) {
+        if (element.hasAttribute("data-rdsh-session")) element.removeAttribute("data-rdsh-session");
+        if (element.hasAttribute("data-rdsh-status")) {
+          element.removeAttribute("data-rdsh-status");
+          element.removeAttribute("data-rdsh-status-empty");
+        }
+        if (element.hasAttribute("data-rdsh-session-title")) element.removeAttribute("data-rdsh-session-title");
+        element.removeAttribute("data-rdsh-ringed");
+      }
+    }
+
+    /**
+     * Strip the other phone-only hooks whose styling lives in the phone query.
+     *
+     * The typing overlay is painted above React's text with the real glyphs
+     * made transparent, so it has to go together with its attributes.
+     */
+    function clearPhoneHooks() {
+      for (const attribute of ["data-rdsh-header-title", "data-rdsh-header-running", "data-rdsh-typing", "data-rdsh-rtab"]) {
+        for (const element of document.querySelectorAll(`[${attribute}]`)) element.removeAttribute(attribute);
+      }
+      for (const layer of document.querySelectorAll("[data-rdsh-typing-layer]")) layer.remove();
+      clearSessionRowHooks();
     }
 
     function decorateEditCards() {
@@ -1495,6 +1562,10 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     }
 
     function decorateStatsDock() {
+      // `contextUsedMax` below opens the context panel to read its figures and
+      // closes it again. The probe only hides itself on a phone, so on a wide
+      // screen the panel would flash open on every decorate pass.
+      if (!narrow()) return;
       const dock = document.querySelector("[data-rdsh-composer-dock]");
       if (dock === null) return;
       const buttons = [...dock.querySelectorAll("button")].filter((button) => button.getAttribute("aria-label") !== null);
@@ -2151,7 +2222,11 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       for (const slot of document.querySelectorAll('[data-slot="main.conversation"], [data-slot="conversation"]')) {
         slot.setAttribute("data-rdsh-conversation", "");
       }
-      decorateSessionRows();
+      // Session-row hooks are phone-only (their styling lives inside the phone
+      // query). Leaving them on a wide layout would also leave the attributes
+      // behind for the next narrow pass to mistake for its own.
+      if (narrow()) decorateSessionRows();
+      else if (rowHooksActive) clearSessionRowHooks();
       decorateComposer();
       decorateHeaderActivityChips();
       decorateSidebarSettingsRow();
@@ -2660,6 +2735,10 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     }
 
     function onKeyDownCapture(event) {
+      // `narrow()` would be wrong here: a narrow desktop window still has a
+      // keyboard, and the stock composer sends on plain Enter. Only a finger
+      // primary pointer gets the phone default (Enter = newline).
+      if (!coarsePointer()) return;
       if (event.key !== "Enter" || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return;
       const editor = composerEditor(event.target);
       if (editor === null) return;
@@ -3431,6 +3510,9 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     }
 
     function decorateLightbox() {
+      // The crop button and the full-bleed styling are phone affordances: a
+      // desktop viewer keeps its own chrome and its own close button.
+      if (!narrow()) return;
       const dialog = lightboxDialog();
       if (dialog === null) return;
       if (!dialog.hasAttribute("data-rdsh-lightbox")) dialog.setAttribute("data-rdsh-lightbox", "");
@@ -4144,6 +4226,10 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     }
 
     function LiveSpeed({ sessionId }) {
+      // Re-render on media changes (boot emits `narrow`), so the label appears
+      // and disappears with the layout instead of polling on a desktop.
+      const store = useStore();
+      const phone = store.narrow;
       const [speed, setSpeed] = useState(null);
       useEffect(() => {
         currentSessionId = typeof sessionId === "string" && sessionId !== "" ? sessionId : null;
@@ -4152,7 +4238,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         };
       }, [sessionId]);
       useEffect(() => {
-        if (!sessionId) {
+        if (!sessionId || !phone) {
           setSpeed(null);
           return undefined;
         }
@@ -4176,8 +4262,8 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
           active = false;
           window.clearInterval(timer);
         };
-      }, [sessionId]);
-      if (speed === null) return null;
+      }, [sessionId, phone]);
+      if (!phone || speed === null) return null;
       return h("span", {
         className: "rdsh-mux-live-speed",
         title: "出力速度（ストリーム差分からの概算）",
@@ -4212,8 +4298,13 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
   display: none; pointer-events: none;
 }
 .rdsh-mux-fab-badge[data-visible] { display: block; }
-[data-rdsh-session-frame] {
-  box-shadow: inset 0 0 0 2px var(--rdsh-session-frame) !important;
+/* Phones only. A colour frame is a phone affordance (it stands in for the
+   sidebar's activity dot while the drawer is closed); on a wide screen the
+   stock sidebar already shows the session's state. */
+@media ${NARROW_QUERY} {
+  [data-rdsh-session-frame] {
+    box-shadow: inset 0 0 0 2px var(--rdsh-session-frame) !important;
+  }
 }
 .rdsh-frame-menu-item {
   width: 100%; display: flex; align-items: center; gap: 10px;
@@ -4289,26 +4380,29 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
 @keyframes rdsh-mux-pop { from { opacity: 0; transform: translateY(-4px) } to { opacity: 1; transform: none } }
 
 /* Image lightbox: keep the close/crop controls below the camera housing,
-   shrink the image into the remaining safe area, and darken the backdrop. */
-[data-rdsh-lightbox] { background: rgba(0,0,0,.96) !important; }
-[data-rdsh-lightbox] [class*="_mask_"] { background: rgba(0,0,0,.96) !important; }
-[data-rdsh-lightbox] [class*="_close_"] {
-  z-index: 5;
-  top: calc(env(safe-area-inset-top, 0px) + 12px) !important;
-  right: 16px !important;
-  width: 40px !important; height: 40px !important;
-  border-radius: 50% !important;
-  background: rgba(44,44,46,.95) !important;
-}
-[data-rdsh-lightbox] [class*="_image_"] {
-  max-height: calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 104px) !important;
-  max-width: calc(100vw - 24px) !important;
-}
-[data-rdsh-crop-button] {
-  position: absolute; z-index: 5; top: calc(env(safe-area-inset-top, 0px) + 12px); left: 16px;
-  width: 40px; height: 40px; border: 0; border-radius: 50%;
-  background: rgba(44,44,46,.95); color: #f9fafb;
-  display: grid; place-items: center; z-index: 2; padding: 0;
+   shrink the image into the remaining safe area, and darken the backdrop.
+   The viewer is a desktop surface too, so these stay on the phone. */
+@media ${NARROW_QUERY} {
+  [data-rdsh-lightbox] { background: rgba(0,0,0,.96) !important; }
+  [data-rdsh-lightbox] [class*="_mask_"] { background: rgba(0,0,0,.96) !important; }
+  [data-rdsh-lightbox] [class*="_close_"] {
+    z-index: 5;
+    top: calc(env(safe-area-inset-top, 0px) + 12px) !important;
+    right: 16px !important;
+    width: 40px !important; height: 40px !important;
+    border-radius: 50% !important;
+    background: rgba(44,44,46,.95) !important;
+  }
+  [data-rdsh-lightbox] [class*="_image_"] {
+    max-height: calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 104px) !important;
+    max-width: calc(100vw - 24px) !important;
+  }
+  [data-rdsh-crop-button] {
+    position: absolute; z-index: 5; top: calc(env(safe-area-inset-top, 0px) + 12px); left: 16px;
+    width: 40px; height: 40px; border: 0; border-radius: 50%;
+    background: rgba(44,44,46,.95); color: #f9fafb;
+    display: grid; place-items: center; z-index: 2; padding: 0;
+  }
 }
 .rdsh-crop-overlay {
   position: fixed; inset: 0; z-index: 1200;
@@ -4454,6 +4548,13 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
   border: .5px solid var(--dsw-alias-border-l3, rgba(255,255,255,.16));
 }
 
+/* Everything from here to the safe-area block below dresses upstream DOM the
+   phone view rearranges: the running-session animation, the open row's fill,
+   the header sheen, toasts and the typing effect. None of it has a meaning on
+   a desktop sidebar, so it is inside the phone query rather than wrapped
+   around it. The body is not re-indented: this is a scope change, and keeping
+   the lines untouched keeps the review to the two braces. */
+@media ${NARROW_QUERY} {
 /* Running session: animate the label itself, never the whole row. */
 html:not([data-rdsh-anim="none"]) [data-rdsh-running] [data-rdsh-status] { display: none !important; }
 [data-rdsh-running] [data-rdsh-session-title] {
@@ -4674,6 +4775,7 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   [data-rdsh-running] [data-rdsh-session-title]::before { animation: none; opacity: .4 }
   [data-rdsh-running] [data-rdsh-session-title]::after { animation: none }
   html[data-rdsh-anim="breathing"] [data-rdsh-running] [data-rdsh-session-title] { animation: none; color: var(--dsw-alias-label-primary, #f9fafb) }
+}
 }
 
 /* Safe-area insets measured at runtime: apply them even when the browser's
@@ -5245,6 +5347,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         const media = window.matchMedia(NARROW_QUERY);
         const onMedia = () => {
           emit({ narrow: media.matches });
+          if (!media.matches) clearPhoneHooks();
           scheduleDecorate();
         };
         media.addEventListener("change", onMedia);

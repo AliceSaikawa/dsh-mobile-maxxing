@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { apply, recordLiveToken } from "../index.js";
+import { apply, recordLiveToken } from "../lib/mobile-ux.js";
 
 const LIVE_SPEED_PATH = "/api/rdsh-mobile-ux/live-speed";
 

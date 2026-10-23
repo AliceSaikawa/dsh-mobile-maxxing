@@ -3,7 +3,9 @@
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { test } from 'node:test';
-import { apply, name } from '../index.js';
+// The merged package mounts many host halves; this suite covers only the
+// CJK one, so it drives that module directly instead of index.js.
+import { apply } from '../lib/markdown-cjk.js';
 
 const DSH_BIN = process.env.DSH_ORIG_BIN ?? `${process.env.HOME}/.dsh/runtime/node_modules/@deepseek-ai/dsh/lib/bin.js`;
 const installed = existsSync(DSH_BIN);
@@ -26,8 +28,9 @@ function mount(config) {
 	return { routes, taps };
 }
 
-test('the plugin is named for its package', () => {
-	assert.equal(name, 'rdsh-markdown-cjk');
+test('the CJK fix is part of the merged package, not its own plugin', () => {
+	// It ships inside rdsh-pwa now; index.js mounts it alongside the rest.
+	assert.equal(typeof apply, 'function');
 });
 
 test('config.enabled=false keeps stock rendering', () => {

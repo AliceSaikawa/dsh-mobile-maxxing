@@ -6,7 +6,6 @@
  *
  * @module rdsh-mobile-ux
  */
-export const name = "rdsh-mobile-ux";
 export const inject = [];
 
 /** Accepted config keys (documented in README.md). */

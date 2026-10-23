@@ -3,30 +3,30 @@
 DeepSeek Harness（DSH）の拡張プラグイン置き場です。**素の DSH にそのまま入ります** —
 他の `rdsh-*` プラグインや外部 npm パッケージは不要です。
 
-## パッケージ
+## 何が入るか
 
-| パッケージ | 役割 | 前提 |
-| --- | --- | --- |
-| [`rdsh-pwa`](packages/rdsh-pwa) | Web UI をインストール可能なアプリにする。オフライン起動、通知（Web Push）、通知音 | なし |
-| [`rdsh-mobile-ux`](packages/rdsh-mobile-ux) | スマホ幅のUX。ドロワー、設定、入力、コード表示、通知のアプリ内バナー | `rdsh-pwa` と併用が前提（単体でも動く） |
-| [`rdsh-markdown-cjk`](packages/rdsh-markdown-cjk) | CJK の自動リンク崩れを直す（`**https://x**（メモ）` など） | なし |
-| [`rdsh-open-with`](packages/rdsh-open-with) | セッションメニューに「外部アプリで開く」を足す | なし |
-| [`rdsh-session-id-copy`](packages/rdsh-session-id-copy) | セッションメニューからセッションIDをコピーする | なし |
-| [`rdsh-answer-guard`](packages/rdsh-answer-guard) | 推論だけ返して本文が空のターンを検出してやり直させる | なし |
-| [`dsh-esc-stop`](packages/dsh-esc-stop) | Esc キーで実行中のターンを止める | なし |
+**1パッケージ・1インストール**です。中身は次の6つで、すべて `rdsh-pwa` の中で動きます。
+
+| 機能 | 内容 |
+| --- | --- |
+| PWA | ホーム画面にインストール可能化、オフライン起動、更新通知 |
+| 通知 | 前面ならアプリ内バナー、背面なら Web Push。通知音5種 |
+| スマホUX | ドロワー、設定の1タップ表示、入力欄、コード表示の折り返し |
+| CJK表示 | `**https://x**（メモ）` のような自動リンク崩れを修正 |
+| 外部アプリで開く | トランスクリプトのパス/URL を右クリックして開く |
+| セッションIDのコピー | セッションメニューに1行追加 |
+
+分けていない理由は、DSH のクライアントモジュールシステムが**1パッケージ＝1ブラウザモジュール**
+だからです。別々のパッケージにすると、その分だけ別モジュールとして登録され、インストールも
+設定も分散します。もともと別々だったプラグインを1つにまとめた経緯は
+[`packages/rdsh-pwa/README.md`](packages/rdsh-pwa/README.md) に書いてあります。
 
 ## インストール
 
-各パッケージは単体の npm パッケージです。使うものだけ入れてください。
-
 ```sh
 cd ~/.dsh/profiles/web
-
-# 例: PWA とスマホUX
 dsh plugin add \
-  https://github.com/kuraneko1/dsh-extensions/releases/download/v0.1.0/rdsh-pwa-0.1.0.tgz \
-  https://github.com/kuraneko1/dsh-extensions/releases/download/v0.1.0/rdsh-mobile-ux-0.1.0.tgz
-
+  https://github.com/kuraneko1/dsh-extensions/releases/download/v0.2.0/rdsh-pwa-0.2.0.tgz
 # DSH を再起動（環境に合わせて）
 systemctl --user restart dsh-web.service
 ```
@@ -38,7 +38,7 @@ systemctl --user restart dsh-web.service
 ```json
 {
   "dependencies": {
-    "rdsh-pwa": "https://github.com/kuraneko1/dsh-extensions/releases/download/v0.1.0/rdsh-pwa-0.1.0.tgz"
+    "rdsh-pwa": "https://github.com/kuraneko1/dsh-extensions/releases/download/v0.2.0/rdsh-pwa-0.2.0.tgz"
   },
   "dsh": {
     "profile": {
@@ -52,16 +52,18 @@ systemctl --user restart dsh-web.service
 npm install        # プロファイル内。pnpm でも可
 ```
 
+外すときは依存と bundle から `rdsh-pwa` を消して再起動するだけです。
+
 ## 開発
 
 ```sh
-pnpm install          # ワークスペースの依存を解決
-pnpm test             # 全パッケージのテスト
-node scripts/pack-all.mjs   # dist/ に全 tarball を作る
+npm test                      # パッケージのテスト（37件）
+node scripts/pack-all.mjs     # dist/ に tarball を作る
 ```
 
-各パッケージは `packages/<name>/` に閉じています。共通のビルド手順はありません
-（クライアント側は生の JS をそのまま配信し、ホスト側は Node 標準モジュールだけで動きます）。
+**ビルド工程はありません。** `client.js` はブラウザにそのまま配信され、`index.js` は
+Node 標準モジュールだけで動きます。`client.js` は6つの機能を1つのモジュールにまとめた
+ファイルで、冒頭に各部の出どころが書いてあります。
 
 ローカルのチェックアウトをそのまま使う場合:
 

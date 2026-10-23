@@ -2,7 +2,7 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { MARKDOWN_FIX_PATH, patchMarkdownVendor, rewriteIndexChunk, rewriteIndexHtml } from '../markdown-cjk.js';
+import { MARKDOWN_FIX_PATH, patchMarkdownVendor, rewriteIndexChunk, rewriteIndexHtml } from '../lib/markdown-cjk-runtime.js';
 
 /** A vendor chunk with the two autolink tokenizers the fix anchors on. */
 const VENDOR = [

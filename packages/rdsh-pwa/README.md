@@ -10,6 +10,22 @@ DSH Web GUI を「インストールできるアプリ」にし、スマホ幅�
 - クライアント側: サービスワーカーの登録、`beforeinstallprompt` の捕捉、サイドバー／設定／スマホ用の
   インストール UI、更新バナー、オフライン表示、スタンドアロン時のセーフエリア処理を行います。
 
+## このパッケージについて
+
+もともと別々だった5つのプラグインを1つにまとめたものです。
+
+| 元 | いま |
+| --- | --- |
+| `rdsh-pwa` | PWA（インストール可能化・オフライン起動・通知の送受信・通知音） |
+| `rdsh-mobile-ux` | スマホ幅のUX（ドロワー・設定・入力・コード表示・アプリ内バナー） |
+| `rdsh-markdown-cjk` | CJK の自動リンク崩れ修正（ホスト専用） |
+| `rdsh-open-with` | パスや URL を外部アプリで開く |
+| `rdsh-session-id-copy` | セッションメニューにセッションIDのコピー行を足す |
+
+**分けていない理由**: DSH のクライアントモジュールシステムは1パッケージ＝1ブラウザモジュールです。
+別パッケージにするとその分だけ別モジュールとして登録され、インストール・設定・有効化が
+分散します。中身は互いに独立しているので、1つにまとめても干渉しません。
+
 ## できること
 
 | 機能 | 内容 |
@@ -47,58 +63,16 @@ DSH Web GUI を「インストールできるアプリ」にし、スマホ幅�
 
 ## インストール
 
-**2つのパッケージ**を入れます。どちらも外部依存ゼロで、DSH 本体だけで動きます。
-
-| パッケージ | 役割 | 必須 |
-| --- | --- | --- |
-| `rdsh-pwa` | PWA（インストール可能化・オフライン起動・通知の送受信・通知音の配信） | 必須 |
-| `rdsh-mobile-ux` | スマホ幅のUX（ドロワー、設定、入力、コード表示など） | スマホで使うなら必須 |
-
-2つに分かれているのは、通知や PWA だけ欲しい人と、スマホUXも欲しい人を分けるためです。
-片方だけでも動きます（`rdsh-pwa` 単体では通知とPWAのみ、`rdsh-mobile-ux` 単体ではUXのみ）。
-
-### GitHub Releases の tarball から
-
 ```sh
 cd ~/.dsh/profiles/web
-dsh plugin add \
-  https://github.com/kuraneko1/dsh-extensions/releases/download/v0.1.0/rdsh-pwa-0.1.0.tgz \
-  https://github.com/kuraneko1/dsh-extensions/releases/download/v0.1.0/rdsh-mobile-ux-0.1.0.tgz
+dsh plugin add https://github.com/kuraneko1/dsh-extensions/releases/download/v0.2.0/rdsh-pwa-0.2.0.tgz
+# DSH を再起動
 ```
 
-`dsh plugin add` が `package.json` の依存と `dsh.profile.bundles` の両方を更新します。終わったら
-DSH を再起動してください。
-
-手で書く場合はこうです。
-
-```json
-{
-  "dependencies": {
-    "rdsh-pwa": "https://github.com/kuraneko1/dsh-extensions/releases/download/v0.1.0/rdsh-pwa-0.1.0.tgz",
-    "rdsh-mobile-ux": "https://github.com/kuraneko1/dsh-extensions/releases/download/v0.1.0/rdsh-mobile-ux-0.1.0.tgz"
-  },
-  "dsh": {
-    "profile": {
-      "bundles": ["...", "rdsh-pwa", "rdsh-mobile-ux"]
-    }
-  }
-}
-```
-
-```sh
-npm install        # プロファイル内。pnpm でも可
-# DSH を再起動（環境に合わせて。例: systemctl --user restart dsh-web.service）
-```
-
-外すときは依存と bundle から消して再起動するだけです（配信ルートとメタ情報が消え、
-サービスワーカーは登録解除で消えます）。
-
-### このリポジトリを直接使う（開発用）
+開発中にこのチェックアウトをそのまま使う場合:
 
 ```sh
 ln -sfn /path/to/dsh-extensions/packages/rdsh-pwa ~/.dsh/profiles/web/node_modules/rdsh-pwa
-ln -sfn /path/to/dsh-extensions/packages/rdsh-mobile-ux ~/.dsh/profiles/web/node_modules/rdsh-mobile-ux
-# package.json の dependencies に link: で両方を書く
 ```
 
 ### 設定（任意）
@@ -123,8 +97,9 @@ ln -sfn /path/to/dsh-extensions/packages/rdsh-mobile-ux ~/.dsh/profiles/web/node
 
 ## 依存関係
 
-**このリポジトリの2つだけで完結**します。他の `rdsh-*` プラグイン（rdsh-settings /
+**このパッケージ1つで完結**します。他の `rdsh-*` プラグイン（rdsh-settings /
 rdsh-mobile-ui / rdsh-answer-guard など）は不要で、素の DSH にそのまま入ります。
+スマホUX・通知・CJK修正・外部アプリ連携・IDコピーはすべてこの中にあります。
 
 クライアント側が必要とするのは DSH 本体が提供する `react` と
 `@deepseek-ai/dsh-client-ui-primitives` だけ、ホスト側は Node 標準モジュールだけです。
@@ -132,7 +107,6 @@ rdsh-mobile-ui / rdsh-answer-guard など）は不要で、素の DSH にその�
 | 依存 | 必須か | 内容 |
 | --- | --- | --- |
 | DSH 本体（`@deepseek-ai/dsh-*`） | 必須 | サイドバー、設定、モデル選択、Goal、Todo、ジョブの各UI。上流のクラス名は CSS Modules のハッシュなので、このプラグインは**構造（`data-row-key` / `aria-label` / `role`）から `data-rdsh-*` フックを付けて** CSS はフックだけを見ます。上流が変わればフックが付かず、標準のレイアウトのまま（fail closed） |
-| `rdsh-mobile-ux` | スマホUXを使うなら必須 | 独立したパッケージです。`rdsh-pwa` とは依存関係がなく、それぞれ自分の `cordis.patch.yml` で自分だけを登録します（片方だけ入れても動きます） |
 | 通知 | 同梱 | Web Push（VAPID + `aes128gcm`）を **`node:crypto` だけで自前実装**しているため、`web-push` などの外部ライブラリも別プラグインも不要です |
 | `react` / `react-dom/client` / `@deepseek-ai/dsh-client-ui-primitives` | DSH が提供 | いずれも DSH 本体に同梱。外部 npm パッケージのインストールは不要です |
 

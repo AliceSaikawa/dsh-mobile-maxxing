@@ -25,7 +25,7 @@ import { stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, resolve, sep } from "node:path";
 
-export const inject = ["webServer", "connection", "sandboxPolicy"];
+export const inject = ["webServer", "connection"];
 
 const API = "/api/rdsh-open-with";
 const DEFAULT_MAX_INLINE = 10 * 1024 * 1024;
@@ -200,12 +200,31 @@ function openWith(opener, target) {
   });
 }
 
+/**
+ * Read a service that may not be mounted at all.
+ *
+ * @param ctx - the context to ask.
+ * @param name - service name.
+ * @returns the service, or undefined when the profile does not provide it.
+ */
+function readOptionalService(ctx, name) {
+  try {
+    return typeof ctx.get === "function" ? ctx.get(name) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function apply(ctx, config) {
   const opener = typeof config?.opener === "string" && config.opener.trim()
     ? config.opener.trim() : "xdg-open";
+  // `sandboxPolicy` is optional: only profiles that mount it provide a
+  // workspace root. Read it through get(), never as a property: cordis throws
+  // on a property access for a service this context did not inject.
+  const policy = readOptionalService(ctx, "sandboxPolicy");
   const workspaceRoot = typeof config?.workspaceRoot === "string" && isAbsolute(config.workspaceRoot)
     ? resolve(config.workspaceRoot)
-    : (typeof ctx.sandboxPolicy?.workspaceRoot === "string" ? ctx.sandboxPolicy.workspaceRoot : undefined);
+    : (typeof policy?.workspaceRoot === "string" ? policy.workspaceRoot : undefined);
   const maxInline = Number.isSafeInteger(config?.maxInlineBytes) && config.maxInlineBytes > 0
     ? config.maxInlineBytes : DEFAULT_MAX_INLINE;
   return ctx.effect(() => {

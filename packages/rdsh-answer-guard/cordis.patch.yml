@@ -1,4 +1,0 @@
-- insert:
-    - id: rdsh-answer-guard
-      name: "rdsh-answer-guard"
-      config: {}

@@ -21,6 +21,10 @@
 
 import { createHash } from "node:crypto";
 import { applyNotify, normalizeNotifyConfig } from "./notify/host.js";
+import { apply as applyMobileUx } from "./lib/mobile-ux.js";
+import { apply as applyMarkdownCjk } from "./lib/markdown-cjk.js";
+import { apply as applyOpenWith } from "./lib/open-with.js";
+import { apply as applySessionIdCopy } from "./lib/session-id-copy.js";
 import { readFile } from "node:fs/promises";
 
 /** Stable Cordis plugin name. */
@@ -266,6 +270,29 @@ export function apply(ctx, config) {
 	// Notifications are their own module: the copy, the VAPID pair, the push
 	// fan-out and the browser-facing routes all live there.
 	applyNotify(ctx, normalizeNotifyConfig(config?.notifications));
+
+	// The host halves of what used to be separate plugins. Each declares the
+	// services it needs (`inject` in its own module) and mounts its own routes
+	// or hooks, so one failing must not take the others — or the PWA shell —
+	// down with it.
+	const mountPart = (label, services, mount, settings) => {
+		try {
+			if (services.length === 0) {
+				mount(ctx, settings);
+				return;
+			}
+			ctx.inject(services, (scope) => mount(scope, settings));
+		} catch (error) {
+			console.error(`[rdsh-pwa] ${label} host half failed to mount`, error);
+		}
+	};
+	// mobile-ux and markdown-cjk inject what they need inside their own apply.
+	mountPart("rdsh-mobile-ux", [], applyMobileUx, config?.mobileUx);
+	mountPart("rdsh-markdown-cjk", [], applyMarkdownCjk, config?.markdownCjk);
+	// open-with reads ctx.webServer and ctx.connection directly.
+	mountPart("rdsh-open-with", ["webServer", "connection"], applyOpenWith, config?.openWith);
+	// Registers nothing: its whole contribution is the browser half.
+	mountPart("rdsh-session-id-copy", [], applySessionIdCopy, undefined);
 	// Read once per activation: a deployment restart is what makes new bytes
 	// visible, which is also what bumps the service-worker build hash.
 	const files = new Map();

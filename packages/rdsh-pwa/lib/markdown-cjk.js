@@ -29,10 +29,9 @@ import {
 	patchMarkdownVendor,
 	rewriteIndexChunk,
 	rewriteIndexHtml,
-} from './markdown-cjk.js';
+} from './markdown-cjk-runtime.js';
 
 /** Stable Cordis plugin name. */
-export const name = 'rdsh-markdown-cjk';
 
 /** Routes need `webServer`; mount lazily so headless profiles stay clean. */
 export const inject = [];

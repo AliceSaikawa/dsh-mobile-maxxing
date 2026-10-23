@@ -1,6 +1,7 @@
-# Registers this package. The phone-width UX is its own package now
-# (rdsh-mobile-ux), so it registers itself when it is installed; inserting it
-# here as well would mount the same plugin twice.
+# Registers this package. Everything it ships — PWA shell, phone UX,
+# notifications, CJK rendering, "open with", session-id copy — is one plugin:
+# the client module system maps one package to one browser module, so the
+# behaviours cannot be separate packages without also being separate modules.
 - insert:
     - id: rdsh-pwa
       name: "rdsh-pwa"

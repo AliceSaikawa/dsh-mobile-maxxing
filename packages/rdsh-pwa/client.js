@@ -4851,12 +4851,6 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
     visibility: visible !important;
     opacity: 1 !important;
   }
-  [data-rdsh-transcript-column] {
-    width: 349px !important;
-    max-width: 100% !important;
-    margin-left: auto !important;
-    margin-right: auto !important;
-  }
   [data-chat-flow-kind="turn-tail"] [class*="_header"] {
     padding-top: 6px !important;
     padding-bottom: 6px !important;
@@ -5121,23 +5115,39 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
   [class*="_7KE1Ra_cell"] > span:last-of-type { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   [data-rdsh-model-search]:disabled { opacity: 1 !important; cursor: text; }
 
-  /* Agent question / plan review card: use the same 16px gutter and 349px
-     column as the transcript instead of the desktop card paddings. */
+  /* Agent question / plan review card: it lives in the composer seat, which
+     already carries the 16px gutter, so it just fills that box. It used to be
+     pinned to 349px — a copy of the transcript's old fixed column — which left
+     it narrower than the composer on every phone and off-centre on tablets. */
   [data-rdsh-question-frame] {
     padding-left: 16px !important; padding-right: 16px !important;
     padding-bottom: 10px !important;
   }
   [data-rdsh-question-frame] > [data-rdsh-question-card] {
-    width: 100% !important; max-width: 349px !important; margin-left: auto !important; margin-right: auto !important;
+    width: 100% !important; max-width: 100% !important;
+    /* The card's own 10px bottom padding doubled the footer's. */
+    padding-bottom: 0 !important;
   }
-  [data-rdsh-question-card] [class*="_header"] { padding: 12px 12px 0 16px !important; }
-  [data-rdsh-question-card] [class*="_strip"] { padding: 10px 12px !important; }
-  [data-rdsh-question-card] [class*="_summary"] { padding: 12px 16px !important; }
+  /* Direct children only. [class*="_header"] also matches _headerActions,
+     [class*="_footer"] matches _footerActions and [class*="_option"] matches
+     _optionCopy / _optionLine / _optionLabel, so plain descendant selectors
+     stacked the same padding four levels deep and inflated the card (one
+     option row 66px → 114px). */
+  [data-rdsh-question-card] > [class*="_header"] { padding: 12px 12px 0 16px !important; }
+  [data-rdsh-question-card] > [class*="_strip"] { padding: 10px 12px !important; }
+  [data-rdsh-question-card] > [class*="_summary"] { padding: 12px 16px !important; }
+  [data-rdsh-question-card] > [class*="_footer"] { padding: 8px 10px 10px !important; }
   [data-rdsh-question-card] [class*="_options"] { padding: 4px 8px !important; }
-  [data-rdsh-question-card] [class*="_option"],
-  [data-rdsh-question-card] [class*="_customRow"] { padding: 8px !important; }
-  [data-rdsh-question-card] [class*="_footer"] { padding: 8px 10px 10px !important; }
+  [data-rdsh-question-card] [class*="_options"] > button[class*="_option"],
+  [data-rdsh-question-card] [class*="_options"] > [class*="_customRow"] { padding: 8px !important; }
   [data-rdsh-question-card] [class*="_customBlock"] { margin-left: 8px !important; margin-right: 8px !important; }
+  /* The answer field takes its height from a hidden mirror, so both layers
+     must share the font size (16px here stops iOS from zooming on focus). */
+  [data-rdsh-question-card] [class*="_field"] > * { font-size: 16px !important; }
+  /* The card clips its overflow, so a long unbroken token used to be cut. */
+  [data-rdsh-question-card] [class*="_optionLabel"],
+  [data-rdsh-question-card] [class*="_title"],
+  [data-rdsh-question-card] [class*="_description"] { overflow-wrap: anywhere; }
 
   /* iOS zooms any focused field below 16px; this is a PWA and needs no zoom. */
   html, body { touch-action: manipulation; }

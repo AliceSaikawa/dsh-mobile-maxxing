@@ -88,6 +88,17 @@ ln -sfn /path/to/dsh-mobile-maxxing/packages/rdsh-pwa ~/.dsh/profiles/web/node_m
 設計の参考にした実装は [`packages/rdsh-pwa/README.md` のクレジット](packages/rdsh-pwa/README.md#クレジット)
 にまとめています（作者名も記載）。コードの流用はしていません。
 
+主な参考元:
+
+| 実装 | 作者 | 参考にした点 |
+| --- | --- | --- |
+| `dsh-notify-push` | hikarioyama | 通知の全体設計 |
+| `dsh-sound-notifications` | cwd514 | 効果音の考え方 |
+| `rdsh-mobile-ui` | 原案 hikarioyama（Smart-DSH）、移植 lasder-ca | スマホ幅レイアウトの具体的な指定 |
+| `web-push` | web-push-libs | RFC 8291/8292 の解釈確認 |
+
+いずれも依存には含めていません。**このパッケージ単体で動きます。**
+
 ## ライセンス
 
 MIT。[`LICENSE`](LICENSE) を参照してください。

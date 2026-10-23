@@ -178,10 +178,13 @@ Web Push の標準化部分は外部ライブラリを使わず、`node:crypto` 
 このパッケージは次の実装を**参考（設計の参照）**として書かれています。コードの流用はしていません
 （通知部分は RFC から自前実装、UI 部分は DSH の構造からフックを付ける方式）。
 
+**参考元のプラグインは依存に含めていません。** このパッケージ単体で動きます。
+
 | 参考元 | 参考にした点 |
 | --- | --- |
 | [`dsh-notify-push`](https://github.com/hikarioyama/Smart-DSH)（MIT, © hikarioyama） | 通知の全体設計。VAPID の `sub` にオリジンを使う回避策、`session/event` の `turn/end` と `user-questions/request` での発火、セッションを `openSession` で選び直す際の再入ガードと再主張、通知タップの `postMessage` 経路 |
 | [`dsh-sound-notifications`](https://github.com/cwd514/dsh-sound-notifications)（MIT, © cwd514） | 効果音の考え方（イベント種別ごとの音、`onlyWhenHidden` のような前面判定） |
+| **[`rdsh-mobile-ui`](https://github.com/jimoto-no-llm/rustdsh)**（MIT、移植は lasder-ca、原案は [Smart-DSH](https://github.com/hikarioyama/Smart-DSH) の hikarioyama） | スマホ幅レイアウトの考え方と、実際に効いていた指定。**折りたたみ時のグリッド列の固定**（`centerCol: 2` / `rightbarCol: 3`）、**ヘッダー左 64px の余白**（ハンバーガーボタンを避ける）、**チャット幅を固定px ではなくカラム基準にする**方法（`--dsh-chat-user-width` / `--dsh-chat-content-width` / `--dsh-composer-card-max-width` を 100% にする）。このパッケージは同プラグイン無しでも成立するよう、いずれも `data-rdsh-*` フックで自前に持っている |
 | [`web-push`](https://github.com/web-push-libs/web-push)（MIT） | RFC 8291/8292 の解釈の確認（実装は自前） |
 | DSH 本体（`@deepseek-ai/dsh-*`） | トースト部品（`primitives.Toast`）、`uiWorkspace` / `sessions` / `agents` / `webServer` の各サービス |
 

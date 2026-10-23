@@ -903,7 +903,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       ? CONFIG.runningAnimation
       : "none";
     /** Shown in Settings so a stale PWA bundle is easy to spot. */
-    const BUILD = "2026-10-24.1500-header-inset";
+    const BUILD = "2026-10-24.1530-chat-width";
 
     /** Controls that have no meaning inside an installed app on a phone. */
     const HIDE_DEFAULT = [
@@ -5186,6 +5186,22 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
   [data-rdsh-status-empty] { display: none; }
   [data-rdsh-header-chip] > span:nth-child(2) { display: none; }
   [data-rdsh-header-chip] > svg:last-child { display: none; }
+  /* The chat column sizes its content from fixed pixel floors upstream
+     (680px and friends), so on a 390px phone the transcript is wider than the
+     column and gets clipped. Size it from the column instead. These custom
+     properties are the app's own knobs for exactly that. */
+  [data-rdsh-conversation] {
+    --dsh-chat-user-width: 100% !important;
+    --dsh-chat-content-width: 100% !important;
+    --dsh-composer-card-max-width: 100% !important;
+  }
+  [data-rdsh-conversation] > * {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    overflow-x: clip;
+  }
+
   /* Clear the floating drawer button.
      It sits at x:8 with a 40px width, so the title needs a 64px left inset;
      without it the crumb starts at 20px and runs under the button. This inset

@@ -2191,15 +2191,21 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       const scroller = document.querySelector('[class*="scrollBody"]');
       if (scroller === null) return;
       for (const node of scroller.querySelectorAll('[class*="_scroll"], [class*="_column"]')) {
-        const style = getComputedStyle(node);
-        const left = parseFloat(style.paddingLeft) || 0;
-        const right = parseFloat(style.paddingRight) || 0;
-        if (left >= 24 && right >= 24 && node.getBoundingClientRect().width >= scroller.clientWidth * 0.8) {
+        // A node this plugin already tagged stays tagged: the tag is what sets
+        // the 16px gutters, so the "24px or more" heuristic below can never
+        // hold again. Re-checking it dropped the column on every re-mount
+        // (session switch, panel change) and the width reverted to 100%.
+        const tagged = node.hasAttribute("data-rdsh-transcript");
+        if (!tagged) {
+          const style = getComputedStyle(node);
+          const left = parseFloat(style.paddingLeft) || 0;
+          const right = parseFloat(style.paddingRight) || 0;
+          if (!(left >= 24 && right >= 24 && node.getBoundingClientRect().width >= scroller.clientWidth * 0.8)) continue;
           node.setAttribute("data-rdsh-transcript", "");
-          const column = node.querySelector('[class*="_column"]');
-          if (column !== null) column.setAttribute("data-rdsh-transcript-column", "");
-          return;
         }
+        const column = node.querySelector('[class*="_column"]');
+        if (column !== null) column.setAttribute("data-rdsh-transcript-column", "");
+        return;
       }
     }
 

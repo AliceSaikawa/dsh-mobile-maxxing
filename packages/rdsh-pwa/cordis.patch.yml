@@ -1,0 +1,7 @@
+# Registers this package. The phone-width UX is its own package now
+# (rdsh-mobile-ux), so it registers itself when it is installed; inserting it
+# here as well would mount the same plugin twice.
+- insert:
+    - id: rdsh-pwa
+      name: "rdsh-pwa"
+      config: {}

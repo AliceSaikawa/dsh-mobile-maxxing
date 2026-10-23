@@ -1,0 +1,62 @@
+{
+  "name": "dsh-esc-stop",
+  "version": "0.1.0",
+  "description": "Esc-to-stop for DeepSeek Harness: press Escape to cancel the running turn, with a General-settings toggle",
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "cordis.patch.yml",
+    "lib",
+    "tests"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-api-session-controller",
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ],
+      "platform": "web"
+    }
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs"
+  },
+  "devDependencies": {
+    "@deepseek-ai/schemastery": "^3.18.2"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kuraneko1/dsh-extensions.git",
+    "directory": "packages/dsh-esc-stop"
+  },
+  "homepage": "https://github.com/kuraneko1/dsh-extensions/tree/main/packages/dsh-esc-stop#readme",
+  "bugs": {
+    "url": "https://github.com/kuraneko1/dsh-extensions/issues"
+  },
+  "author": "kuraneko1",
+  "peerDependencies": {
+    "@deepseek-ai/schemastery": "*"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    }
+  }
+}

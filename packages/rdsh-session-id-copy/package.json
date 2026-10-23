@@ -1,0 +1,37 @@
+{
+  "name": "rdsh-session-id-copy",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "description": "Copy a Session's ID from the dsh web session row menu (rdsh)",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-primitives"
+      ]
+    }
+  },
+  "meta": {
+    "title": "rdsh セッションIDコピー",
+    "description": "セッション一覧の「⋯」メニューに、セッションIDをクリップボードへコピーする項目を追加します。"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kuraneko1/dsh-extensions.git",
+    "directory": "packages/rdsh-session-id-copy"
+  },
+  "homepage": "https://github.com/kuraneko1/dsh-extensions/tree/main/packages/rdsh-session-id-copy#readme",
+  "bugs": {
+    "url": "https://github.com/kuraneko1/dsh-extensions/issues"
+  },
+  "author": "kuraneko1"
+}

@@ -1,0 +1,6 @@
+# Registers the phone-width UX plugin. Installed alongside rdsh-pwa, which
+# supplies the PWA shell and the notification transport.
+- insert:
+    - id: rdsh-mobile-ux
+      name: "rdsh-mobile-ux"
+      config: {}

@@ -1346,42 +1346,60 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       }
     }
 
-    let contextProbeBusy = false;
-    let contextProbe = { percent: null, text: "", at: 0 };
+    /** The plugin context, kept so the session projection can be looked up. */
+    let hostCtx = null;
+    let sessionsApi;
+    let sessionsApiResolved = false;
 
-    function contextFiguresText() {
-      const panel = document.querySelector('[role="dialog"][class*="_panel"]');
-      const figures = panel === null ? null : panel.querySelector('[class*="_figures"]');
-      return figures === null ? "" : (figures.textContent || "");
-    }
-
-    function parseContextFigures(text) {
-      const match = text.match(/(~?[\d.]+[KMB]?)\s*\/\s*(~?[\d.]+[KMB]?)/i);
-      return match === null ? "" : `${match[1]}/${match[2]}`;
-    }
-
-    function contextUsedMax(button, percent) {
-      const now = Date.now();
-      // If the user has the panel open, read it without toggling anything.
-      if (button.getAttribute("aria-expanded") === "true") {
-        const text = parseContextFigures(contextFiguresText());
-        if (text !== "") contextProbe = { percent, text, at: now };
-        return text;
+    /** `sessions` is an optional service: resolving it lazily means a late
+     *  provider still works, and an absent one only costs the used/max text. */
+    function sessionsService() {
+      if (!sessionsApiResolved && hostCtx !== null) {
+        try {
+          const service = typeof hostCtx.get === "function" ? hostCtx.get("sessions") : undefined;
+          if (service !== undefined && service !== null) {
+            sessionsApi = service;
+            sessionsApiResolved = true;
+          }
+        } catch (error) {
+          // Not provided in this profile: keep showing the percentage alone.
+        }
       }
-      if (contextProbe.percent === percent && now - contextProbe.at < 5000) return contextProbe.text;
-      if (contextProbeBusy) return contextProbe.percent === percent ? contextProbe.text : "";
-      contextProbeBusy = true;
-      document.documentElement.setAttribute("data-rdsh-context-probe", "");
-      button.click();
-      setTimeout(() => {
-        const text = parseContextFigures(contextFiguresText());
-        if (button.getAttribute("aria-expanded") === "true") button.click();
-        contextProbe = { percent, text, at: Date.now() };
-        contextProbeBusy = false;
-        document.documentElement.removeAttribute("data-rdsh-context-probe");
-        scheduleDecorate();
-      }, 80);
-      return contextProbe.percent === percent ? contextProbe.text : "";
+      return sessionsApi;
+    }
+
+    /** Mirrors the upstream `formatTokens` so the dock and the panel agree. */
+    function formatTokenCount(value) {
+      const scaled = (candidate) => (candidate >= 100 ? String(Math.round(candidate)) : String(Math.round(candidate * 10) / 10));
+      if (value < 1e3) return String(Math.round(value));
+      if (value < 1e6) return `${scaled(value / 1e3)}K`;
+      return `${scaled(value / 1e6)}M`;
+    }
+
+    /**
+     * "12.3K/1M" for the context meter, read from the Session projection.
+     *
+     * The panel that shows these figures is only mounted while it is open, so
+     * the old code opened it with a real click, read the DOM after 80ms and
+     * closed it again — which flashed the menu (and, through the
+     * `*_panel` CSS, any other dialog) on every update. The projection carries
+     * the same numbers without touching the DOM; when it is missing the dock
+     * falls back to the percentage that the button's aria-label already has.
+     */
+    function contextUsageText() {
+      const sessions = sessionsService();
+      const sessionId = currentSessionId;
+      if (sessions === null || sessions === undefined || sessionId === null) return "";
+      try {
+        const pressure = sessions.projectionValues(sessionId)?.contextPressure;
+        if (pressure === null || typeof pressure !== "object") return "";
+        const used = pressure.projectedTokens ?? pressure.pressureTokens;
+        const window = pressure.contextWindow;
+        if (typeof used !== "number" || typeof window !== "number" || !(window > 0)) return "";
+        return `${formatTokenCount(used)}/${formatTokenCount(window)}`;
+      } catch (error) {
+        return "";
+      }
     }
 
     let settingsArrows = null;
@@ -1525,7 +1543,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       }
       if (context !== undefined) {
         const percent = ariaOf(context).match(/(\d+)%/);
-        const usedMax = percent === null ? "" : contextUsedMax(context, percent[1]);
+        const usedMax = percent === null ? "" : contextUsageText();
         set(context, percent === null ? "" : `${percent[1]}%${usedMax === "" ? "" : ` · ${usedMax}`}`);
       }
     }
@@ -4799,10 +4817,6 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
   }
   /* The app label includes steps / total tokens; show only the four requested
      values, with no ellipsis. */
-  html[data-rdsh-context-probe] [role="dialog"][class*="_panel"] {
-    visibility: hidden !important;
-    pointer-events: none !important;
-  }
   [data-rdsh-stat-text] > span { display: none !important; }
   [data-rdsh-stat-text]::after {
     content: attr(data-rdsh-stat-text);
@@ -5192,6 +5206,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
     function boot(ctx) {
       if (booted) return;
       booted = true;
+      hostCtx = ctx;
 
       ctx.effect(() => {
         const style = document.createElement("style");

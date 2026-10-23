@@ -67,7 +67,7 @@ const ASSETS = new Map([
 	["/pwa/screenshot-desktop.png", { file: "assets/screenshot-desktop.png", type: "image/png" }],
 ]);
 
-/** One year for icons: the URLs are versioned by the manifest, not the path. */
+/** One day for icons: long enough to save the repeat fetch, short enough to pick up a redraw. */
 const ICON_CACHE_CONTROL = "public, max-age=86400";
 const SHELL_CACHE_CONTROL = "no-cache";
 const JS_CACHE_CONTROL = "no-cache, no-store, must-revalidate";
@@ -151,8 +151,10 @@ export function buildManifest(config) {
 			{ src: "favicon.svg", sizes: "any", type: "image/svg+xml", purpose: "any" },
 		],
 		screenshots: [
-			{ src: "pwa/screenshot-mobile.png", sizes: "390x844", type: "image/png", form_factor: "narrow", label: "チャット画面" },
-			{ src: "pwa/screenshot-desktop.png", sizes: "1280x720", type: "image/png", form_factor: "wide", label: "デスクトップ表示" },
+			// `sizes` is the intrinsic pixel size of the file, which is the CSS
+			// size times the capture scale (3x on a phone, 2x on a desktop).
+			{ src: "pwa/screenshot-mobile.png", sizes: "1170x2532", type: "image/png", form_factor: "narrow", label: "チャット画面" },
+			{ src: "pwa/screenshot-desktop.png", sizes: "2560x1600", type: "image/png", form_factor: "wide", label: "デスクトップ表示" },
 		],
 	};
 }
@@ -202,7 +204,7 @@ export function decorateIndex(html, config) {
 	const cfg = normalizeConfig(config);
 	const head = [
 		INDEX_MARKER,
-		// Match the working todoka-drive setup: the standard capable meta and
+		// The standard set of "this is a capable app" meta tags, plus
 		// the install manifest, but NOT apple-mobile-web-app-capable/title.
 		// iOS 26 uses a mis-sized legacy frame when the Apple-specific capable
 		// meta is present (status bar height left unpainted at the bottom).
@@ -246,30 +248,12 @@ function assetPath(file) {
 
 
 /**
- * Strip the PWA markup that makes iOS 26 use its mis-sized legacy standalone
- * frame. Served only at /launch, as a test for the 47px bottom strip.
- */
-function stripPwaMarkup(html) {
-	return html
-		.replace(/<link\b[^>]*\brel=["']manifest["'][^>]*>/gi, "")
-		.replace(/<link\b[^>]*\brel=["']apple-touch-icon["'][^>]*>/gi, "")
-		.replace(/<meta\b[^>]*\bname=["'](?:apple-mobile-web-app-[^"']*|mobile-web-app-capable|application-name)["'][^>]*>/gi, "")
-		.replace(/<meta\b[^>]*\bname=["']viewport["'][^>]*>/i, '<meta name="viewport" content="width=device-width, initial-scale=1">')
-		.replace(/<base\b[^>]*>/i, '<base href="/">');
-}
-
-
-/**
  * Mount the routes, assets and index decoration.
  * @param {object} ctx - plugin context.
  * @param {object} [config] - profile config for this plugin.
  */
 export function apply(ctx, config) {
 	const cfg = normalizeConfig(config);
-	// Notifications are their own module: the copy, the VAPID pair, the push
-	// fan-out and the browser-facing routes all live there.
-	applyNotify(ctx, normalizeNotifyConfig(config?.notifications));
-
 	// The host halves of what used to be separate plugins. Each declares the
 	// services it needs (`inject` in its own module) and mounts its own routes
 	// or hooks, so one failing must not take the others — or the PWA shell —
@@ -285,6 +269,11 @@ export function apply(ctx, config) {
 			console.error(`[rdsh-pwa] ${label} host half failed to mount`, error);
 		}
 	};
+	// Notifications are their own module: the copy, the VAPID pair, the push
+	// fan-out and the browser-facing routes all live there. It opens a state
+	// file, so it is mounted under the same guard as the rest: an unwritable
+	// home must not take the PWA routes down with it.
+	mountPart("rdsh-pwa/notify", [], applyNotify, normalizeNotifyConfig(config?.notifications));
 	// mobile-ux and markdown-cjk inject what they need inside their own apply.
 	mountPart("rdsh-mobile-ux", [], applyMobileUx, config?.mobileUx);
 	mountPart("rdsh-markdown-cjk", [], applyMarkdownCjk, config?.markdownCjk);
@@ -294,7 +283,15 @@ export function apply(ctx, config) {
 	// visible, which is also what bumps the service-worker build hash.
 	const files = new Map();
 	const readAsset = async (file) => {
-		if (!files.has(file)) files.set(file, readFile(assetPath(file)));
+		if (!files.has(file)) {
+			// Do not cache a rejected read: a transient failure would otherwise
+			// make that asset a permanent 404 for the life of the process.
+			const pending = readFile(assetPath(file)).catch((error) => {
+				files.delete(file);
+				throw error;
+			});
+			files.set(file, pending);
+		}
 		return files.get(file);
 	};
 
@@ -359,26 +356,6 @@ export function apply(ctx, config) {
 				}),
 			}));
 		}
-
-		disposes.push(webServer.register({
-			kind: "exact",
-			path: "/launch",
-			handler: readOnly(async (req, res) => {
-				try {
-					// Use the rendered index so the normal client injections stay,
-					// then strip only the PWA tags that trigger the legacy frame.
-					const response = await fetch(`${webServer.getOrigin()}/`, { headers: { accept: "text/html" } });
-					const html = await response.text();
-					respond(res, req.method, 200, {
-						"content-type": "text/html; charset=utf-8",
-						"cache-control": "no-store",
-					}, stripPwaMarkup(html));
-				} catch {
-					res.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
-					res.end("launch page unavailable\n");
-				}
-			}),
-		}));
 
 		disposes.push(webServer.tapIndex((html) => decorateIndex(html, cfg)));
 

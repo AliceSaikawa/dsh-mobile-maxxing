@@ -2,13 +2,31 @@
 
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { test } from 'node:test';
 // The merged package mounts many host halves; this suite covers only the
 // CJK one, so it drives that module directly instead of index.js.
 import { apply } from '../lib/markdown-cjk.js';
 
-const DSH_BIN = process.env.DSH_ORIG_BIN ?? `${process.env.HOME}/.dsh/runtime/node_modules/@deepseek-ai/dsh/lib/bin.js`;
-const installed = existsSync(DSH_BIN);
+/**
+ * Locate the installed DSH launcher, or nothing.
+ *
+ * The CJK half patches the installed frontend chunks, so some cases only run
+ * where DSH is installed. Resolve it the way DSH itself does (DSH_ORIG_BIN,
+ * then the package) instead of assuming this machine's layout, and let the
+ * cases that need it report a skip rather than silently pass.
+ */
+function resolveDshBin() {
+	if (typeof process.env.DSH_ORIG_BIN === "string" && existsSync(process.env.DSH_ORIG_BIN)) return process.env.DSH_ORIG_BIN;
+	try {
+		return createRequire(import.meta.url).resolve("@deepseek-ai/dsh/lib/bin.js");
+	} catch {
+		return undefined;
+	}
+}
+
+const DSH_BIN = resolveDshBin();
+const installed = DSH_BIN !== undefined;
 
 /** Mount the plugin against a fake server and collect what it registers. */
 function mount(config) {

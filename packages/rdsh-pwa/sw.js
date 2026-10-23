@@ -53,14 +53,14 @@ button:active{transform:scale(.98)}
 </style></head>
 <body><main>
 <h1>オフラインです</h1>
-<p>DSH のサーバーに接続できませんでした。<br>Tailscale などのネットワーク接続を確認してください。</p>
+<p>DSH のサーバーに接続できませんでした。<br>ネットワーク接続を確認してください。</p>
 <button onclick="location.reload()">再試行</button>
 </main></body></html>`;
 
 function isBypassed(url) {
 	// A proxy prefix such as /dsh/ keeps working: compare from the scope path.
 	const path = url.pathname.slice(SCOPE.pathname.length - 1);
-	return BYPASS_SEGMENTS.some((segment) => path === segment || path.startsWith(segment + "/") || path.startsWith(segment + "?"));
+	return BYPASS_SEGMENTS.some((segment) => path === segment || path.startsWith(segment + "/"));
 }
 
 function isStatic(url) {
@@ -89,11 +89,19 @@ function offlineResponse() {
 }
 
 /** Keep the shell cache bounded; keys() is insertion order, so drop the oldest. */
+/** URLs an offline launch cannot do without; the trim must never evict them. */
+const PROTECTED_URLS = new Set([SHELL_URL, MANIFEST_URL]);
+
 async function trim(cache) {
 	try {
 		const keys = await cache.keys();
 		if (keys.length <= MAX_STATIC_ENTRIES) return;
-		for (const key of keys.slice(0, keys.length - MAX_STATIC_ENTRIES)) await cache.delete(key);
+		// Oldest first, but keep the shell and the manifest: they are written at
+		// install time, so a plain oldest-first eviction would delete exactly the
+		// two entries an offline launch depends on.
+		const evictable = keys.filter((key) => !PROTECTED_URLS.has(key.url));
+		const overflow = keys.length - MAX_STATIC_ENTRIES;
+		for (const key of evictable.slice(0, Math.max(0, overflow))) await cache.delete(key);
 	} catch {
 		/* quota and opaque-response errors are not worth failing a request over */
 	}
@@ -144,7 +152,9 @@ async function handleStatic(request) {
 		}
 		return response;
 	} catch {
-		return cached ?? Response.error();
+		// `cached` was already returned above when it existed, so this is the
+		// network-down, nothing-stored case.
+		return Response.error();
 	}
 }
 
@@ -190,13 +200,13 @@ self.addEventListener("fetch", (event) => {
 });
 
 /*
- * Web Push, shared with dsh-notify-push.
+ * Web Push.
  *
- * Only one worker can control a scope, so the notification plugin's worker and
- * this one cannot coexist. The client half redirects the plugin's
- * `/push/sw.js` registration here, and these two handlers honour the payload
- * contract that plugin's push sender and its page-side listener expect:
- * `{ title, body, url, sessionId }` in, `dsh-notify-push:open-session` out.
+ * Only one worker can control a scope. The browser half redirects a legacy
+ * `/push/sw.js` registration here, and these handlers speak this package's own
+ * contract: `{ title, body, url, sessionId, kind }` in, `rdsh-pwa:open-session`
+ * out. The previous plugin's message name is still accepted for pages that are
+ * already open across an upgrade.
  */
 function pushPayload(event) {
 	const payload = { title: "DSH", body: "新しい通知があります", url: "./", sessionId: "", kind: "notice" };
@@ -215,24 +225,53 @@ function pushPayload(event) {
 	return payload;
 }
 
+/** How long a visible page has to acknowledge a banner hand-off. */
+const NOTIFY_ACK_TIMEOUT_MS = 400;
+
+/**
+ * Hand one notification to a live page and wait for it to take it.
+ *
+ * @param {Client} client - the visible window.
+ * @param {object} payload - the notification.
+ * @returns {Promise<boolean>} whether the page accepted it.
+ */
+async function handOff(client, payload) {
+	try {
+		const channel = new MessageChannel();
+		const accepted = new Promise((resolve) => {
+			const timer = setTimeout(() => resolve(false), NOTIFY_ACK_TIMEOUT_MS);
+			channel.port1.onmessage = () => {
+				clearTimeout(timer);
+				resolve(true);
+			};
+		});
+		client.postMessage({
+			type: "rdsh-pwa:notify",
+			title: payload.title,
+			body: payload.body,
+			sessionId: payload.sessionId,
+			kind: payload.kind,
+		}, [channel.port2]);
+		return await accepted;
+	} catch {
+		return false;
+	}
+}
+
 self.addEventListener("push", (event) => {
 	const payload = pushPayload(event);
 	event.waitUntil((async () => {
 		// A window that is on screen shows its own banner: the page is right
 		// there, and a system notification on top of it is noise. Backgrounded
 		// windows (and none at all) fall through to the system banner below.
+		// The page has to acknowledge the hand-off. A visible client can be one
+		// that never loaded this plugin (an older build, a failed boot, a tab
+		// opened before the deploy), and dropping the message into that void
+		// loses the notification entirely. Wait briefly for an ack and fall back
+		// to the system banner when none arrives.
 		const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
 		const visible = windows.find((client) => client.visibilityState === "visible");
-		if (visible !== undefined) {
-			visible.postMessage({
-				type: "rdsh-pwa:notify",
-				title: payload.title,
-				body: payload.body,
-				sessionId: payload.sessionId,
-				kind: payload.kind,
-			});
-			return;
-		}
+		if (visible !== undefined && (await handOff(visible, payload))) return;
 		await self.registration.showNotification(payload.title, {
 			body: payload.body,
 			icon: new URL("pwa/icon-192.png", SCOPE).href,
@@ -254,13 +293,23 @@ self.addEventListener("notificationclick", (event) => {
 	const sessionId = typeof data.sessionId === "string" ? data.sessionId : "";
 	event.waitUntil((async () => {
 		const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-		for (const client of windows) {
+		// Prefer the window the user was looking at; matchAll's order says
+		// nothing about which one that is.
+		const ordered = [...windows].sort((a, b) => Number(b.focused) - Number(a.focused)
+			|| Number(b.visibilityState === "visible") - Number(a.visibilityState === "visible"));
+		for (const client of ordered) {
 			if (!("focus" in client)) continue;
-			await client.focus();
+			try {
+				await client.focus();
+			} catch {
+				// A window that refuses focus is already gone; keep looking
+				// instead of abandoning the click.
+				continue;
+			}
 			// The SPA has no session routing: an open window is switched in-page
 			// by the notification plugin's listener instead of by a URL.
 			if (sessionId !== "" && "postMessage" in client) {
-				client.postMessage({ type: "dsh-notify-push:open-session", sessionId });
+				client.postMessage({ type: "rdsh-pwa:open-session", sessionId });
 				return;
 			}
 			if (target !== new URL("./", SCOPE).href && "navigate" in client) {
@@ -283,4 +332,31 @@ self.addEventListener("message", (event) => {
 	if (data.type === "PING" && event.ports !== null && event.ports.length > 0) {
 		event.ports[0].postMessage({ type: "PONG", build: BUILD, cache: CACHE_NAME });
 	}
+});
+
+/**
+ * Re-subscribe when the browser retires the subscription (RFC 8030 §5.4).
+ *
+ * Without this the phone silently stops receiving notifications after a
+ * rotation until the user visits Settings and presses the button again.
+ */
+self.addEventListener("pushsubscriptionchange", (event) => {
+	event.waitUntil((async () => {
+		try {
+			const response = await fetch(new URL("api/rdsh-pwa/push/vapid", SCOPE), { cache: "no-store" });
+			if (!response.ok) return;
+			const { publicKey } = await response.json();
+			const padding = "=".repeat((4 - (publicKey.length % 4)) % 4);
+			const raw = atob((publicKey + padding).replace(/-/g, "+").replace(/_/g, "/"));
+			const key = new Uint8Array([...raw].map((character) => character.charCodeAt(0)));
+			const subscription = await self.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+			await fetch(new URL("api/rdsh-pwa/push/subscribe", SCOPE), {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ subscription: subscription.toJSON(), label: navigator.userAgent, origin: self.location.origin }),
+			});
+		} catch {
+			/* the Settings button remains the manual recovery path */
+		}
+	})());
 });

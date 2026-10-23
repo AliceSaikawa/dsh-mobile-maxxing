@@ -60,6 +60,7 @@ function mount(config, overrides = {}) {
 			return typeof dispose === "function" ? dispose : () => {};
 		},
 	};
+	const listeners = [];
 	const ctx = {
 		inject(deps, callback) {
 			injections.push([...deps]);
@@ -68,12 +69,19 @@ function mount(config, overrides = {}) {
 		get(name) {
 			return services[name];
 		},
+		// The mobile-ux half subscribes to `llm/stream`; without `on` it threw
+		// inside mountPart, which swallowed the error and left that half
+		// untested while the suite stayed green.
+		on(event, handler) {
+			listeners.push({ event, handler });
+			return () => {};
+		},
 		effect(fn) {
 			return scope.effect(fn);
 		},
 	};
 	apply(ctx, config);
-	return { routes, taps, injections, services };
+	return { routes, taps, injections, services, listeners };
 }
 
 /** Invoke one registered route with a fake request/response pair. */
@@ -160,11 +168,19 @@ test("decorateIndex still works when the document has no viewport or head", () =
 });
 
 test("routes serve the manifest, the worker and the icons", async () => {
-	const { routes, taps } = mount({});
+	const { routes, taps, listeners } = mount({});
 	assert.ok(routes.has("/manifest.webmanifest"));
 	assert.ok(routes.has("/sw.js"));
 	assert.ok(routes.has("/pwa/icon-192.png"));
-	assert.equal(taps.length, 1);
+	// One tap adds the PWA tags; the CJK half adds a second only when it can
+	// resolve the installed DSH frontend, so the count is environment-dependent.
+	// Assert the content instead of the count.
+	assert.ok(taps.length >= 1, "at least the PWA tap");
+	const decorated = taps.reduce((html, tap) => tap(html), INDEX);
+	assert.equal(decorated.split("<!--rdsh-pwa-->").length - 1, 1, "one PWA block");
+	assert.ok(decorated.includes("__RDSH_MOBILE_UX_CONFIG__"), "the mobile-ux half mounted");
+	// Live speed subscribes to the model stream: proof the host half ran.
+	assert.ok(listeners.some((entry) => entry.event === "llm/stream"), "mobile-ux subscribed to llm/stream");
 
 	// The notification half is part of this package now.
 	for (const path of [

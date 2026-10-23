@@ -8,7 +8,7 @@
 
 import assert from "node:assert/strict";
 import { createDecipheriv, createECDH, hkdfSync, randomBytes } from "node:crypto";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -164,6 +164,75 @@ test("a subscription without keys is refused", () => {
 	const store = new PushStore(file);
 	assert.throws(() => store.add({ endpoint: "https://x/y" }), /client keys/);
 	assert.throws(() => store.add({ keys: {} }), /endpoint/);
+});
+
+test("push endpoints must be real https push services", () => {
+	const file = join(mkdtempSync(join(tmpdir(), "rdsh-pwa-")), "push.json");
+	const store = new PushStore(file);
+	const userAgent = createECDH("prime256v1");
+	userAgent.generateKeys();
+	const keys = { p256dh: toBase64Url(userAgent.getPublicKey()), auth: toBase64Url(randomBytes(16)) };
+	// The host POSTs to whatever is stored, so anything that is not a public
+	// https push service has to be refused at subscribe time.
+	for (const endpoint of [
+		"http://web.push.apple.com/abc",
+		"https://127.0.0.1:9999/x",
+		"https://169.254.169.254/latest/meta-data",
+		"https://10.0.0.5/x",
+		"https://192.168.1.10/x",
+		"https://172.16.0.9/x",
+		"https://localhost/x",
+		"https://printer.local/x",
+		"not-a-url",
+	]) {
+		assert.throws(() => store.add({ endpoint, keys }), /subscription endpoint/, endpoint);
+	}
+	assert.equal(store.subscriptions().length, 0, "nothing was stored");
+	// A real push service is accepted.
+	assert.equal(store.add({ endpoint: "https://web.push.apple.com/abc", keys }, { origin: "https://app.example" }), 1);
+});
+
+test("a broken push store does not stop the PWA routes", async () => {
+	// applyNotify opens a state file; when that throws, the rest of the plugin
+	// must still mount. Mount with a context whose file cannot be written.
+	const { apply: applyPlugin } = await import("../index.js");
+	const routes = new Map();
+	const webServer = {
+		register(route) { routes.set(route.path, route); return () => routes.delete(route.path); },
+		tapIndex() { return () => {}; },
+		getOrigin: () => "http://127.0.0.1:0",
+	};
+	const services = {
+		webServer,
+		agents: { get: () => undefined, roots: () => [] },
+		connection: { requestRejection: () => undefined },
+	};
+	const scope = {
+		...services,
+		get: (name) => services[name],
+		on: () => () => {},
+		effect: (fn) => { const dispose = fn(); return typeof dispose === "function" ? dispose : () => {}; },
+	};
+	const ctx = {
+		inject: (deps, callback) => callback(scope),
+		get: (name) => services[name],
+		effect: (fn) => scope.effect(fn),
+	};
+	// A directory where the state file should be makes the write fail.
+	const blocked = join(mkdtempSync(join(tmpdir(), "rdsh-pwa-")), "rdsh-pwa");
+	mkdtempSync(blocked);
+	const previous = process.env.DSH_HOME;
+	process.env.DSH_HOME = join(blocked, "..");
+	try {
+		// Force the store path to be a directory so PushStore cannot save.
+		mkdirSync(join(blocked, "push.json"), { recursive: true });
+		applyPlugin(ctx, {});
+	} finally {
+		if (previous === undefined) delete process.env.DSH_HOME;
+		else process.env.DSH_HOME = previous;
+	}
+	assert.ok(routes.has("/manifest.webmanifest"), "the PWA routes still mounted");
+	assert.ok(routes.has("/sw.js"));
 });
 
 test("payload shape is what the service worker reads", () => {

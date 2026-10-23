@@ -5,7 +5,7 @@
  * them, so the file names have to be predictable: `<name>-<version>.tgz`.
  */
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { copyFileSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 const root = new URL("..", import.meta.url).pathname;
@@ -28,9 +28,13 @@ for (const entry of readdirSync(join(root, "packages"))) {
 	}
 	execFileSync("npm", ["pack", "--pack-destination", dist], { cwd: directory, stdio: "pipe" });
 	const file = `${manifest.name}-${manifest.version}.tgz`;
-	packed.push({ name: manifest.name, version: manifest.version, file });
-	console.log(`packed ${file}`);
+	// A second copy under a version-free name, so documentation can link
+	// `releases/latest/download/rdsh-pwa.tgz` and keep working across versions.
+	const alias = `${manifest.name}.tgz`;
+	copyFileSync(join(dist, file), join(dist, alias));
+	packed.push({ name: manifest.name, version: manifest.version, file, alias });
+	console.log(`packed ${file} (+ ${alias})`);
 }
 
 console.log(`\n${packed.length} tarballs in dist/`);
-for (const item of packed) console.log(`  ${item.file}`);
+for (const item of packed) console.log(`  ${item.file}  /  ${item.alias}`);

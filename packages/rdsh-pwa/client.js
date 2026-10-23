@@ -899,11 +899,13 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     const CONFIG = globalThis.__RDSH_MOBILE_UX_CONFIG__ && typeof globalThis.__RDSH_MOBILE_UX_CONFIG__ === "object"
       ? globalThis.__RDSH_MOBILE_UX_CONFIG__
       : {};
+    // The host default is "outline"; this fallback covers the case where the
+    // config script never landed, and must match or the two disagree.
     const ANIMATION = ["aurora", "breathing", "outline", "none"].includes(CONFIG.runningAnimation)
       ? CONFIG.runningAnimation
-      : "none";
+      : "outline";
     /** Shown in Settings so a stale PWA bundle is easy to spot. */
-    const BUILD = "2026-10-24.1530-chat-width";
+    const BUILD = "2026-10-23.review-fixes";
 
     /** Controls that have no meaning inside an installed app on a phone. */
     const HIDE_DEFAULT = [
@@ -1168,24 +1170,16 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     }
 
     function unringSessionTitle(title) {
-      const unit = title.querySelector("[data-rdsh-title-unit]");
-      if (unit !== null) {
-        const label = unit.querySelector("[data-rdsh-title-label]");
-        if (label !== null) {
-          while (label.firstChild !== null) title.insertBefore(label.firstChild, unit);
-        }
-        unit.remove();
-      }
+      // The animated ring used to wrap the label in its own element; it no
+      // longer does, so only the attribute it added is left to clear.
       title.removeAttribute("data-rdsh-ringed");
     }
 
     function ringSessionRow(row) {
-      row.querySelectorAll(":scope > .rdsh-ring--row, :scope > .rdsh-ring-static").forEach((element) => element.remove());
       row.setAttribute("data-rdsh-ring-row", "");
     }
 
     function unringSessionRow(row) {
-      row.querySelectorAll(":scope > .rdsh-ring--row, :scope > .rdsh-ring-static").forEach((element) => element.remove());
       row.removeAttribute("data-rdsh-ring-row");
       const title = row.querySelector("[data-rdsh-session-title]");
       if (title !== null) unringSessionTitle(title);
@@ -1573,7 +1567,11 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         item.setAttribute("data-rdsh-todo-text", text);
         const status = item.querySelector('[role="img"][aria-label]');
         if (status !== null) item.setAttribute("data-rdsh-todo-status", status.getAttribute("aria-label") || "");
-        item.setAttribute("role", "button");
+        // No `role="button"` here: the row already contains the real checkbox
+        // button, and nesting an interactive role inside another one is
+        // invalid. `tabindex` keeps the text reachable from the keyboard (the
+        // keydown handler below opens the popover), which is what the role was
+        // buying.
         item.setAttribute("tabindex", "0");
         item.setAttribute("title", text);
       }
@@ -1894,6 +1892,15 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       }
     }
 
+    /**
+     * Make sure the viewport is edge-to-edge, without taking anything away.
+     *
+     * This used to replace the tag with a fixed string, which dropped the
+     * host's `interactive-widget=resizes-content` (so the composer stopped
+     * riding above the keyboard) and banned pinch zoom, which is a WCAG 1.4.4
+     * problem. Now the tag is read, missing parts are added, and nothing is
+     * removed or overridden.
+     */
     function enforceNoZoomViewport() {
       let meta = document.querySelector('meta[name="viewport"]');
       if (meta === null) {
@@ -1901,21 +1908,18 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         meta.setAttribute("name", "viewport");
         document.head.append(meta);
       }
-      const content = "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover";
-      if (meta.getAttribute("content") !== content) meta.setAttribute("content", content);
-    }
-
-    function decorateMoreTrigger() {
-      const trigger = document.querySelector('[aria-label="Account menu"]');
-      if (trigger === null) return;
-      trigger.setAttribute("data-rdsh-more", "");
-      // The visible control becomes a gear only on phones; keep the desktop
-      // accessible name untouched.
-      if (narrow()) {
-        if (trigger.getAttribute("aria-label") !== "設定") trigger.setAttribute("aria-label", "設定");
-      } else if (trigger.getAttribute("aria-label") === "設定") {
-        trigger.setAttribute("aria-label", "Account menu");
-      }
+      const current = meta.getAttribute("content") ?? "";
+      // Parse the comma-separated directives; a key we do not set is left as
+      // the host wrote it.
+      const parts = current.split(",").map((part) => part.trim()).filter((part) => part !== "");
+      const has = (key) => parts.some((part) => part.split("=")[0].trim().toLowerCase() === key);
+      const wanted = [];
+      if (!has("width")) wanted.push("width=device-width");
+      if (!has("initial-scale")) wanted.push("initial-scale=1");
+      if (!has("viewport-fit")) wanted.push("viewport-fit=cover");
+      if (wanted.length === 0) return;
+      const next = [...parts, ...wanted].join(", ");
+      if (next !== current) meta.setAttribute("content", next);
     }
 
     const ACTIVITY_ICONS = {
@@ -1926,12 +1930,6 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     /** Header shell/subagent chips become icon-only live indicators. */
     function decorateHeaderActivityChips() {
       if (!narrow()) return;
-      // Drop the old "settings gear" conversion; settings now lives in the
-      // sidebar panel list below Plugins / Automation tasks.
-      for (const old of document.querySelectorAll("[data-rdsh-more]")) {
-        old.removeAttribute("data-rdsh-more");
-        if (old.getAttribute("aria-label") === "設定") old.setAttribute("aria-label", "Account menu");
-      }
       const buttons = [...document.querySelectorAll("header button[aria-label]")]
         .filter((button) => /subagents?|background jobs?|shell command/i.test(button.getAttribute("aria-label") || ""));
       if (buttons.length === 0) return;
@@ -2026,8 +2024,16 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         });
       }
       const anchor = auto ?? nav.querySelector('button[aria-label="Plugins"]');
-      if (anchor !== null && anchor.nextElementSibling !== row) anchor.after(row);
-      else if (nav.lastElementChild !== row) nav.append(row);
+      // Two exclusive branches. Written as one `if` with a trailing `else if`,
+      // the second branch also ran when the row was already directly after the
+      // anchor but not last, so `after()` and `append()` moved the row on every
+      // pass: the mutation woke this very observer and the row oscillated once
+      // per frame. Only the branch that applies may move it.
+      if (anchor !== null) {
+        if (anchor.nextElementSibling !== row) anchor.after(row);
+      } else if (nav.lastElementChild !== row) {
+        nav.append(row);
+      }
     }
 
     const ADD_LABEL = "画像やファイルを追加";
@@ -2194,7 +2200,6 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       decorateTranscript();
       decorateUserBubbles();
       markScrollers();
-      ensureRightPanelFits();
     }
 
     function decorate() {
@@ -2332,19 +2337,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       document.body.append(backdrop, fab);
     }
 
-    // ---------------------------------------------------------------------
-    // Attach sheet: on a phone the "+" only offers images and files
-    // ---------------------------------------------------------------------
-    let attachSheet = null;
-    let attachBackdrop = null;
     let toastTimer = 0;
-
-    function closeAttachSheet() {
-      attachSheet?.remove();
-      attachBackdrop?.remove();
-      attachSheet = null;
-      attachBackdrop = null;
-    }
 
     function mobileToast(text) {
       let toast = document.querySelector(".rdsh-mux-toast");
@@ -2361,7 +2354,6 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     }
 
     function pickFiles(kind) {
-      closeAttachSheet();
       const add = addButton();
       const card = add === null ? null : add.closest('[class*="_card"]');
       const input = (card === null ? null : card.querySelector('input[type="file"]'))
@@ -2390,200 +2382,12 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       input.click();
     }
 
-    function sheetIcon(kind) {
-      if (kind === "image") {
-        return '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4.5" width="18" height="15" rx="2.5"/><circle cx="8.5" cy="10" r="1.6"/><path d="M4 17l5-4.5 4 3.5 3-2.5 4 3.5"/></svg>';
-      }
-      return '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3.5H7.5A2.5 2.5 0 0 0 5 6v12a2.5 2.5 0 0 0 2.5 2.5h9A2.5 2.5 0 0 0 19 18V8.5z"/><path d="M14 3.5V8.5H19"/></svg>';
-    }
-
-    function sheetRow(kind, label, hint, run) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "rdsh-mux-sheet-row";
-      button.innerHTML = `<span class="rdsh-mux-sheet-icon">${sheetIcon(kind)}</span><span class="rdsh-mux-sheet-label"></span><span class="rdsh-mux-sheet-hint"></span>`;
-      button.querySelector(".rdsh-mux-sheet-label").textContent = label;
-      button.querySelector(".rdsh-mux-sheet-hint").textContent = hint;
-      button.addEventListener("click", run);
-      return button;
-    }
-
-    function openAttachSheet() {
-      if (attachSheet !== null) {
-        closeAttachSheet();
-        return;
-      }
-      // If the user was typing, put the keyboard away so the sheet is visible
-      // and the composer is not focused behind it.
-      const active = document.activeElement;
-      if (active !== null && active !== undefined && typeof active.blur === "function"
-        && typeof active.closest === "function" && active.closest("[data-composer-input]") !== null) {
-        active.blur();
-      }
-      const backdrop = document.createElement("div");
-      backdrop.className = "rdsh-mux-sheet-backdrop";
-      backdrop.setAttribute("aria-hidden", "true");
-      backdrop.addEventListener("click", closeAttachSheet);
-
-      const sheet = document.createElement("div");
-      sheet.className = "rdsh-mux-sheet";
-      sheet.setAttribute("role", "dialog");
-      sheet.setAttribute("aria-label", "画像またはファイルを追加");
-      sheet.append(
-        sheetRow("image", "画像を選ぶ", "写真ライブラリ", () => pickFiles("image")),
-        sheetRow("file", "ファイルを選ぶ", "ファイルApp", () => pickFiles("file")),
-      );
-      const cancel = document.createElement("button");
-      cancel.type = "button";
-      cancel.className = "rdsh-mux-sheet-cancel";
-      cancel.textContent = "キャンセル";
-      cancel.addEventListener("click", closeAttachSheet);
-      sheet.append(cancel);
-
-      document.body.append(backdrop, sheet);
-      attachSheet = sheet;
-      attachBackdrop = backdrop;
-    }
-
     /** The composer focuses the editor on mousedown; that opens the keyboard. */
     function onMouseDownCapture(event) {
       if (!narrow()) return;
       if (addButtonOf(event.target) === null) return;
       event.preventDefault();
       event.stopImmediatePropagation();
-    }
-
-    // ---------------------------------------------------------------------
-    // Scroll diagnostics (devtools): which element actually moves?
-    // ---------------------------------------------------------------------
-    const lastScrolls = [];
-
-    function recordScroll(event) {
-      const target = event.target;
-      if (!(target instanceof Element)) return;
-      const style = getComputedStyle(target);
-      lastScrolls.push({
-        at: Date.now(),
-        tag: target.tagName,
-        cls: String(target.className).slice(0, 120),
-        id: target.id,
-        scrollTop: Math.round(target.scrollTop),
-        scrollHeight: target.scrollHeight,
-        clientHeight: target.clientHeight,
-        overflowY: style.overflowY,
-      });
-      if (lastScrolls.length > 12) lastScrolls.shift();
-    }
-
-    function scrollables() {
-      const list = [];
-      for (const element of document.querySelectorAll("*")) {
-        if (element.scrollHeight <= element.clientHeight + 2) continue;
-        const style = getComputedStyle(element);
-        if (style.overflowY !== "auto" && style.overflowY !== "scroll") continue;
-        list.push({
-          tag: element.tagName,
-          cls: String(element.className).slice(0, 120),
-          id: element.id,
-          scrollTop: Math.round(element.scrollTop),
-          scrollHeight: element.scrollHeight,
-          clientHeight: element.clientHeight,
-          overflowY: style.overflowY,
-          position: style.position,
-        });
-      }
-      return list;
-    }
-
-    function scrollChain() {
-      const list = [];
-      let node = document.querySelector("[data-composer-input]") || document.querySelector('[class*="scrollBody"]');
-      while (node !== null && node !== document.documentElement) {
-        const style = getComputedStyle(node);
-        if (node.scrollHeight > node.clientHeight + 2 || style.overflowY === "auto" || style.overflowY === "scroll") {
-          list.push({
-            tag: node.tagName,
-            cls: String(node.className).slice(0, 120),
-            scrollTop: Math.round(node.scrollTop),
-            scrollHeight: node.scrollHeight,
-            clientHeight: node.clientHeight,
-            overflowY: style.overflowY,
-          });
-        }
-        node = node.parentElement;
-      }
-      return list;
-    }
-
-    // ---------------------------------------------------------------------
-    // Focus: opening a session must not steal the composer
-    // ---------------------------------------------------------------------
-    let allowFocusElement = null;
-    let allowFocusUntil = 0;
-
-    function textBoxOf(element) {
-      if (!(element instanceof Element)) return null;
-      const field = element.closest('input, textarea, [contenteditable="true"]');
-      if (field === null) return null;
-      if (field.tagName === "INPUT") {
-        const type = (field.getAttribute("type") || "text").toLowerCase();
-        if (["button", "submit", "reset", "checkbox", "radio", "range", "file", "color", "image", "hidden"].includes(type)) return null;
-      }
-      if (field.disabled === true || field.readOnly === true) return null;
-      return field;
-    }
-
-    function onFocusPointer(event) {
-      if (!narrow()) return;
-      const field = textBoxOf(event.target);
-      allowFocusElement = field;
-      allowFocusUntil = field === null ? 0 : Date.now() + 1500;
-    }
-
-    // iOS Safari reports a null relatedTarget for focus moves that happen
-    // inside a popover (notably the model picker focusing its search input).
-    // The picker's root onBlur then closes the menu. Swallow that focusout so
-    // React never sees it; outside taps still close through mousedown.
-    function onModelFocusOut(event) {
-      if (!narrow()) return;
-      const target = event.target;
-      if (target === null || target === undefined || target.closest === undefined) return;
-      const root = target.closest('[class*="_7KE1Ra_root"]');
-      const menu = document.querySelector('[class*="_7KE1Ra_menu"]');
-      if (menu === null) return;
-      if (root === null && !menu.contains(target)) return;
-      const related = event.relatedTarget;
-      if (related !== null && related !== undefined) {
-        const inside = root?.contains(related) === true || menu.contains(related);
-        if (!inside) return;
-      }
-      event.stopPropagation();
-    }
-
-    function onFocusInGuard(event) {
-      if (!narrow()) return;
-      const field = textBoxOf(event.target);
-      if (field === null) return;
-      // Popovers (the model picker's search, dialogs, etc.) focus their own
-      // inputs programmatically. Blurring those closes the popover because the
-      // menu's onBlur sees no related focus target.
-      if (field.closest('[role="menu"], [role="dialog"], [role="listbox"], [class*="_7KE1Ra_menu"], .xterm, [class*="xterm"]') !== null) return;
-      if (field === allowFocusElement && Date.now() <= allowFocusUntil) return;
-      // Deferred: Safari/the app re-focuses synchronously from its onFocus
-      // handler, so an immediate blur() recurses until the stack overflows.
-      setTimeout(() => {
-        if (document.activeElement === field) field.blur();
-      }, 0);
-    }
-
-    function isComposer(element) {
-      if (element === null || element === undefined) return false;
-      return element.closest !== undefined && element.closest('[contenteditable="true"], textarea, [data-slot="chat.composer"], [class*="composer"]') !== null;
-    }
-
-    function blurComposer() {
-      const active = document.activeElement;
-      if (isComposer(active) && typeof active.blur === "function") active.blur();
     }
 
     // ---------------------------------------------------------------------
@@ -2982,7 +2786,9 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       const dismiss = (event) => {
         if (!pop.contains(event.target)) closeDetailPopover();
       };
-      setTimeout(() => document.addEventListener("pointerdown", dismiss), 0);
+      // `once` retires the listener on the first tap, so opening the popover
+      // repeatedly cannot stack handlers on document.
+      setTimeout(() => document.addEventListener("pointerdown", dismiss, { once: true }), 0);
     }
 
     function showTitlePopover(crumbs) {
@@ -3030,7 +2836,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       if (addButtonOf(target) !== null && narrow()) {
         event.preventDefault();
         event.stopImmediatePropagation();
-        pickFiles("any");
+        pickFiles("file");
         return;
       }
       // Todo rows and the goal objective are truncated in the dock; tapping
@@ -3086,20 +2892,63 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         return;
       }
 
-      const more = target.closest("[data-rdsh-more]");
-      if (more !== null && narrow()) {
-        if (globalThis.__RDSH_MOBILE_UX__ && globalThis.__RDSH_MOBILE_UX__.autoSettings === false) return;
-        settingsPendingUntil = Date.now() + 2000;
-        setTimeout(maybeOpenSettings, 30);
-        setTimeout(maybeOpenSettings, 120);
+    }
+
+    function textBoxOf(element) {
+      if (!(element instanceof Element)) return null;
+      const field = element.closest('input, textarea, [contenteditable="true"]');
+      if (field === null) return null;
+      if (field.tagName === "INPUT") {
+        const type = (field.getAttribute("type") || "text").toLowerCase();
+        if (["button", "submit", "reset", "checkbox", "radio", "range", "file", "color", "image", "hidden"].includes(type)) return null;
       }
+      if (field.disabled === true || field.readOnly === true) return null;
+      return field;
+    }
+
+    function onFocusPointer(event) {
+      if (!narrow()) return;
+      const field = textBoxOf(event.target);
+      allowFocusElement = field;
+      allowFocusUntil = field === null ? 0 : Date.now() + 1500;
+    }
+
+    function onModelFocusOut(event) {
+      if (!narrow()) return;
+      const target = event.target;
+      if (target === null || target === undefined || target.closest === undefined) return;
+      const root = target.closest('[class*="_7KE1Ra_root"]');
+      const menu = document.querySelector('[class*="_7KE1Ra_menu"]');
+      if (menu === null) return;
+      if (root === null && !menu.contains(target)) return;
+      const related = event.relatedTarget;
+      if (related !== null && related !== undefined) {
+        const inside = root?.contains(related) === true || menu.contains(related);
+        if (!inside) return;
+      }
+      event.stopPropagation();
+    }
+
+    function onFocusInGuard(event) {
+      if (!narrow()) return;
+      const field = textBoxOf(event.target);
+      if (field === null) return;
+      // Popovers (the model picker's search, dialogs, etc.) focus their own
+      // inputs programmatically. Blurring those closes the popover because the
+      // menu's onBlur sees no related focus target.
+      if (field.closest('[role="menu"], [role="dialog"], [role="listbox"], [class*="_7KE1Ra_menu"], .xterm, [class*="xterm"]') !== null) return;
+      if (field === allowFocusElement && Date.now() <= allowFocusUntil) return;
+      // Deferred: Safari/the app re-focuses synchronously from its onFocus
+      // handler, so an immediate blur() recurses until the stack overflows.
+      setTimeout(() => {
+        if (document.activeElement === field) field.blur();
+      }, 0);
     }
 
     function onKeyDown(event) {
       if (event.key === "Escape") {
         document.querySelector(".rdsh-mux-titlepop")?.remove();
         closeDetailPopover();
-        closeAttachSheet();
         return;
       }
       if (!narrow() || (event.key !== "Enter" && event.key !== " ")) return;
@@ -3213,7 +3062,6 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     // Image lightbox: safe-area close, swipe-down dismiss, simple crop
     // ---------------------------------------------------------------------
     const CROP_ICON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 2v14a1 1 0 0 0 1 1h14"/><path d="M2 7h14a1 1 0 0 1 1 1v14"/></svg>';
-    const CROP_HANDLE_CORNERS = ["nw", "ne", "sw", "se"];
 
     function lightboxDialog() {
       // Do not key this off the dialog's localized aria-label: with the UI in
@@ -3732,7 +3580,9 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
      * plugin this package replaces (`dsh-notify-push`) is credited in
      * README.md for the overall design, but nothing here calls its API.
      */
-    const PUSH_API = "/api/rdsh-pwa/push";
+    // Relative to the page so a deployment under a proxy prefix (/dsh/…) keeps
+    // working; every caller does fetch(`${PUSH_API}/…`).
+    const PUSH_API = "api/rdsh-pwa/push";
 
     /** Preset notification sounds, synthesised — no audio files to ship. */
     const SOUND_PRESETS = {
@@ -3908,6 +3758,9 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
      * @param {object} notice - `{ title, body, sessionId, kind }`.
      */
     function notifyUser(notice) {
+      // A banner only appears while the page is on screen, so the sound rides
+      // with it; a backgrounded page lets the service worker make its own noise.
+      if (!pageVisible()) return false;
       playNoticeSound(notice.kind === "question" ? "pop" : readSoundPreset());
       return showInAppNotice(notice);
     }
@@ -4037,12 +3890,15 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       const data = event?.data;
       if (data === null || typeof data !== "object") return;
       if (data.type === "rdsh-pwa:notify") {
-        notifyUser({
+        const shown = notifyUser({
           title: typeof data.title === "string" ? data.title : "DSH",
           body: typeof data.body === "string" ? data.body : "",
           sessionId: typeof data.sessionId === "string" ? data.sessionId : "",
           kind: typeof data.kind === "string" ? data.kind : "notice",
         });
+        // The worker shows a system banner unless we take the notification, so
+        // acknowledge only when a banner was actually rendered.
+        if (shown) event?.ports?.[0]?.postMessage("shown");
         return;
       }
       if (data.type === "rdsh-pwa:open-session" || data.type === "dsh-notify-push:open-session") {
@@ -4055,26 +3911,6 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     // ---------------------------------------------------------------------
     // UI: Settings section
     // ---------------------------------------------------------------------
-    /** Numbers that distinguish the iOS 26 native gap from the safe-area chin. */
-    function readViewportMetrics() {
-      const viewport = window.visualViewport;
-      const screenHeight = window.screen && Number.isFinite(window.screen.height) ? Math.round(window.screen.height) : 0;
-      const innerHeight = Math.round(window.innerHeight);
-      const rootStyle = getComputedStyle(document.documentElement);
-      return {
-        screenHeight,
-        innerHeight,
-        clientHeight: document.documentElement.clientHeight,
-        visualHeight: viewport ? Math.round(viewport.height) : 0,
-        visualOffset: viewport ? Math.round(viewport.offsetTop) : 0,
-        gap: screenHeight > 0 ? screenHeight - innerHeight : null,
-        standalone: window.navigator.standalone === true || window.matchMedia("(display-mode: standalone)").matches,
-        nativeGap: document.documentElement.hasAttribute("data-rdsh-native-gap"),
-        safeTop: rootStyle.getPropertyValue("--rdsh-safe-top").trim() || "0px",
-        safeBottom: rootStyle.getPropertyValue("--rdsh-safe-bottom").trim() || "0px",
-      };
-    }
-
     function PermissionLabel(status) {
       if (!status.supported) return "このブラウザは非対応";
       if (status.permission === "granted") return status.subscribed ? "有効（購読済み）" : "許可済み（未購読）";
@@ -4088,29 +3924,11 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       const [busy, setBusy] = useState(false);
       const [disabled, setDisabled] = useState(hideDisabled());
       const [extra, setExtra] = useState(readHideExtra().join("\n"));
-      const [metrics, setMetrics] = useState(readViewportMetrics);
-      const [scrollTick, setScrollTick] = useState(0);
       const [sound, setSound] = useState(readSoundPreset);
       const [volume, setVolume] = useState(readSoundVolume);
 
       useEffect(() => {
         void refreshNotificationStatus();
-      }, []);
-
-      useEffect(() => {
-        const refresh = () => setMetrics(readViewportMetrics());
-        const viewport = window.visualViewport;
-        viewport?.addEventListener("resize", refresh);
-        viewport?.addEventListener("scroll", refresh);
-        window.addEventListener("resize", refresh);
-        window.addEventListener("orientationchange", refresh);
-        refresh();
-        return () => {
-          viewport?.removeEventListener("resize", refresh);
-          viewport?.removeEventListener("scroll", refresh);
-          window.removeEventListener("resize", refresh);
-          window.removeEventListener("orientationchange", refresh);
-        };
       }, []);
 
       const run = async (action, success) => {
@@ -4255,74 +4073,6 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         h(
           "div",
           { className: "rdsh-mux-card" },
-          h("h3", { className: "rdsh-mux-title" }, "画面の高さ"),
-          h("p", { className: "rdsh-mux-desc" }, "ホーム画面のアプリで下に空白が出るときの確認用です。"),
-          h(
-            "dl",
-            { className: "rdsh-mux-rows" },
-            h("dt", null, "screen.height"),
-            h("dd", null, String(metrics.screenHeight)),
-            h("dt", null, "innerHeight"),
-            h("dd", null, String(metrics.innerHeight)),
-            h("dt", null, "clientHeight"),
-            h("dd", null, String(metrics.clientHeight)),
-            h("dt", null, "visualViewport"),
-            h("dd", null, `${metrics.visualHeight}（offset ${metrics.visualOffset}）`),
-            h("dt", null, "差分"),
-            h("dd", null, metrics.gap === null ? "—" : `${metrics.gap}px`),
-            h("dt", null, "standalone"),
-            h("dd", null, metrics.standalone ? "はい" : "いいえ"),
-            h("dt", null, "セーフエリア"),
-            h("dd", null, `上 ${metrics.safeTop} / 下 ${metrics.safeBottom}`),
-            h("dt", null, "ネイティブ余白"),
-            h("dd", null, metrics.nativeGap ? "あり（内側の下余白を0に補正）" : "なし"),
-          ),
-          h("p", { className: "rdsh-mux-note" }, "差分が47〜62px前後なら iOS 26 のネイティブフレームです。下の帯はページの外なので、内側の下余白を0にして最小化しています。"),
-          h(
-            "div",
-            { className: "rdsh-mux-actions" },
-            h("button", { type: "button", onClick: () => setMetrics(readViewportMetrics()) }, "再測定"),
-          ),
-        ),
-        h(
-          "div",
-          { className: "rdsh-mux-card", "data-scroll-tick": scrollTick },
-          h("h3", { className: "rdsh-mux-title" }, "スクロール"),
-          h("p", { className: "rdsh-mux-desc" }, "外側をスクロールしてからここを開くと、最後に動いた要素が分かります。"),
-          h(
-            "div",
-            { className: "rdsh-mux-actions" },
-            h("button", {
-              type: "button",
-              onClick: () => {
-                lastScrolls.length = 0;
-                setScrollTick((value) => value + 1);
-              },
-            }, "記録をクリア"),
-            h("button", { type: "button", onClick: () => setScrollTick((value) => value + 1) }, "更新"),
-          ),
-          h("p", { className: "rdsh-mux-label" }, "最後にスクロールした要素"),
-          lastScrolls.length === 0
-            ? h("p", { className: "rdsh-mux-note" }, "（まだ記録がありません）")
-            : h("ul", { className: "rdsh-mux-scroll-list" },
-              lastScrolls.slice(-6).reverse().map((entry, index) => h(
-                "li",
-                { key: `${entry.at}:${index}` },
-                `${entry.tag} ${entry.cls || "(classなし)"} — scrollTop ${entry.scrollTop} / ${entry.overflowY}`,
-              )),
-            ),
-          h("p", { className: "rdsh-mux-label" }, "いまスクロール可能な要素"),
-          h("ul", { className: "rdsh-mux-scroll-list" },
-            scrollables().slice(0, 8).map((entry, index) => h(
-              "li",
-              { key: `${entry.cls}:${index}` },
-              `${entry.tag} ${entry.cls || "(classなし)"} — ${entry.scrollTop} / ${entry.scrollHeight} (${entry.overflowY})`,
-            )),
-          ),
-        ),
-        h(
-          "div",
-          { className: "rdsh-mux-card" },
           h("h3", { className: "rdsh-mux-title" }, "非表示にした操作"),
           h("p", { className: "rdsh-mux-desc" }, "スマホでは使えない操作（エディタ／ターミナルで開く、フィードバック、サインインなど）を隠しています。"),
           h(
@@ -4424,8 +4174,8 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       if (speed === null) return null;
       return h("span", {
         className: "rdsh-mux-live-speed",
-        title: "v100 出力速度（ストリーム差分からの概算）",
-        "aria-label": `v100 推定速度 ${speed} tok/s`,
+        title: "出力速度（ストリーム差分からの概算）",
+        "aria-label": `推定速度 ${speed} tok/s`,
       }, `≈ ${speed} tok/s`);
     }
 
@@ -4617,50 +4367,6 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
 .rdsh-crop-cancel { background: #2c2c2e; color: #f9fafb; }
 .rdsh-crop-save { background: #f9fafb; color: #151517; }
 
-/* Phone attach sheet: two rows, no command menu, no keyboard. */
-.rdsh-mux-sheet-backdrop {
-  position: fixed; inset: 0; z-index: 950;
-  background: rgba(0,0,0,.45);
-  animation: rdsh-mux-fade .16s ease-out;
-}
-.rdsh-mux-sheet {
-  position: fixed; z-index: 951; box-sizing: border-box;
-  left: 8px; right: 8px;
-  bottom: calc(max(env(safe-area-inset-bottom, 0px), var(--rdsh-safe-bottom, 0px)) + 8px);
-  padding: 6px; border-radius: 16px;
-  background: var(--dsw-specific-menu, #2a2a2e);
-  border: .5px solid var(--dsw-alias-border-l3, rgba(255,255,255,.16));
-  box-shadow: var(--dsw-elevation-prominent, 0 12px 36px rgba(0,0,0,.5));
-  color: var(--dsw-alias-label-primary, #f9fafb);
-  animation: rdsh-mux-sheet-in .2s cubic-bezier(.22,.8,.26,1);
-}
-.rdsh-mux-sheet-row {
-  display: flex; align-items: center; gap: 12px; box-sizing: border-box;
-  width: 100%; min-height: 52px; padding: 0 10px;
-  border: 0; border-radius: 12px; background: transparent;
-  color: inherit; font: inherit; text-align: left; cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-}
-.rdsh-mux-sheet-row:active { background: var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,.08)); }
-.rdsh-mux-sheet-icon {
-  display: flex; align-items: center; justify-content: center; flex: none;
-  width: 36px; height: 36px; border-radius: 10px;
-  background: var(--dsw-alias-bg-module-platform, #353638);
-  color: var(--dsw-alias-label-primary, #f9fafb);
-}
-.rdsh-mux-sheet-label { flex: 1; font-size: 15px; }
-.rdsh-mux-sheet-hint { flex: none; font-size: 12px; color: var(--dsw-alias-label-tertiary, #adb2b8); }
-.rdsh-mux-sheet-cancel {
-  display: block; box-sizing: border-box; width: 100%; min-height: 46px; margin-top: 6px;
-  border: 0; border-radius: 12px; cursor: pointer;
-  background: var(--dsw-alias-bg-module-platform, #353638);
-  color: var(--dsw-alias-label-primary, #f9fafb);
-  font: inherit; font-size: 15px;
-}
-.rdsh-mux-sheet-cancel:active { opacity: .8; }
-@keyframes rdsh-mux-fade { from { opacity: 0 } to { opacity: 1 } }
-@keyframes rdsh-mux-sheet-in { from { opacity: 0; transform: translateY(12px) } to { opacity: 1; transform: none } }
-
 .rdsh-mux-toast {
   position: fixed; z-index: 960; left: 50%;
   bottom: calc(max(env(safe-area-inset-bottom, 0px), var(--rdsh-safe-bottom, 0px)) + 104px);
@@ -4686,13 +4392,6 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
 .rdsh-mux-rows { display: grid; grid-template-columns: max-content minmax(0,1fr); gap: 6px 14px; margin: 0; font-size: 13px; }
 .rdsh-mux-rows dt { color: var(--dsw-alias-label-secondary, #cfd3d6); }
 .rdsh-mux-rows dd { margin: 0; overflow-wrap: anywhere; }
-.rdsh-mux-scroll-list {
-  margin: 0; padding-left: 16px;
-  display: flex; flex-direction: column; gap: 3px;
-  font-size: 12px; line-height: 1.5;
-  color: var(--dsw-alias-label-secondary, #cfd3d6);
-}
-.rdsh-mux-scroll-list li { overflow-wrap: anywhere; }
 .rdsh-mux-secondary {
   flex: 0 0 auto; padding: 8px 12px; border-radius: 9px;
   font: inherit; font-size: 13px; cursor: pointer;
@@ -5044,40 +4743,10 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
   .rdsh-mux-fab { display: flex; }
   html[data-rdsh-drawer="open"] .rdsh-mux-fab { display: none; }
 
-  /* More trigger becomes a one-tap settings button. It is an overlay in the
-     sidebar footer so the connection status keeps the full row. */
+
+  /* The account row in the sidebar footer is replaced by the settings row
+     inside the panel list, so the original row is hidden. */
   [data-rdsh-more-row] { display: none !important; }
-  [data-rdsh-more] > * { display: none !important; }
-  [class*="yHnPSG_anchor"]:has([data-rdsh-more]) { position: relative; }
-  [data-rdsh-more] {
-    position: absolute !important;
-    right: 4px; top: 50%;
-    width: 36px !important; height: 36px !important; min-width: 0 !important;
-    padding: 0 !important; margin: 0 !important;
-    display: grid !important; place-items: center !important;
-    border: .5px solid rgba(255,255,255,.14) !important;
-    border-radius: 50% !important;
-    background: rgba(44,44,46,.92) !important;
-    box-shadow: 0 2px 8px rgba(0,0,0,.25);
-    z-index: 6;
-    transform: translateY(-50%);
-    opacity: 0; pointer-events: none;
-    transition: opacity .15s ease, background .15s ease;
-  }
-  [data-rdsh-more]:hover { background: rgba(70,70,74,.98) !important; }
-  [data-rdsh-more]:active { transform: translateY(-50%) scale(.94); }
-  [data-rdsh-sidebar]:hover [data-rdsh-more],
-  [class*="yHnPSG_anchor"]:has([data-rdsh-more]):hover [data-rdsh-more],
-  [class*="yHnPSG_anchor"]:has([data-rdsh-more]):focus-within [data-rdsh-more],
-  [data-rdsh-more]:focus-visible {
-    opacity: 1; pointer-events: auto;
-  }
-  [data-rdsh-more]::after {
-    content: ""; width: 18px; height: 18px; display: block; margin: auto;
-    background: currentColor;
-    -webkit-mask: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7'%3E%3Ccircle cx='12' cy='12' r='3.2'/%3E%3Cpath d='M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 8.9 19.3a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.7 8.9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.09A1.7 1.7 0 0 0 15 4.7a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9v.09a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 1 1 0 4h-.09A1.7 1.7 0 0 0 19.4 15z'/%3E%3C/svg%3E") center / contain no-repeat;
-    mask: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7'%3E%3Ccircle cx='12' cy='12' r='3.2'/%3E%3Cpath d='M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 8.9 19.3a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.7 8.9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.09A1.7 1.7 0 0 0 15 4.7a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9v.09a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 1 1 0 4h-.09A1.7 1.7 0 0 0 19.4 15z'/%3E%3C/svg%3E") center / contain no-repeat;
-  }
 
   [data-rdsh-hidden],
   [data-rdsh-setting-hidden],
@@ -5184,8 +4853,6 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
   [data-rdsh-session] [data-rdsh-session-title] { margin-right: 4px !important; }
   [data-rdsh-row-minor] { display: none !important; }
   [data-rdsh-status-empty] { display: none; }
-  [data-rdsh-header-chip] > span:nth-child(2) { display: none; }
-  [data-rdsh-header-chip] > svg:last-child { display: none; }
   /* The chat column sizes its content from fixed pixel floors upstream
      (680px and friends), so on a 390px phone the transcript is wider than the
      column and gets clipped. Size it from the column instead. These custom
@@ -5503,7 +5170,6 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
   html[data-rdsh-native-gap] [data-rdsh-sidebar],
   html[data-rdsh-native-gap] [data-rdsh-rightpanel],
   html[data-rdsh-native-gap] [data-shortcut-modal="settings"] { padding-bottom: 0 !important; }
-  html[data-rdsh-native-gap] .rdsh-mux-sheet { bottom: 4px; }
 }
 `;
 
@@ -5511,18 +5177,6 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
     // Wiring
     // ---------------------------------------------------------------------
     let booted = false;
-
-    function ensureRightPanelFits() {
-      if (!narrow()) return;
-      const enter = document.querySelector('[aria-label="Enter fullscreen"]');
-      if (enter !== null) {
-        // A docked panel squeezes the chat on a phone: promote it once.
-        if (enter.getAttribute("data-rdsh-auto-fired") !== "1") {
-          enter.setAttribute("data-rdsh-auto-fired", "1");
-          enter.click();
-        }
-      }
-    }
 
     function boot(ctx) {
       if (booted) return;
@@ -5558,7 +5212,6 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         if (bootSession !== "") requestSession(bootSession);
         document.addEventListener("touchstart", onTouchStart, { capture: true, passive: true });
         document.addEventListener("touchmove", onTouchMove, { capture: true, passive: false });
-        document.addEventListener("scroll", recordScroll, true);
         measureSafeArea();
         const onResize = () => {
           // Do not close the attach sheet here: opening it blurs the composer,
@@ -5598,9 +5251,6 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           get badgeCount() { return notificationTotal; },
           applyNotificationCount,
           build: BUILD,
-          get lastScrolls() { return [...lastScrolls]; },
-          scrollables,
-          scrollChain,
           autoSettings: true,
           decorate: scheduleDecorate,
           closeDrawer,
@@ -5618,7 +5268,6 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           window.removeEventListener("keydown", onKeyDownCapture, true);
           document.removeEventListener("touchstart", onTouchStart, true);
           document.removeEventListener("touchmove", onTouchMove, true);
-          document.removeEventListener("scroll", recordScroll, true);
           window.removeEventListener("resize", onResize);
           window.removeEventListener("orientationchange", onResize);
           document.removeEventListener("dragstart", onDragStartCapture, true);
@@ -5632,6 +5281,10 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           document.removeEventListener("keydown", onKeyDown);
           document.removeEventListener("pointerdown", onFocusPointer, true);
           document.removeEventListener("focusin", onFocusInGuard, true);
+          // Added at boot alongside the rest; without these two a re-mount
+          // leaves the previous closure listening on every pointer move.
+          document.removeEventListener("pointermove", onPointerMove, true);
+          document.removeEventListener("focusout", onModelFocusOut, true);
           media.removeEventListener("change", onMedia);
           style.remove();
           rightPanelWatch?.disconnect();

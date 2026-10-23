@@ -4,7 +4,7 @@ import { apply, recordLiveToken } from "../lib/mobile-ux.js";
 
 const LIVE_SPEED_PATH = "/api/rdsh-mobile-ux/live-speed";
 
-function mount() {
+function mount(config = {}) {
   const routes = new Map();
   let streamHook;
   const webServer = {
@@ -16,6 +16,9 @@ function mount() {
       return () => routes.delete(route.path);
     },
   };
+  // Every route in this package answers 401/403 the same way, so the fake
+  // context has to offer the same seam.
+  const connection = { requestRejection: () => undefined };
   const ctx = {
     on(event, handler, options) {
       assert.equal(event, "llm/stream");
@@ -23,11 +26,11 @@ function mount() {
       streamHook = handler;
     },
     inject(dependencies, callback) {
-      assert.deepEqual(dependencies, ["webServer"]);
-      callback({ webServer });
+      assert.deepEqual(dependencies, ["webServer", "connection"]);
+      callback({ webServer, connection });
     },
   };
-  apply(ctx, {});
+  apply(ctx, config);
   return { routes, streamHook };
 }
 
@@ -53,20 +56,21 @@ test("live rate uses a one-second sliding window and waits for two samples", () 
   assert.deepEqual(samples, [2101]);
 });
 
-test("only an ordinary v100 stream publishes rate for its own session", async () => {
+test("an ordinary stream publishes rate for its own session", async () => {
   const { routes, streamHook } = mount();
   const route = routes.get(LIVE_SPEED_PATH);
   const other = (async function* () { yield { type: "text-delta", text: "x" }; })();
-  assert.equal(streamHook({ provider: "other", sessionId: "session-a" }, () => other), other);
-  assert.equal(JSON.parse(request(route, "GET", `${LIVE_SPEED_PATH}?sessionId=session-a`).body), null);
-  assert.equal(streamHook({ provider: "v100", sessionId: "session-a", purpose: "session-title" }, () => other), other);
+  // A session-title request is not a turn: it must pass straight through.
+  assert.equal(streamHook({ provider: "any-provider", sessionId: "session-a", purpose: "session-title" }, () => other), other);
+  // Nor is a call without a session.
+  assert.equal(streamHook({ provider: "any-provider" }, () => other), other);
 
   async function* source() {
     yield { type: "text-delta", text: "a" };
     await new Promise((resolve) => setTimeout(resolve, 25));
     yield { type: "text-delta", text: "b" };
   }
-  const iterator = streamHook({ provider: "v100", sessionId: "session-a" }, source)[Symbol.asyncIterator]();
+  const iterator = streamHook({ provider: "any-provider", sessionId: "session-a" }, source)[Symbol.asyncIterator]();
   assert.deepEqual((await iterator.next()).value, { type: "text-delta", text: "a" });
   assert.deepEqual((await iterator.next()).value, { type: "text-delta", text: "b" });
 
@@ -78,6 +82,41 @@ test("only an ordinary v100 stream publishes rate for its own session", async ()
 
   await iterator.next();
   assert.equal(JSON.parse(request(route, "GET", `${LIVE_SPEED_PATH}?sessionId=session-a`).body), null);
+});
+
+test("throttling the readout to listed providers passes others through", async () => {
+  const { routes, streamHook } = mount({ liveSpeedProviders: ["fast"] });
+  const route = routes.get(LIVE_SPEED_PATH);
+  const other = (async function* () { yield { type: "text-delta", text: "x" }; })();
+  assert.equal(streamHook({ provider: "slow", sessionId: "session-c" }, () => other), other);
+  assert.equal(JSON.parse(request(route, "GET", `${LIVE_SPEED_PATH}?sessionId=session-c`).body), null);
+
+  async function* source() {
+    yield { type: "text-delta", text: "a" };
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    yield { type: "text-delta", text: "b" };
+  }
+  const iterator = streamHook({ provider: "fast", sessionId: "session-d" }, source)[Symbol.asyncIterator]();
+  await iterator.next();
+  await iterator.next();
+  assert.ok(JSON.parse(request(route, "GET", `${LIVE_SPEED_PATH}?sessionId=session-d`).body).tps > 0);
+});
+
+test("the route refuses a request the connection rejects", () => {
+  const routes = new Map();
+  const webServer = {
+    tapIndex: () => () => {},
+    register(route) { routes.set(route.path, route); return () => routes.delete(route.path); },
+  };
+  const ctx = {
+    on() {},
+    inject(dependencies, callback) {
+      callback({ webServer, connection: { requestRejection: () => 403 } });
+    },
+  };
+  apply(ctx, {});
+  const denied = request(routes.get(LIVE_SPEED_PATH));
+  assert.equal(denied.status, 403);
 });
 
 test("live-speed route is read-only and supports HEAD", () => {

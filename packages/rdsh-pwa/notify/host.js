@@ -32,7 +32,7 @@ import { dirname, join } from "node:path";
 const PUSH_TTL_SECONDS = 600;
 /** VAPID tokens are short-lived on purpose; 12h is the common ceiling. */
 const VAPID_TTL_SECONDS = 12 * 60 * 60;
-/** A subscription older than this without a successful send is dropped. */
+/** How many subscriptions one store keeps; the oldest is dropped past this. */
 const MAX_SUBSCRIPTIONS = 32;
 
 // ---------------------------------------------------------------------------
@@ -340,17 +340,67 @@ export function buildQuestionPayload(request, context = {}) {
 export function makePayload(sessionId, kind, title, body) {
 	const id = typeof sessionId === "string" ? sessionId : "";
 	return {
-		title,
-		body,
+		title: clip(title, MAX_TITLE_CHARS),
+		body: clip(body, MAX_BODY_CHARS),
 		kind,
 		sessionId: id,
 		url: id === "" ? "./" : `./?session=${encodeURIComponent(id)}`,
 	};
 }
 
+/**
+ * Notification copy is capped so one payload stays inside a single
+ * `aes128gcm` record. RFC 8188 puts the record size in the header and this
+ * implementation declares 4096 bytes; a longer body would produce a body that
+ * no receiver can parse.
+ */
+const MAX_TITLE_CHARS = 120;
+const MAX_BODY_CHARS = 700;
+
+/**
+ * Cut a string to a character budget, marking the cut with an ellipsis.
+ *
+ * @param {string} value - text to shorten.
+ * @param {number} limit - maximum characters kept.
+ * @returns {string} the text, at most `limit` characters plus the ellipsis.
+ */
+function clip(value, limit) {
+	const text = typeof value === "string" ? value : "";
+	if (text.length <= limit) return text;
+	return `${text.slice(0, limit - 1)}…`;
+}
+
 // ---------------------------------------------------------------------------
 // Store + fan-out
 // ---------------------------------------------------------------------------
+
+/**
+ * Why an endpoint is not a push service, or undefined when it is.
+ *
+ * Push endpoints are always https URLs on the service's own host. Anything
+ * else (http, loopback, a metadata address, a redirector) is refused: the
+ * host POSTs to this URL on every notification.
+ *
+ * @param {string} endpoint - the subscription endpoint.
+ * @returns {string|undefined} a reason to reject, or undefined to accept.
+ */
+function rejectEndpoint(endpoint) {
+	let url;
+	try {
+		url = new URL(endpoint);
+	} catch {
+		return "subscription endpoint is not a URL";
+	}
+	if (url.protocol !== "https:") return "subscription endpoint must be https";
+	// A push service is a public host; anything the OS resolves locally is not.
+	const host = url.hostname;
+	if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal")) {
+		return "subscription endpoint must be a public push service";
+	}
+	if (/^(?:127\.|10\.|192\.168\.|169\.254\.|\[|0\.)/.test(host)) return "subscription endpoint must be a public push service";
+	if (/^172\.(?:1[6-9]|2\d|3[01])\./.test(host)) return "subscription endpoint must be a public push service";
+	return undefined;
+}
 
 /** Subscriptions and the VAPID pair, persisted together. */
 export class PushStore {
@@ -367,9 +417,24 @@ export class PushStore {
 		if (!Array.isArray(this.state.subscriptions)) this.state.subscriptions = [];
 	}
 
-	/** Persist the current state. */
+	/**
+	 * Persist the current state.
+	 *
+	 * Several profiles can share one `DSH_HOME`, so the push state is read
+	 * fresh before every write and only this process's change is applied. A
+	 * blind overwrite would let whichever instance saved last erase the other
+	 * profile's subscriptions.
+	 */
 	save() {
 		writeJsonAtomically(this.file, this.state);
+	}
+
+	/** Re-read the file, keeping this process's VAPID pair. */
+	reload() {
+		const fresh = readJson(this.file, null);
+		if (fresh !== null && typeof fresh === "object" && Array.isArray(fresh.subscriptions)) {
+			this.state.subscriptions = fresh.subscriptions;
+		}
 	}
 
 	/** The VAPID pair, generating it on first use. */
@@ -377,9 +442,18 @@ export class PushStore {
 		return this.state.vapid;
 	}
 
-	/** Every live subscription. */
-	subscriptions() {
-		return this.state.subscriptions;
+	/**
+	 * Every live subscription, as stored right now.
+	 *
+	 * @param {object} [filter] - `{ origins }`: keep only these origins (plus
+	 *   entries written before the origin was recorded).
+	 * @returns {object[]} matching subscriptions.
+	 */
+	subscriptions(filter) {
+		this.reload();
+		const origins = filter?.origins;
+		if (!Array.isArray(origins) || origins.length === 0) return this.state.subscriptions;
+		return this.state.subscriptions.filter((item) => typeof item.origin !== "string" || item.origin === "" || origins.includes(item.origin));
 	}
 
 	/**
@@ -395,6 +469,11 @@ export class PushStore {
 		if (typeof subscription?.keys?.p256dh !== "string" || typeof subscription?.keys?.auth !== "string") {
 			throw new Error("subscription has no client keys");
 		}
+		// The host POSTs to whatever is stored here, so an unvalidated endpoint
+		// would let a caller park an internal URL in the store and have every
+		// later notification hit it. Accept only real push services over https.
+		const rejection = rejectEndpoint(endpoint);
+		if (rejection !== undefined) throw new Error(rejection);
 		const entry = {
 			endpoint,
 			keys: { p256dh: subscription.keys.p256dh, auth: subscription.keys.auth },
@@ -402,6 +481,7 @@ export class PushStore {
 			origin: typeof meta.origin === "string" ? meta.origin : "",
 			addedAt: Date.now(),
 		};
+		this.reload();
 		this.state.subscriptions = [entry, ...this.state.subscriptions.filter((item) => item.endpoint !== endpoint)]
 			.slice(0, MAX_SUBSCRIPTIONS);
 		this.save();
@@ -415,6 +495,7 @@ export class PushStore {
 	 * @returns {boolean} whether anything was removed.
 	 */
 	remove(endpoint) {
+		this.reload();
 		const before = this.state.subscriptions.length;
 		this.state.subscriptions = this.state.subscriptions.filter((item) => item.endpoint !== endpoint);
 		if (this.state.subscriptions.length !== before) this.save();
@@ -462,7 +543,7 @@ export function sessionNameOf(ctx, session) {
 		/* the title plugin is optional */
 	}
 	const cwd = typeof session?.header?.cwd === "string" ? session.header.cwd : "";
-	const base = cwd.split("/").filter(Boolean).pop();
+	const base = cwd.split(/[\\/]/).filter(Boolean).pop();
 	return typeof base === "string" ? base : "";
 }
 
@@ -513,9 +594,39 @@ export function applyNotify(ctx, config) {
 	/** Whether the turn now running in a session came from the phone. */
 	const turnMobile = new Map();
 
+	/**
+	 * The public origins this process has served.
+	 *
+	 * Profiles share `DSH_HOME`, so one `push.json` can hold subscriptions
+	 * created through several instances. Only the instance the browser
+	 * actually talked to should deliver to that browser; otherwise the same
+	 * event is pushed twice (once per installed origin) and a tap can land on
+	 * the other instance. A request's referer is the page that made it, so its
+	 * origin is exactly the deployment this process is serving.
+	 */
+	const ownOrigins = new Set();
+
+	/** Remember the origin a request came from. */
+	function noteOrigin(req, body) {
+		const candidates = [
+			req?.headers?.origin,
+			typeof body?.origin === "string" ? body.origin : undefined,
+			req?.headers?.referer,
+		];
+		for (const candidate of candidates) {
+			if (typeof candidate !== "string" || candidate === "") continue;
+			try {
+				const origin = new URL(candidate).origin;
+				if (origin !== "null") ownOrigins.add(origin);
+			} catch {
+				/* a malformed header is not worth failing the request over */
+			}
+		}
+	}
+
 	/** Send one payload to every stored subscription, pruning dead ones. */
 	async function fanOut(payload) {
-		const subscriptions = store.subscriptions();
+		const subscriptions = store.subscriptions({ origins: [...ownOrigins] });
 		if (subscriptions.length === 0) return { ok: true, results: [] };
 		const subject = store.subject(copy.subject);
 		const results = [];
@@ -582,7 +693,8 @@ export function applyNotify(ctx, config) {
 			res.end(JSON.stringify(value));
 		};
 		/** Refuse anyone the Web server would not have served anyway. */
-		const guard = (req, res) => {
+		const guard = (req, res, body) => {
+			noteOrigin(req, body);
 			const rejection = connection.requestRejection(req);
 			if (rejection === undefined) return true;
 			res.writeHead(rejection);
@@ -620,6 +732,7 @@ export function applyNotify(ctx, config) {
 						return;
 					}
 					const body = await readJsonBody(req);
+					noteOrigin(req, body);
 					try {
 						const count = store.add(body.subscription, { label: body.label, origin: body.origin });
 						json(res, 200, { ok: true, count, subject: store.subject(copy.subject) });

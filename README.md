@@ -1,104 +1,122 @@
 # dsh-mobile-maxxing
 
 DeepSeek Harness（DSH）の Web UI をスマホで最大限に使い倒すための統合プラグインです。
+PWA・通知・モバイルUX・CJK表示の修正・セッションIDのコピーを1パッケージにまとめています。
 **素の DSH にそのまま入ります** — 他の `rdsh-*` プラグインや外部 npm パッケージは不要です。
 
-## 何が入るか
-
-**1パッケージ・1インストール**です。中身は次の5つで、すべて `rdsh-pwa` の中で動きます。
-
-| 機能 | 内容 |
-| --- | --- |
-| PWA | ホーム画面にインストール可能化、オフライン起動、更新通知 |
-| 通知 | 前面ならアプリ内バナー、背面なら Web Push。通知音5種 |
-| スマホUX | ドロワー、設定の1タップ表示、入力欄、コード表示の折り返し |
-| CJK表示 | `**https://x**（メモ）` のような自動リンク崩れを修正 |
-| セッションIDのコピー | セッションメニューに1行追加 |
-
-分けていない理由は、DSH のクライアントモジュールシステムが**1パッケージ＝1ブラウザモジュール**
-だからです。別々のパッケージにすると、その分だけ別モジュールとして登録され、インストールも
-設定も分散します。もともと別々だったプラグインを1つにまとめた経緯は
-[`packages/rdsh-pwa/README.md`](packages/rdsh-pwa/README.md) に書いてあります。
+> English: [Jump to the English section](#english)
 
 ## インストール
 
 ```sh
 cd ~/.dsh/profiles/web
-dsh plugin add \
-  https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.2.1/rdsh-pwa-0.2.1.tgz
-# DSH を再起動（環境に合わせて）
-systemctl --user restart dsh-web.service
+dsh plugin add https://github.com/kuraneko1/dsh-mobile-maxxing/releases/latest/download/rdsh-pwa.tgz
+# DSH を再起動（例: systemctl --user restart dsh-web.service）
 ```
 
-`dsh plugin add` が `package.json` の依存と `dsh.profile.bundles` の両方を更新します。
+これだけです。`dsh plugin add` が依存と bundle の両方を更新します。
+追加のプラグインも、通知用ライブラリも要りません。
 
-手で書く場合:
+## できること
 
-```json
-{
-  "dependencies": {
-    "rdsh-pwa": "https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.2.1/rdsh-pwa-0.2.1.tgz"
-  },
-  "dsh": {
-    "profile": {
-      "bundles": ["...", "rdsh-pwa"]
-    }
-  }
-}
-```
+| 機能 | 内容 |
+| --- | --- |
+| インストール可能な PWA | ホーム画面に追加、オフライン起動、更新のお知らせ |
+| 通知 | アプリを見ている間はアプリ内バナー、それ以外は Web Push |
+| 通知音 | 合成した5種類。音量も設定可。音声ファイルは同梱しません |
+| スマホ幅のレイアウト | サイドバーがドロワーに、設定は1タップ、コードは折り返し |
+| CJK 表示の修正 | `**https://x**（メモ）` の太字とリンクが壊れない |
+| セッションIDのコピー | セッションメニューに1行追加 |
 
-```sh
-npm install        # プロファイル内。pnpm でも可
-```
+## もっと詳しく
 
-外すときは依存と bundle から `rdsh-pwa` を消して再起動するだけです。
+- **日本語**: [`packages/rdsh-pwa/docs/USAGE.ja.md`](packages/rdsh-pwa/docs/USAGE.ja.md)
+- **English**: [`packages/rdsh-pwa/docs/USAGE.en.md`](packages/rdsh-pwa/docs/USAGE.en.md)
+
+パッケージ単体の説明は [`packages/rdsh-pwa/README.md`](packages/rdsh-pwa/README.md) です。
 
 ## 開発
 
 ```sh
-npm test                      # パッケージのテスト（37件）
-node scripts/pack-all.mjs     # dist/ に tarball を作る
+npm test                    # テスト46件（ブラウザ不要）
+node scripts/pack-all.mjs   # dist/ に tarball を作る
 ```
 
-**ビルド工程はありません。** `client.js` はブラウザにそのまま配信され、`index.js` は
-Node 標準モジュールだけで動きます。`client.js` は3つの機能を1つのモジュールにまとめた
-ファイルで、冒頭に各部の出どころが書いてあります。
+各パッケージは `packages/<name>/` に閉じています。共通のビルド工程はありません
+（クライアント側は生の JS をそのまま配信し、ホスト側は Node 標準モジュールだけで動きます）。
 
-ローカルのチェックアウトをそのまま使う場合:
+チェックアウトをそのまま使う場合:
 
 ```sh
 ln -sfn /path/to/dsh-mobile-maxxing/packages/rdsh-pwa ~/.dsh/profiles/web/node_modules/rdsh-pwa
 ```
 
-## 通知について
+## リリース
 
-`rdsh-pwa` は Web Push（VAPID + `aes128gcm`）を `node:crypto` だけで実装しています。
-通知は次のように出し分けます。
+```sh
+node scripts/pack-all.mjs
+gh release create vX.Y.Z dist/*.tgz
+```
 
-| アプリの状態 | 通知 |
+`dist/` には版付き（`rdsh-pwa-0.2.4.tgz`）と版なし（`rdsh-pwa.tgz`）の両方ができます。
+README は**版なし**を指しているので、`releases/latest/download/rdsh-pwa.tgz` が常に最新を返します。
+
+---
+
+# English
+
+One integrated plugin that makes the DSH (DeepSeek Harness) Web UI pleasant on a phone:
+installable PWA, notifications, phone-width layout, a CJK rendering fix and a session-id copy
+row. **It installs on a stock DSH** — no other `rdsh-*` plugin and no external npm package.
+
+## Install
+
+```sh
+cd ~/.dsh/profiles/web
+dsh plugin add https://github.com/kuraneko1/dsh-mobile-maxxing/releases/latest/download/rdsh-pwa.tgz
+# then restart DSH (e.g. systemctl --user restart dsh-web.service)
+```
+
+That is all: `dsh plugin add` updates both the dependency and the bundle list. No companion
+plugin and no push library are needed.
+
+## What it does
+
+| Feature | Detail |
 | --- | --- |
-| 画面に表示中 | アプリ内バナー（`rdsh-mobile-ux` が描画）。OS通知は出さない |
-| 背面・終了 | Web Push による OS 通知 |
+| Installable PWA | Add to home screen, offline launch, update notice |
+| Notifications | In-app banner while the app is on screen, Web Push otherwise |
+| Notification sounds | Five synthesised presets with a volume control; no audio files ship |
+| Phone layout | Sidebar becomes a drawer, settings open in one tap, code wraps |
+| CJK rendering | `**https://x**（memo）` keeps its bold and its link |
+| Session id copy | One row in the session row menu |
 
-以前使っていた `dsh-notify-push` とは API もサービスワーカーも共有しません。
-詳しくは [`packages/rdsh-pwa/README.md`](packages/rdsh-pwa/README.md) を参照してください。
+## More detail
 
-## クレジット
+- **English**: [`packages/rdsh-pwa/docs/USAGE.en.md`](packages/rdsh-pwa/docs/USAGE.en.md)
+- **日本語**: [`packages/rdsh-pwa/docs/USAGE.ja.md`](packages/rdsh-pwa/docs/USAGE.ja.md)
 
-設計の参考にした実装は [`packages/rdsh-pwa/README.md` のクレジット](packages/rdsh-pwa/README.md#クレジット)
-にまとめています（作者名も記載）。コードの流用はしていません。
+## Development
 
-主な参考元:
+```sh
+npm test                    # 46 tests, no browser required
+node scripts/pack-all.mjs   # build the tarballs into dist/
+```
 
-| 実装 | 作者 | 参考にした点 |
-| --- | --- | --- |
-| `dsh-notify-push` | hikarioyama | 通知の全体設計 |
-| `dsh-sound-notifications` | cwd514 | 効果音の考え方 |
-| `rdsh-mobile-ui` | 原案 hikarioyama（Smart-DSH）、移植 lasder-ca | スマホ幅レイアウトの具体的な指定 |
-| `web-push` | web-push-libs | RFC 8291/8292 の解釈確認 |
+There is no shared build step: the browser halves are served verbatim and the host halves use
+only Node built-ins.
 
-いずれも依存には含めていません。**このパッケージ単体で動きます。**
+## Release
 
-## ライセンス
+```sh
+node scripts/pack-all.mjs
+gh release create vX.Y.Z dist/*.tgz
+```
 
-MIT。[`LICENSE`](LICENSE) を参照してください。
+`dist/` holds both a versioned tarball (`rdsh-pwa-0.2.4.tgz`) and a version-free alias
+(`rdsh-pwa.tgz`). The READMEs link the alias, so `releases/latest/download/rdsh-pwa.tgz`
+always serves the newest build.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

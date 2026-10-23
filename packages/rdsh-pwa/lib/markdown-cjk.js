@@ -31,7 +31,6 @@ import {
 	rewriteIndexHtml,
 } from './markdown-cjk-runtime.js';
 
-/** Stable Cordis plugin name. */
 
 /** Routes need `webServer`; mount lazily so headless profiles stay clean. */
 export const inject = [];

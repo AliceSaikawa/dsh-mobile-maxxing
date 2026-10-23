@@ -939,6 +939,16 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     // ---------------------------------------------------------------------
     // Store
     // ---------------------------------------------------------------------
+    /** Browser-local theme choice; also read while the store initialises. */
+    const DEVICE_THEME_KEY = "rdsh-pwa:device-theme";
+    const DEVICE_THEME_MODES = ["", "light", "dark", "system"];
+    const DEVICE_THEME_LABELS = {
+      "": "共有設定に従う",
+      light: "ライト",
+      dark: "ダーク",
+      system: "端末に合わせる",
+    };
+
     const state = {
       narrow: window.matchMedia(NARROW_QUERY).matches,
       drawerOpen: false,
@@ -948,6 +958,8 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       notice: "",
       bootError: "",
       enterToSend: readEnterToSend(),
+      deviceTheme: readDeviceTheme(),
+      deviceThemeNote: "",
     };
     const subscribers = new Set();
     function emit(patch) {
@@ -1008,6 +1020,230 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         /* private mode: the choice lasts for this page */
       }
       emit({ enterToSend: value });
+    }
+
+    // ---------------------------------------------------------------------
+    // Per-device theme
+    // ---------------------------------------------------------------------
+    // The app's theme is a profile setting (settings/document), so the phone's
+    // picker writes the *shared* value and every connected browser follows —
+    // that is issue #5. This override is browser-local: it never calls
+    // `theme.setTheme()` and never touches settings, it only repaints the same
+    // DOM the upstream presenter owns (body[data-ds-dark-theme] /
+    // html{color-scheme} / meta[name=theme-color]). If that contract is gone,
+    // the override gives up instead of leaving a half-painted page.
+    function readDeviceTheme() {
+      try {
+        const value = localStorage.getItem(DEVICE_THEME_KEY);
+        return typeof value === "string" && DEVICE_THEME_MODES.includes(value) ? value : "";
+      } catch (error) {
+        return "";
+      }
+    }
+
+    /** What the DOM looked like before the first override, for a clean release. */
+    let deviceThemeBaseline = null;
+    /** Set when the override cannot work here; the shared theme then stands. */
+    let deviceThemeBlocked = false;
+    let deviceThemeSnapshot = null;
+    let deviceThemeCheck = 0;
+    let deviceThemeRetries = 0;
+
+    function captureDeviceBaseline() {
+      if (deviceThemeBaseline !== null) return;
+      deviceThemeBaseline = {
+        dark: document.body.hasAttribute("data-ds-dark-theme"),
+        colorScheme: document.documentElement.style.colorScheme || "",
+        source: document.documentElement.dataset.dsThemeSource ?? "",
+        themeColor: document.querySelector('meta[name="theme-color"]')?.getAttribute("content") ?? "",
+      };
+    }
+
+    function bodyCanvasColor() {
+      try {
+        return getComputedStyle(document.body).backgroundColor;
+      } catch (error) {
+        return "";
+      }
+    }
+
+    /** The palette variable itself, so the check survives a transparent body
+     *  (the macOS shell paints the canvas elsewhere). */
+    function paletteSignature() {
+      try {
+        const value = getComputedStyle(document.body).getPropertyValue("--dsw-alias-bg-base");
+        return typeof value === "string" ? value.trim() : "";
+      } catch (error) {
+        return "";
+      }
+    }
+
+    /** Keep `meta[name=theme-color]` (the browser chrome) on the painted colour. */
+    function paintThemeColor() {
+      const color = bodyCanvasColor();
+      if (typeof color !== "string" || color === "") return;
+      const metas = document.querySelectorAll('meta[name="theme-color"]');
+      const meta = metas.length === 0 ? null : metas[metas.length - 1];
+      if (meta !== null) meta.setAttribute("content", color);
+    }
+
+    /** Undo every DOM write this override made. */
+    function releaseDeviceTheme() {
+      if (deviceThemeBaseline === null) return;
+      const baseline = deviceThemeBaseline;
+      deviceThemeBaseline = null;
+      const html = document.documentElement;
+      html.removeAttribute("data-rdsh-device-theme");
+      // Assigning "" removes the declaration, in the DOM and in the stub.
+      html.style.colorScheme = baseline.colorScheme;
+      if (baseline.source === "") delete html.dataset.dsThemeSource;
+      else html.dataset.dsThemeSource = baseline.source;
+      document.body.toggleAttribute("data-ds-dark-theme", baseline.dark);
+      const metas = document.querySelectorAll('meta[name="theme-color"]');
+      const meta = metas.length === 0 ? null : metas[metas.length - 1];
+      if (meta !== null && baseline.themeColor !== "") meta.setAttribute("content", baseline.themeColor);
+    }
+
+    function deviceThemeScheme(mode) {
+      if (mode === "light" || mode === "dark") return mode;
+      if (mode !== "system") return null;
+      try {
+        return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+      } catch (error) {
+        return null;
+      }
+    }
+
+    /**
+     * Paint the stored per-device choice over the shared theme.
+     *
+     * Called at boot, after every `theme/change` (one microtask later, so the
+     * upstream presenter has already written) and when the UI changes the
+     * value. The result is checked on the next frame: if the palette attribute
+     * was reverted or the body colour did not move, the contract is not there
+     * and the override is abandoned for good.
+     */
+    function applyDeviceTheme() {
+      if (typeof document === "undefined" || document.body === null) return;
+      if (deviceThemeBlocked) return;
+      const mode = readDeviceTheme();
+      const html = document.documentElement;
+      if (mode === "") {
+        releaseDeviceTheme();
+        if (state.deviceThemeNote !== "") emit({ deviceThemeNote: "" });
+        return;
+      }
+      // A registered palette supplies its own token layer, which this override
+      // cannot replace: mixing the two produces a page no theme owns.
+      const custom = deviceThemeSnapshot !== null && Object.keys(deviceThemeSnapshot?.active?.tokens ?? {}).length > 0;
+      if (custom) {
+        releaseDeviceTheme();
+        if (state.deviceThemeNote !== "custom") emit({ deviceThemeNote: "custom" });
+        return;
+      }
+      const scheme = deviceThemeScheme(mode);
+      if (scheme === null) {
+        releaseDeviceTheme();
+        return;
+      }
+      captureDeviceBaseline();
+      const dark = scheme === "dark";
+      const before = document.body.hasAttribute("data-ds-dark-theme");
+      const beforePalette = before === dark ? "" : paletteSignature();
+      html.setAttribute("data-rdsh-device-theme", scheme);
+      html.style.colorScheme = scheme;
+      html.dataset.dsThemeSource = scheme;
+      document.body.toggleAttribute("data-ds-dark-theme", dark);
+      paintThemeColor();
+      if (state.deviceThemeNote !== "") emit({ deviceThemeNote: "" });
+      if (before === dark) return;
+      deviceThemeCheck += 1;
+      const token = deviceThemeCheck;
+      const verify = () => {
+        if (token !== deviceThemeCheck || deviceThemeBlocked) return;
+        const lost = document.body.hasAttribute("data-ds-dark-theme") !== dark;
+        const unchanged = beforePalette !== "" && paletteSignature() === beforePalette;
+        if (!lost && !unchanged) {
+          deviceThemeRetries = 0;
+          return;
+        }
+        // A presenter that boots after this plugin writes the shared palette
+        // once; one retry settles that without declaring the contract dead.
+        if (deviceThemeRetries < 2) {
+          deviceThemeRetries += 1;
+          applyDeviceTheme();
+          return;
+        }
+        deviceThemeBlocked = true;
+        releaseDeviceTheme();
+        emit({ deviceThemeNote: "unsupported" });
+      };
+      if (typeof requestAnimationFrame === "function") requestAnimationFrame(verify);
+      else setTimeout(verify, 32);
+    }
+
+    /** Store the choice and repaint. Never writes the shared preference. */
+    function writeDeviceTheme(value) {
+      const next = DEVICE_THEME_MODES.includes(value) ? value : "";
+      try {
+        if (next === "") localStorage.removeItem(DEVICE_THEME_KEY);
+        else localStorage.setItem(DEVICE_THEME_KEY, next);
+      } catch (error) {
+        /* private mode: the choice lasts for this page */
+      }
+      // An explicit choice re-arms a blocked override: the user may have
+      // updated DSH since, and silently ignoring the picker is worse than one
+      // more failed attempt (the frame check re-blocks it immediately).
+      deviceThemeBlocked = false;
+      deviceThemeRetries = 0;
+      deviceThemeCheck += 1;
+      emit({ deviceTheme: next, deviceThemeNote: "" });
+      applyDeviceTheme();
+    }
+
+    /**
+     * Wire the override to the theme service.
+     *
+     * No service (desktop shell without ui-theme, the unit-test stub) means no
+     * shared value to fall back from: leave the DOM alone entirely.
+     */
+    function attachDeviceTheme(ctx) {
+      let service;
+      try {
+        service = typeof ctx.get === "function" ? ctx.get("theme") : undefined;
+      } catch (error) {
+        service = undefined;
+      }
+      if (service === undefined || service === null) return;
+      ctx.effect(() => {
+        try {
+          const snapshot = service.getTheme();
+          if (snapshot !== undefined && snapshot !== null) deviceThemeSnapshot = snapshot;
+        } catch (error) {
+          deviceThemeSnapshot = null;
+        }
+        applyDeviceTheme();
+        if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => applyDeviceTheme());
+        let media = null;
+        try {
+          media = window.matchMedia("(prefers-color-scheme: dark)");
+        } catch (error) {
+          media = null;
+        }
+        const onSystemScheme = () => applyDeviceTheme();
+        media?.addEventListener?.("change", onSystemScheme);
+        const offTheme = ctx.on("theme/change", (snapshot) => {
+          if (snapshot !== undefined && snapshot !== null) deviceThemeSnapshot = snapshot;
+          // The presenter applies synchronously inside its own listener; run
+          // after every listener so the device choice is the one that stands.
+          queueMicrotask(applyDeviceTheme);
+        });
+        return () => {
+          media?.removeEventListener?.("change", onSystemScheme);
+          if (typeof offTheme === "function") offTheme();
+          releaseDeviceTheme();
+        };
+      }, "rdsh-mobile-ux: device theme");
     }
 
     /**
@@ -1502,42 +1738,60 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       }
     }
 
-    let contextProbeBusy = false;
-    let contextProbe = { percent: null, text: "", at: 0 };
+    /** The plugin context, kept so the session projection can be looked up. */
+    let hostCtx = null;
+    let sessionsApi;
+    let sessionsApiResolved = false;
 
-    function contextFiguresText() {
-      const panel = document.querySelector('[role="dialog"][class*="_panel"]');
-      const figures = panel === null ? null : panel.querySelector('[class*="_figures"]');
-      return figures === null ? "" : (figures.textContent || "");
-    }
-
-    function parseContextFigures(text) {
-      const match = text.match(/(~?[\d.]+[KMB]?)\s*\/\s*(~?[\d.]+[KMB]?)/i);
-      return match === null ? "" : `${match[1]}/${match[2]}`;
-    }
-
-    function contextUsedMax(button, percent) {
-      const now = Date.now();
-      // If the user has the panel open, read it without toggling anything.
-      if (button.getAttribute("aria-expanded") === "true") {
-        const text = parseContextFigures(contextFiguresText());
-        if (text !== "") contextProbe = { percent, text, at: now };
-        return text;
+    /** `sessions` is an optional service: resolving it lazily means a late
+     *  provider still works, and an absent one only costs the used/max text. */
+    function sessionsService() {
+      if (!sessionsApiResolved && hostCtx !== null) {
+        try {
+          const service = typeof hostCtx.get === "function" ? hostCtx.get("sessions") : undefined;
+          if (service !== undefined && service !== null) {
+            sessionsApi = service;
+            sessionsApiResolved = true;
+          }
+        } catch (error) {
+          // Not provided in this profile: keep showing the percentage alone.
+        }
       }
-      if (contextProbe.percent === percent && now - contextProbe.at < 5000) return contextProbe.text;
-      if (contextProbeBusy) return contextProbe.percent === percent ? contextProbe.text : "";
-      contextProbeBusy = true;
-      document.documentElement.setAttribute("data-rdsh-context-probe", "");
-      button.click();
-      setTimeout(() => {
-        const text = parseContextFigures(contextFiguresText());
-        if (button.getAttribute("aria-expanded") === "true") button.click();
-        contextProbe = { percent, text, at: Date.now() };
-        contextProbeBusy = false;
-        document.documentElement.removeAttribute("data-rdsh-context-probe");
-        scheduleDecorate();
-      }, 80);
-      return contextProbe.percent === percent ? contextProbe.text : "";
+      return sessionsApi;
+    }
+
+    /** Mirrors the upstream `formatTokens` so the dock and the panel agree. */
+    function formatTokenCount(value) {
+      const scaled = (candidate) => (candidate >= 100 ? String(Math.round(candidate)) : String(Math.round(candidate * 10) / 10));
+      if (value < 1e3) return String(Math.round(value));
+      if (value < 1e6) return `${scaled(value / 1e3)}K`;
+      return `${scaled(value / 1e6)}M`;
+    }
+
+    /**
+     * "12.3K/1M" for the context meter, read from the Session projection.
+     *
+     * The panel that shows these figures is only mounted while it is open, so
+     * the old code opened it with a real click, read the DOM after 80ms and
+     * closed it again — which flashed the menu (and, through the
+     * `*_panel` CSS, any other dialog) on every update. The projection carries
+     * the same numbers without touching the DOM; when it is missing the dock
+     * falls back to the percentage that the button's aria-label already has.
+     */
+    function contextUsageText() {
+      const sessions = sessionsService();
+      const sessionId = currentSessionId;
+      if (sessions === null || sessions === undefined || sessionId === null) return "";
+      try {
+        const pressure = sessions.projectionValues(sessionId)?.contextPressure;
+        if (pressure === null || typeof pressure !== "object") return "";
+        const used = pressure.projectedTokens ?? pressure.pressureTokens;
+        const window = pressure.contextWindow;
+        if (typeof used !== "number" || typeof window !== "number" || !(window > 0)) return "";
+        return `${formatTokenCount(used)}/${formatTokenCount(window)}`;
+      } catch (error) {
+        return "";
+      }
     }
 
     let settingsArrows = null;
@@ -1685,7 +1939,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       }
       if (context !== undefined) {
         const percent = ariaOf(context).match(/(\d+)%/);
-        const usedMax = percent === null ? "" : contextUsedMax(context, percent[1]);
+        const usedMax = percent === null ? "" : contextUsageText();
         set(context, percent === null ? "" : `${percent[1]}%${usedMax === "" ? "" : ` · ${usedMax}`}`);
       }
     }
@@ -2338,15 +2592,21 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       const scroller = document.querySelector('[class*="scrollBody"]');
       if (scroller === null) return;
       for (const node of scroller.querySelectorAll('[class*="_scroll"], [class*="_column"]')) {
-        const style = getComputedStyle(node);
-        const left = parseFloat(style.paddingLeft) || 0;
-        const right = parseFloat(style.paddingRight) || 0;
-        if (left >= 24 && right >= 24 && node.getBoundingClientRect().width >= scroller.clientWidth * 0.8) {
+        // A node this plugin already tagged stays tagged: the tag is what sets
+        // the 16px gutters, so the "24px or more" heuristic below can never
+        // hold again. Re-checking it dropped the column on every re-mount
+        // (session switch, panel change) and the width reverted to 100%.
+        const tagged = node.hasAttribute("data-rdsh-transcript");
+        if (!tagged) {
+          const style = getComputedStyle(node);
+          const left = parseFloat(style.paddingLeft) || 0;
+          const right = parseFloat(style.paddingRight) || 0;
+          if (!(left >= 24 && right >= 24 && node.getBoundingClientRect().width >= scroller.clientWidth * 0.8)) continue;
           node.setAttribute("data-rdsh-transcript", "");
-          const column = node.querySelector('[class*="_column"]');
-          if (column !== null) column.setAttribute("data-rdsh-transcript-column", "");
-          return;
         }
+        const column = node.querySelector('[class*="_column"]');
+        if (column !== null) column.setAttribute("data-rdsh-transcript-column", "");
+        return;
       }
     }
 
@@ -4307,6 +4567,33 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         h(
           "div",
           { className: "rdsh-mux-card" },
+          h("h3", { className: "rdsh-mux-title" }, "テーマ（この端末だけ）"),
+          h("p", { className: "rdsh-mux-desc" }, "PC と共通のテーマとは別に、このブラウザだけの配色を選べます。選んだ値はこのブラウザに保存され、ほかの端末には影響しません。"),
+          h(
+            "label",
+            { className: "rdsh-mux-slider" },
+            h("span", null, "配色"),
+            h(
+              "select",
+              {
+                className: "rdsh-mux-select",
+                value: s.deviceTheme,
+                onChange: (event) => writeDeviceTheme(event.target.value),
+              },
+              Object.entries(DEVICE_THEME_LABELS).map(([id, label]) => h("option", { key: id, value: id }, label)),
+            ),
+          ),
+          h("p", { className: "rdsh-mux-note" }, "PC と共通のテーマは 設定 → 一般 → 外観 で変わります。ここで選ぶと、この端末だけその上書きになります。"),
+          s.deviceThemeNote === "custom"
+            ? h("p", { className: "rdsh-mux-note" }, "カスタムテーマ（登録テーマ）を使用中のため、この端末だけの上書きは無効です。")
+            : null,
+          s.deviceThemeNote === "unsupported"
+            ? h("p", { className: "rdsh-mux-note" }, "この DSH のバージョンでは端末ごとの配色を適用できませんでした。共有テーマを使用します。")
+            : null,
+        ),
+        h(
+          "div",
+          { className: "rdsh-mux-card" },
           h("h3", { className: "rdsh-mux-title" }, "モバイルUI"),
           h("p", { className: "rdsh-mux-desc" }, "スマホ幅の表示と操作を整えます。設定はこのブラウザに保存されます。"),
           h("p", { className: "rdsh-mux-note" }, "＋ は画像とファイルの添付だけを開きます（コマンドは / から）。"),
@@ -4528,7 +4815,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
   display: none; align-items: center; justify-content: center;
   color: var(--dsw-alias-label-primary, #f9fafb);
   background: var(--dsw-alias-bg-module-platform, #26262a);
-  box-shadow: 0 4px 16px rgba(0,0,0,.28);
+  box-shadow: var(--dsw-shadow-lv2, 0 4px 12px rgba(0,0,0,.08));
   -webkit-tap-highlight-color: transparent; cursor: pointer;
 }
 .rdsh-mux-fab:active { transform: scale(.96); }
@@ -4536,11 +4823,12 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
   position: absolute; top: -5px; right: -5px;
   min-width: 18px; height: 18px; padding: 0 4px;
   border-radius: 9px; box-sizing: border-box;
-  background: #ff3b30; color: #fff;
+  background: var(--dsw-alias-state-error-primary, #ef4444);
+  color: var(--dsw-alias-toast-label, #fff);
   font: 700 10px/14px -apple-system, BlinkMacSystemFont, "Hiragino Sans", sans-serif;
   text-align: center; white-space: nowrap;
   border: 2px solid var(--dsw-alias-bg-base, #151517);
-  box-shadow: 0 1px 4px rgba(0,0,0,.4);
+  box-shadow: var(--dsw-shadow-lv1, 0 2px 4px rgba(0,0,0,.05));
   display: none; pointer-events: none;
 }
 .rdsh-mux-fab-badge[data-visible] { display: block; }
@@ -4564,9 +4852,9 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
 .rdsh-frame-pop {
   position: fixed; z-index: 901; width: 252px; box-sizing: border-box;
   padding: 12px; border-radius: 14px;
-  background: #2a2a2e; color: var(--dsw-alias-label-primary, #f9fafb);
-  border: .5px solid var(--dsw-alias-border-l3, rgba(255,255,255,.16));
-  box-shadow: 0 14px 40px rgba(0,0,0,.5);
+  background: var(--dsw-alias-bg-layer-2, #2c2c2e); color: var(--dsw-alias-label-primary, #f9fafb);
+  border: .5px solid var(--dsw-alias-border-l3, rgba(0,0,0,.12));
+  box-shadow: var(--dsw-elevation-prominent, 0 14px 40px rgba(0,0,0,.3));
 }
 .rdsh-frame-pop-title { font-size: 12px; color: var(--dsw-alias-label-secondary, #cfd3d6); margin-bottom: 10px; }
 .rdsh-frame-swatches { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -4574,7 +4862,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
   width: 30px; height: 30px; border-radius: 999px !important;
   border: 2px solid transparent; padding: 0; cursor: pointer;
 }
-.rdsh-frame-swatch[data-current="true"] { border-color: #fff; box-shadow: 0 0 0 2px #2a2a2e, 0 0 0 3px #fff; }
+.rdsh-frame-swatch[data-current="true"] { border-color: var(--dsw-alias-label-primary, #f9fafb); box-shadow: 0 0 0 2px var(--dsw-alias-bg-layer-2, #2c2c2e), 0 0 0 3px var(--dsw-alias-label-primary, #f9fafb); }
 .rdsh-frame-clear {
   width: 100%; margin-top: 12px; padding: 8px 10px;
   border: .5px solid var(--dsw-alias-border-l3, rgba(255,255,255,.16)); border-radius: 8px;
@@ -4587,16 +4875,16 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
   /* A light dim so the drawer reads as the active surface. No fade: the
      dimming is a state change, and fading it looked like a second sheet
      sliding in behind the drawer. */
-  background: rgba(0,0,0,.35); opacity: 0; pointer-events: none;
+  background: var(--dsw-alias-bg-mask-1, rgba(0,0,0,.24)); opacity: 0; pointer-events: none;
 }
 
 .rdsh-mux-detail {
   position: fixed; z-index: 990; box-sizing: border-box;
   padding: 10px 12px 12px; border-radius: 12px;
-  background: #2a2a2e !important;
+  background: var(--dsw-alias-bg-layer-2, #2c2c2e) !important;
   color: var(--dsw-alias-label-primary, #f9fafb);
-  border: .5px solid var(--dsw-alias-border-l3, rgba(255,255,255,.16));
-  box-shadow: var(--dsw-elevation-prominent, 0 10px 30px rgba(0,0,0,.45));
+  border: .5px solid var(--dsw-alias-border-l3, rgba(0,0,0,.12));
+  box-shadow: var(--dsw-elevation-prominent, 0 10px 30px rgba(0,0,0,.3));
   font-size: 13px; line-height: 1.55; overflow-wrap: anywhere;
   max-height: min(50dvh, 380px); overflow-y: auto;
   animation: rdsh-mux-pop .14s ease-out;
@@ -4616,10 +4904,10 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
 .rdsh-mux-titlepop {
   position: fixed; z-index: 980; box-sizing: border-box;
   padding: 10px 12px; border-radius: 12px;
-  background: #2a2a2e !important;
+  background: var(--dsw-alias-bg-layer-2, #2c2c2e) !important;
   color: var(--dsw-alias-label-primary, #f9fafb);
-  border: .5px solid var(--dsw-alias-border-l3, rgba(255,255,255,.16));
-  box-shadow: var(--dsw-elevation-prominent, 0 10px 30px rgba(0,0,0,.45));
+  border: .5px solid var(--dsw-alias-border-l3, rgba(0,0,0,.12));
+  box-shadow: var(--dsw-elevation-prominent, 0 10px 30px rgba(0,0,0,.3));
   font-size: 13px; line-height: 1.5; overflow-wrap: anywhere;
   animation: rdsh-mux-pop .14s ease-out;
 }
@@ -4718,7 +5006,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
   bottom: calc(max(env(safe-area-inset-bottom, 0px), var(--rdsh-safe-bottom, 0px)) + 104px);
   max-width: calc(100vw - 48px); box-sizing: border-box;
   padding: 9px 14px; border-radius: 999px;
-  background: rgba(20,20,22,.94); color: var(--dsw-alias-label-primary, #f9fafb);
+  background: var(--dsw-alias-toast-bg, #353638); color: var(--dsw-alias-toast-label, #f9fafb);
   border: .5px solid var(--dsw-alias-border-l3, rgba(255,255,255,.16));
   font-size: 13px; line-height: 1.4; text-align: center; pointer-events: none;
   opacity: 0; transform: translateX(-50%) translateY(6px);
@@ -4749,7 +5037,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
   display: flex; align-items: center; gap: 10px; margin: 0 0 8px;
   font-size: 13px; color: var(--dsw-alias-label-secondary, #cfd3d6);
 }
-.rdsh-mux-slider input[type="range"] { flex: 1 1 auto; min-width: 0; accent-color: #4d6bfe; }
+.rdsh-mux-slider input[type="range"] { flex: 1 1 auto; min-width: 0; accent-color: var(--dsw-alias-link, #4d6bfe); }
 .rdsh-mux-slider-value {
   flex: 0 0 auto; min-width: 42px; text-align: right;
   font-variant-numeric: tabular-nums;
@@ -4808,14 +5096,18 @@ html:not([data-rdsh-anim="none"]) [data-rdsh-running] [data-rdsh-status] { displ
 }
 [data-rdsh-running] [data-rdsh-session-title]::before {
   content: ""; position: absolute; inset: -3px -6px; z-index: -1; border-radius: 8px;
-  background: linear-gradient(100deg, rgba(122,170,255,0) 10%, rgba(122,170,255,.45) 42%, rgba(167,139,250,.40) 58%, rgba(122,170,255,0) 90%);
+  background: linear-gradient(100deg,
+    transparent 10%,
+    color-mix(in srgb, var(--dsw-alias-link, #7aaaff) 45%, transparent) 42%,
+    color-mix(in srgb, var(--dsw-alias-label-deep-diving, #a78bfa) 40%, transparent) 58%,
+    transparent 90%);
   background-size: 220% 100%;
   animation: rdsh-mux-aurora 3.6s ease-in-out infinite;
   filter: blur(4px); opacity: .95;
 }
 [data-rdsh-running] [data-rdsh-session-title]::after {
   content: ""; position: absolute; left: -7px; top: 4px; bottom: 4px; width: 2px; border-radius: 2px;
-  background: linear-gradient(180deg, #7aaaff, #a78bfa);
+  background: linear-gradient(180deg, var(--dsw-alias-link, #7aaaff), var(--dsw-alias-label-deep-diving, #a78bfa));
   box-shadow: 0 0 8px rgba(122,170,255,.7);
   animation: rdsh-mux-pulse 2.4s ease-in-out infinite;
 }
@@ -4844,7 +5136,7 @@ html[data-rdsh-anim="breathing"] [data-rdsh-running] [data-rdsh-session-title] {
 html[data-rdsh-anim="outline"] [data-rdsh-running] [data-rdsh-session-title]::before,
 html[data-rdsh-anim="outline"] [data-rdsh-running] [data-rdsh-session-title]::after { display: none !important; }
 html[data-rdsh-anim="outline"] [data-rdsh-ring-row] {
-  --rdsh-ring-fill: #1b1b1c;
+  --rdsh-ring-fill: var(--dsw-specific-sidebar-nav-item-hover, #f1f3f5);
   position: relative !important;
   isolation: isolate;
   overflow: hidden;
@@ -4861,14 +5153,14 @@ html[data-rdsh-anim="outline"] [data-rdsh-ring-row]::before {
   z-index: 0;
   background: conic-gradient(
     from 0deg,
-    rgba(122,170,255,0) 0deg,
-    rgba(122,170,255,0) 215deg,
-    rgba(122,170,255,.14) 235deg,
-    rgba(140,185,255,.68) 268deg,
-    #cfe0ff 292deg,
-    rgba(122,170,255,.3) 315deg,
-    rgba(122,170,255,0) 336deg,
-    rgba(122,170,255,0) 360deg
+    transparent 0deg,
+    transparent 215deg,
+    color-mix(in srgb, var(--dsw-alias-link, #7aaaff) 14%, transparent) 235deg,
+    color-mix(in srgb, var(--dsw-alias-link, #7aaaff) 68%, transparent) 268deg,
+    var(--dsw-alias-link, #7aaaff) 292deg,
+    color-mix(in srgb, var(--dsw-alias-link, #7aaaff) 30%, transparent) 315deg,
+    transparent 336deg,
+    transparent 360deg
   );
   transform: translate(-50%, -50%) rotate(0deg);
   animation: rdsh-ring-rotate 2.8s linear infinite;
@@ -4889,23 +5181,23 @@ html[data-rdsh-anim="outline"] [data-rdsh-ring-row] > * {
 }
 /* Yellow only while a running session is also the open one. */
 html[data-rdsh-anim="outline"] [data-rdsh-ring-row][aria-selected="true"] {
-  --rdsh-ring-fill: #2d2d2e;
+  --rdsh-ring-fill: var(--dsw-specific-sidebar-nav-item-active, #ebeef2);
 }
 html[data-rdsh-anim="outline"] [data-rdsh-ring-row][aria-selected="true"]::before {
   background: conic-gradient(
     from 0deg,
-    rgba(255,209,102,0) 0deg,
-    rgba(255,209,102,0) 215deg,
-    rgba(255,209,102,.14) 235deg,
-    rgba(255,224,130,.68) 268deg,
-    #fff3c4 292deg,
-    rgba(255,209,102,.3) 315deg,
-    rgba(255,209,102,0) 336deg,
-    rgba(255,209,102,0) 360deg
+    transparent 0deg,
+    transparent 215deg,
+    color-mix(in srgb, var(--dsw-alias-state-warn-primary, #ffd166) 14%, transparent) 235deg,
+    color-mix(in srgb, var(--dsw-alias-state-warn-primary, #ffd166) 68%, transparent) 268deg,
+    color-mix(in srgb, var(--dsw-alias-state-warn-primary, #ffd166) 45%, var(--dsw-alias-label-primary, #f9fafb)) 292deg,
+    color-mix(in srgb, var(--dsw-alias-state-warn-primary, #ffd166) 30%, transparent) 315deg,
+    transparent 336deg,
+    transparent 360deg
   );
 }
 html[data-rdsh-anim="outline"] [data-rdsh-ring-row]:hover:not([aria-selected="true"]) {
-  --rdsh-ring-fill: #242425;
+  --rdsh-ring-fill: var(--dsw-specific-sidebar-nav-item-hover, #f1f3f5);
 }
 html[data-rdsh-anim="outline"] [data-rdsh-ring-row]:not([data-rdsh-session-frame]) {
   box-shadow: none !important;
@@ -4913,12 +5205,12 @@ html[data-rdsh-anim="outline"] [data-rdsh-ring-row]:not([data-rdsh-session-frame
 /* An idle session that is merely open: a plain frame and a slightly lighter
    fill, with no sweep, so "open" and "working" stay distinguishable. */
 html[data-rdsh-anim="outline"] [data-rdsh-open-row]:not([data-rdsh-ring-row]) {
-  background: #232324 !important;
-  box-shadow: inset 0 0 0 1px rgba(255,255,255,.2) !important;
+  background: var(--dsw-specific-sidebar-nav-item-active, #ebeef2) !important;
+  box-shadow: inset 0 0 0 1px var(--dsw-alias-border-l4, rgba(0,0,0,.16)) !important;
   border-radius: 12px !important;
 }
 html[data-rdsh-anim="outline"] [data-rdsh-open-row]:not([data-rdsh-ring-row]):hover {
-  background: #29292b !important;
+  background: var(--dsw-specific-sidebar-nav-item-hover, #f1f3f5) !important;
 }
 /* A row with a user-chosen colour frame keeps that frame: only the fill moves. */
 html[data-rdsh-anim="outline"] [data-rdsh-open-row][data-rdsh-session-frame]:not([data-rdsh-ring-row]) {
@@ -4935,9 +5227,9 @@ html[data-rdsh-anim="outline"] [data-rdsh-open-row][data-rdsh-session-frame]:not
     background-image: linear-gradient(100deg,
       var(--dsw-alias-label-primary, #f9fafb) 0%,
       var(--dsw-alias-label-primary, #f9fafb) 38%,
-      #dbe7ff 47%,
-      #eef4ff 50%,
-      #dbe7ff 53%,
+      color-mix(in srgb, var(--dsw-alias-link, #7aaaff) 30%, var(--dsw-alias-label-primary, #f9fafb)) 47%,
+      var(--dsw-alias-label-primary, #f9fafb) 50%,
+      color-mix(in srgb, var(--dsw-alias-link, #7aaaff) 30%, var(--dsw-alias-label-primary, #f9fafb)) 53%,
       var(--dsw-alias-label-primary, #f9fafb) 62%,
       var(--dsw-alias-label-primary, #f9fafb) 100%);
     background-size: 300% 100%;
@@ -5091,7 +5383,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
      it from being the only separation. */
   html[data-rdsh-drawer="open"] [data-rdsh-sidebar] {
     transform: translateX(0);
-    box-shadow: 24px 0 56px rgba(0,0,0,.5);
+    box-shadow: var(--dsw-elevation-prominent, 24px 0 56px rgba(0,0,0,.35));
   }
   html[data-rdsh-drawer="open"] .rdsh-mux-backdrop { display: block; opacity: 1; pointer-events: auto; }
   .rdsh-mux-fab { display: flex; }
@@ -5108,13 +5400,13 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
   [data-rdsh-settings-nav-arrow] {
     position: fixed; z-index: 1006; width: 30px; height: 30px;
     display: grid; place-items: center; padding: 0;
-    border: .5px solid rgba(255,255,255,.16); border-radius: 50%;
-    background: rgba(44,44,46,.94); color: var(--dsw-alias-label-primary, #f9fafb);
-    box-shadow: 0 3px 12px rgba(0,0,0,.4);
+    border: .5px solid var(--dsw-alias-border-l3, rgba(0,0,0,.12)); border-radius: 50%;
+    background: var(--dsw-alias-button-floating-fill, #fff); color: var(--dsw-alias-label-primary, #f9fafb);
+    box-shadow: var(--dsw-shadow-lv2, 0 2px 8px rgba(0,0,0,.08));
     -webkit-tap-highlight-color: transparent;
   }
   [data-rdsh-settings-nav-arrow][hidden] { display: none !important; }
-  [data-rdsh-settings-nav-arrow]:hover { background: rgba(70,70,74,.98); }
+  [data-rdsh-settings-nav-arrow]:hover { background: var(--dsw-alias-button-floating-hover, #f1f3f5); }
   [data-rdsh-settings-nav-arrow]:active { transform: scale(.94); }
   [data-rdsh-settings-nav-arrow] svg { width: 16px; height: 16px; }
   /* The stats dock (turns / tok/s / cache hit / context %) stays visible, but
@@ -5142,10 +5434,6 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
   }
   /* The app label includes steps / total tokens; show only the four requested
      values, with no ellipsis. */
-  html[data-rdsh-context-probe] [role="dialog"][class*="_panel"] {
-    visibility: hidden !important;
-    pointer-events: none !important;
-  }
   [data-rdsh-stat-text] > span { display: none !important; }
   [data-rdsh-stat-text]::after {
     content: attr(data-rdsh-stat-text);
@@ -5173,12 +5461,6 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
     display: block !important;
     visibility: visible !important;
     opacity: 1 !important;
-  }
-  [data-rdsh-transcript-column] {
-    width: 349px !important;
-    max-width: 100% !important;
-    margin-left: auto !important;
-    margin-right: auto !important;
   }
   [data-chat-flow-kind="turn-tail"] [class*="_header"] {
     padding-top: 6px !important;
@@ -5290,7 +5572,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
     color: var(--dsw-alias-label-secondary, #9ca3af);
     -webkit-tap-highlight-color: transparent;
   }
-  [data-rdsh-activity-chip]:hover { background: rgba(255,255,255,.06); }
+  [data-rdsh-activity-chip]:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,.06)); }
   [data-rdsh-activity-chip] > span:not([data-rdsh-activity-icon]):not([data-rdsh-activity-spinner]) { display: none !important; }
   [data-rdsh-activity-chip] > svg:not([data-rdsh-activity-spinner]) { display: none !important; }
   [data-rdsh-activity-chip] [data-rdsh-activity-spinner] {
@@ -5305,7 +5587,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
   }
   [data-rdsh-activity-chip] [data-rdsh-activity-icon] svg { width: 13px; height: 13px; }
   .rdsh-activity-ring {
-    display: block; border: 1.6px solid rgba(255,255,255,.16);
+    display: block; border: 1.6px solid var(--dsw-alias-border-l3, rgba(0,0,0,.12));
     border-top-color: var(--dsw-alias-state-success-primary, #22c55e);
     border-radius: 50%;
     animation: rdsh-activity-spin 1s linear infinite;
@@ -5321,14 +5603,14 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
     width: 36px !important; height: 36px !important;
     padding: 0 !important;
     display: grid !important; place-items: center !important;
-    border: .5px solid rgba(255,255,255,.14) !important;
+    border: .5px solid var(--dsw-alias-border-l3, rgba(0,0,0,.12)) !important;
     border-radius: 50% !important;
-    background: rgba(44,44,46,.92) !important;
+    background: var(--dsw-alias-button-floating-fill, #fff) !important;
     color: var(--dsw-alias-label-primary) !important;
-    box-shadow: 0 2px 8px rgba(0,0,0,.25);
+    box-shadow: var(--dsw-shadow-lv2, 0 2px 8px rgba(0,0,0,.08));
     z-index: 1007 !important;
   }
-  [data-shortcut-modal="settings"] [class*="VOzbGW_close"]:hover { background: rgba(70,70,74,.98) !important; }
+  [data-shortcut-modal="settings"] [class*="VOzbGW_close"]:hover { background: var(--dsw-alias-button-floating-hover, #f1f3f5) !important; }
   [data-shortcut-modal="settings"] [class*="VOzbGW_close"] svg { width: 18px !important; height: 18px !important; }
 
   /* Tab names fade toward a scrollable edge, so the floating arrows never
@@ -5444,23 +5726,39 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
   [class*="_7KE1Ra_cell"] > span:last-of-type { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   [data-rdsh-model-search]:disabled { opacity: 1 !important; cursor: text; }
 
-  /* Agent question / plan review card: use the same 16px gutter and 349px
-     column as the transcript instead of the desktop card paddings. */
+  /* Agent question / plan review card: it lives in the composer seat, which
+     already carries the 16px gutter, so it just fills that box. It used to be
+     pinned to 349px — a copy of the transcript's old fixed column — which left
+     it narrower than the composer on every phone and off-centre on tablets. */
   [data-rdsh-question-frame] {
     padding-left: 16px !important; padding-right: 16px !important;
     padding-bottom: 10px !important;
   }
   [data-rdsh-question-frame] > [data-rdsh-question-card] {
-    width: 100% !important; max-width: 349px !important; margin-left: auto !important; margin-right: auto !important;
+    width: 100% !important; max-width: 100% !important;
+    /* The card's own 10px bottom padding doubled the footer's. */
+    padding-bottom: 0 !important;
   }
-  [data-rdsh-question-card] [class*="_header"] { padding: 12px 12px 0 16px !important; }
-  [data-rdsh-question-card] [class*="_strip"] { padding: 10px 12px !important; }
-  [data-rdsh-question-card] [class*="_summary"] { padding: 12px 16px !important; }
+  /* Direct children only. [class*="_header"] also matches _headerActions,
+     [class*="_footer"] matches _footerActions and [class*="_option"] matches
+     _optionCopy / _optionLine / _optionLabel, so plain descendant selectors
+     stacked the same padding four levels deep and inflated the card (one
+     option row 66px → 114px). */
+  [data-rdsh-question-card] > [class*="_header"] { padding: 12px 12px 0 16px !important; }
+  [data-rdsh-question-card] > [class*="_strip"] { padding: 10px 12px !important; }
+  [data-rdsh-question-card] > [class*="_summary"] { padding: 12px 16px !important; }
+  [data-rdsh-question-card] > [class*="_footer"] { padding: 8px 10px 10px !important; }
   [data-rdsh-question-card] [class*="_options"] { padding: 4px 8px !important; }
-  [data-rdsh-question-card] [class*="_option"],
-  [data-rdsh-question-card] [class*="_customRow"] { padding: 8px !important; }
-  [data-rdsh-question-card] [class*="_footer"] { padding: 8px 10px 10px !important; }
+  [data-rdsh-question-card] [class*="_options"] > button[class*="_option"],
+  [data-rdsh-question-card] [class*="_options"] > [class*="_customRow"] { padding: 8px !important; }
   [data-rdsh-question-card] [class*="_customBlock"] { margin-left: 8px !important; margin-right: 8px !important; }
+  /* The answer field takes its height from a hidden mirror, so both layers
+     must share the font size (16px here stops iOS from zooming on focus). */
+  [data-rdsh-question-card] [class*="_field"] > * { font-size: 16px !important; }
+  /* The card clips its overflow, so a long unbroken token used to be cut. */
+  [data-rdsh-question-card] [class*="_optionLabel"],
+  [data-rdsh-question-card] [class*="_title"],
+  [data-rdsh-question-card] [class*="_description"] { overflow-wrap: anywhere; }
 
   /* iOS zooms any focused field below 16px; this is a PWA and needs no zoom. */
   html, body { touch-action: manipulation; }
@@ -5573,6 +5871,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
     function boot(ctx) {
       if (booted) return;
       booted = true;
+      hostCtx = ctx;
 
       ctx.effect(() => {
         const style = document.createElement("style");
@@ -5664,6 +5963,9 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           get state() { return { ...state }; },
           get badgeCount() { return notificationTotal; },
           applyNotificationCount,
+          readDeviceTheme,
+          writeDeviceTheme,
+          applyDeviceTheme,
           build: BUILD,
           autoSettings: true,
           decorate: scheduleDecorate,
@@ -5730,6 +6032,11 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         // Session selection needs the workspace service, which arrives on its
         // own schedule; without it a notification tap can only raise a banner.
         ctx.inject(["uiWorkspace"], (scope) => attachSessionOpener(scope));
+        try {
+          attachDeviceTheme(ctx);
+        } catch (error) {
+          console.error("[rdsh-mobile-ux] device theme failed", error);
+        }
         try {
           boot(ctx);
         } catch (error) {

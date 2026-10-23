@@ -50,7 +50,10 @@ export const DEFAULTS = {
 	display: "standalone",
 	themeColor: "#151517",
 	backgroundColor: "#151517",
-	appleStatusBarStyle: "black-translucent",
+	// One meta cannot switch between black and white glyphs: `default` draws
+	// dark text, which stays readable on the light palette, and a dark-only
+	// profile can still ask for `black-translucent` in its patch.
+	appleStatusBarStyle: "default",
 	enableServiceWorker: true,
 	navigationTimeoutMs: 1500,
 };

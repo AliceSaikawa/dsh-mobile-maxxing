@@ -38,6 +38,29 @@ enablement. The parts are independent, so merging them costs nothing.
 
 ![Safe area in standalone mode](standalone-safe-area.png)
 
+### Theme (light / dark)
+
+Every colour comes from the host's theme tokens (`--dsw-*`). The earlier version baked in
+dark values, so on the light palette the selected session row, the popovers, the toast and
+the settings buttons were barely readable. Both palettes are now honoured.
+
+**Settings → Mobile → "Theme (this device only)"** picks a palette for this browser alone
+(follow the shared setting / light / dark / match the device). The choice lives in
+`localStorage` only: it never writes the DSH profile, so **changing it on a phone does not
+reach the PC**. The shared theme stays in Settings → General → Appearance.
+
+- If the upstream DOM contract (`body[data-ds-dark-theme]` / `html{color-scheme}`) has
+  changed, the override is verified after it is applied and then **gives up, falling back to
+  the shared theme** (the settings card says so).
+- A registered palette (custom theme tokens) disables the override, since mixing the two
+  token layers produces a page neither theme owns.
+- The splash screen and task switcher colour come from the manifest's `themeColor`, which
+  cannot be per-device; set `themeColor` / `backgroundColor` to `#fff` in the profile patch
+  if you run light-only.
+- One meta cannot switch the status bar between black and white glyphs, so the default is
+  now `default` (dark text). A dark-only profile can set
+  `appleStatusBarStyle: "black-translucent"`.
+
 ## Phone layout
 
 On a phone, that is:
@@ -187,6 +210,10 @@ the module against a stub environment.
   not offer a subscription
 - The service worker manages one scope. Another plugin registering a worker at `/` will
   fight over it
+- The per-device theme is per **browser**, not per hardware device (another browser on the
+  same phone is separate, and clearing site data returns it to "follow the shared theme")
+- The offline page cannot read the stored theme (a service worker has no `localStorage`
+  access), so it follows the OS light/dark preference
 
 ## The iOS 26 bottom strip (47px / 62px)
 

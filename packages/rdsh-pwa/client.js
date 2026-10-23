@@ -929,6 +929,16 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     // ---------------------------------------------------------------------
     // Store
     // ---------------------------------------------------------------------
+    /** Browser-local theme choice; also read while the store initialises. */
+    const DEVICE_THEME_KEY = "rdsh-pwa:device-theme";
+    const DEVICE_THEME_MODES = ["", "light", "dark", "system"];
+    const DEVICE_THEME_LABELS = {
+      "": "共有設定に従う",
+      light: "ライト",
+      dark: "ダーク",
+      system: "端末に合わせる",
+    };
+
     const state = {
       narrow: window.matchMedia(NARROW_QUERY).matches,
       drawerOpen: false,
@@ -938,6 +948,8 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       notice: "",
       bootError: "",
       enterToSend: readEnterToSend(),
+      deviceTheme: readDeviceTheme(),
+      deviceThemeNote: "",
     };
     const subscribers = new Set();
     function emit(patch) {
@@ -984,6 +996,230 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         /* private mode: the choice lasts for this page */
       }
       emit({ enterToSend: value });
+    }
+
+    // ---------------------------------------------------------------------
+    // Per-device theme
+    // ---------------------------------------------------------------------
+    // The app's theme is a profile setting (settings/document), so the phone's
+    // picker writes the *shared* value and every connected browser follows —
+    // that is issue #5. This override is browser-local: it never calls
+    // `theme.setTheme()` and never touches settings, it only repaints the same
+    // DOM the upstream presenter owns (body[data-ds-dark-theme] /
+    // html{color-scheme} / meta[name=theme-color]). If that contract is gone,
+    // the override gives up instead of leaving a half-painted page.
+    function readDeviceTheme() {
+      try {
+        const value = localStorage.getItem(DEVICE_THEME_KEY);
+        return typeof value === "string" && DEVICE_THEME_MODES.includes(value) ? value : "";
+      } catch (error) {
+        return "";
+      }
+    }
+
+    /** What the DOM looked like before the first override, for a clean release. */
+    let deviceThemeBaseline = null;
+    /** Set when the override cannot work here; the shared theme then stands. */
+    let deviceThemeBlocked = false;
+    let deviceThemeSnapshot = null;
+    let deviceThemeCheck = 0;
+    let deviceThemeRetries = 0;
+
+    function captureDeviceBaseline() {
+      if (deviceThemeBaseline !== null) return;
+      deviceThemeBaseline = {
+        dark: document.body.hasAttribute("data-ds-dark-theme"),
+        colorScheme: document.documentElement.style.colorScheme || "",
+        source: document.documentElement.dataset.dsThemeSource ?? "",
+        themeColor: document.querySelector('meta[name="theme-color"]')?.getAttribute("content") ?? "",
+      };
+    }
+
+    function bodyCanvasColor() {
+      try {
+        return getComputedStyle(document.body).backgroundColor;
+      } catch (error) {
+        return "";
+      }
+    }
+
+    /** The palette variable itself, so the check survives a transparent body
+     *  (the macOS shell paints the canvas elsewhere). */
+    function paletteSignature() {
+      try {
+        const value = getComputedStyle(document.body).getPropertyValue("--dsw-alias-bg-base");
+        return typeof value === "string" ? value.trim() : "";
+      } catch (error) {
+        return "";
+      }
+    }
+
+    /** Keep `meta[name=theme-color]` (the browser chrome) on the painted colour. */
+    function paintThemeColor() {
+      const color = bodyCanvasColor();
+      if (typeof color !== "string" || color === "") return;
+      const metas = document.querySelectorAll('meta[name="theme-color"]');
+      const meta = metas.length === 0 ? null : metas[metas.length - 1];
+      if (meta !== null) meta.setAttribute("content", color);
+    }
+
+    /** Undo every DOM write this override made. */
+    function releaseDeviceTheme() {
+      if (deviceThemeBaseline === null) return;
+      const baseline = deviceThemeBaseline;
+      deviceThemeBaseline = null;
+      const html = document.documentElement;
+      html.removeAttribute("data-rdsh-device-theme");
+      // Assigning "" removes the declaration, in the DOM and in the stub.
+      html.style.colorScheme = baseline.colorScheme;
+      if (baseline.source === "") delete html.dataset.dsThemeSource;
+      else html.dataset.dsThemeSource = baseline.source;
+      document.body.toggleAttribute("data-ds-dark-theme", baseline.dark);
+      const metas = document.querySelectorAll('meta[name="theme-color"]');
+      const meta = metas.length === 0 ? null : metas[metas.length - 1];
+      if (meta !== null && baseline.themeColor !== "") meta.setAttribute("content", baseline.themeColor);
+    }
+
+    function deviceThemeScheme(mode) {
+      if (mode === "light" || mode === "dark") return mode;
+      if (mode !== "system") return null;
+      try {
+        return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+      } catch (error) {
+        return null;
+      }
+    }
+
+    /**
+     * Paint the stored per-device choice over the shared theme.
+     *
+     * Called at boot, after every `theme/change` (one microtask later, so the
+     * upstream presenter has already written) and when the UI changes the
+     * value. The result is checked on the next frame: if the palette attribute
+     * was reverted or the body colour did not move, the contract is not there
+     * and the override is abandoned for good.
+     */
+    function applyDeviceTheme() {
+      if (typeof document === "undefined" || document.body === null) return;
+      if (deviceThemeBlocked) return;
+      const mode = readDeviceTheme();
+      const html = document.documentElement;
+      if (mode === "") {
+        releaseDeviceTheme();
+        if (state.deviceThemeNote !== "") emit({ deviceThemeNote: "" });
+        return;
+      }
+      // A registered palette supplies its own token layer, which this override
+      // cannot replace: mixing the two produces a page no theme owns.
+      const custom = deviceThemeSnapshot !== null && Object.keys(deviceThemeSnapshot?.active?.tokens ?? {}).length > 0;
+      if (custom) {
+        releaseDeviceTheme();
+        if (state.deviceThemeNote !== "custom") emit({ deviceThemeNote: "custom" });
+        return;
+      }
+      const scheme = deviceThemeScheme(mode);
+      if (scheme === null) {
+        releaseDeviceTheme();
+        return;
+      }
+      captureDeviceBaseline();
+      const dark = scheme === "dark";
+      const before = document.body.hasAttribute("data-ds-dark-theme");
+      const beforePalette = before === dark ? "" : paletteSignature();
+      html.setAttribute("data-rdsh-device-theme", scheme);
+      html.style.colorScheme = scheme;
+      html.dataset.dsThemeSource = scheme;
+      document.body.toggleAttribute("data-ds-dark-theme", dark);
+      paintThemeColor();
+      if (state.deviceThemeNote !== "") emit({ deviceThemeNote: "" });
+      if (before === dark) return;
+      deviceThemeCheck += 1;
+      const token = deviceThemeCheck;
+      const verify = () => {
+        if (token !== deviceThemeCheck || deviceThemeBlocked) return;
+        const lost = document.body.hasAttribute("data-ds-dark-theme") !== dark;
+        const unchanged = beforePalette !== "" && paletteSignature() === beforePalette;
+        if (!lost && !unchanged) {
+          deviceThemeRetries = 0;
+          return;
+        }
+        // A presenter that boots after this plugin writes the shared palette
+        // once; one retry settles that without declaring the contract dead.
+        if (deviceThemeRetries < 2) {
+          deviceThemeRetries += 1;
+          applyDeviceTheme();
+          return;
+        }
+        deviceThemeBlocked = true;
+        releaseDeviceTheme();
+        emit({ deviceThemeNote: "unsupported" });
+      };
+      if (typeof requestAnimationFrame === "function") requestAnimationFrame(verify);
+      else setTimeout(verify, 32);
+    }
+
+    /** Store the choice and repaint. Never writes the shared preference. */
+    function writeDeviceTheme(value) {
+      const next = DEVICE_THEME_MODES.includes(value) ? value : "";
+      try {
+        if (next === "") localStorage.removeItem(DEVICE_THEME_KEY);
+        else localStorage.setItem(DEVICE_THEME_KEY, next);
+      } catch (error) {
+        /* private mode: the choice lasts for this page */
+      }
+      // An explicit choice re-arms a blocked override: the user may have
+      // updated DSH since, and silently ignoring the picker is worse than one
+      // more failed attempt (the frame check re-blocks it immediately).
+      deviceThemeBlocked = false;
+      deviceThemeRetries = 0;
+      deviceThemeCheck += 1;
+      emit({ deviceTheme: next, deviceThemeNote: "" });
+      applyDeviceTheme();
+    }
+
+    /**
+     * Wire the override to the theme service.
+     *
+     * No service (desktop shell without ui-theme, the unit-test stub) means no
+     * shared value to fall back from: leave the DOM alone entirely.
+     */
+    function attachDeviceTheme(ctx) {
+      let service;
+      try {
+        service = typeof ctx.get === "function" ? ctx.get("theme") : undefined;
+      } catch (error) {
+        service = undefined;
+      }
+      if (service === undefined || service === null) return;
+      ctx.effect(() => {
+        try {
+          const snapshot = service.getTheme();
+          if (snapshot !== undefined && snapshot !== null) deviceThemeSnapshot = snapshot;
+        } catch (error) {
+          deviceThemeSnapshot = null;
+        }
+        applyDeviceTheme();
+        if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => applyDeviceTheme());
+        let media = null;
+        try {
+          media = window.matchMedia("(prefers-color-scheme: dark)");
+        } catch (error) {
+          media = null;
+        }
+        const onSystemScheme = () => applyDeviceTheme();
+        media?.addEventListener?.("change", onSystemScheme);
+        const offTheme = ctx.on("theme/change", (snapshot) => {
+          if (snapshot !== undefined && snapshot !== null) deviceThemeSnapshot = snapshot;
+          // The presenter applies synchronously inside its own listener; run
+          // after every listener so the device choice is the one that stands.
+          queueMicrotask(applyDeviceTheme);
+        });
+        return () => {
+          media?.removeEventListener?.("change", onSystemScheme);
+          if (typeof offTheme === "function") offTheme();
+          releaseDeviceTheme();
+        };
+      }, "rdsh-mobile-ux: device theme");
     }
 
     /**
@@ -4003,6 +4239,33 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         h(
           "div",
           { className: "rdsh-mux-card" },
+          h("h3", { className: "rdsh-mux-title" }, "テーマ（この端末だけ）"),
+          h("p", { className: "rdsh-mux-desc" }, "PC と共通のテーマとは別に、このブラウザだけの配色を選べます。選んだ値はこのブラウザに保存され、ほかの端末には影響しません。"),
+          h(
+            "label",
+            { className: "rdsh-mux-slider" },
+            h("span", null, "配色"),
+            h(
+              "select",
+              {
+                className: "rdsh-mux-select",
+                value: s.deviceTheme,
+                onChange: (event) => writeDeviceTheme(event.target.value),
+              },
+              Object.entries(DEVICE_THEME_LABELS).map(([id, label]) => h("option", { key: id, value: id }, label)),
+            ),
+          ),
+          h("p", { className: "rdsh-mux-note" }, "PC と共通のテーマは 設定 → 一般 → 外観 で変わります。ここで選ぶと、この端末だけその上書きになります。"),
+          s.deviceThemeNote === "custom"
+            ? h("p", { className: "rdsh-mux-note" }, "カスタムテーマ（登録テーマ）を使用中のため、この端末だけの上書きは無効です。")
+            : null,
+          s.deviceThemeNote === "unsupported"
+            ? h("p", { className: "rdsh-mux-note" }, "この DSH のバージョンでは端末ごとの配色を適用できませんでした。共有テーマを使用します。")
+            : null,
+        ),
+        h(
+          "div",
+          { className: "rdsh-mux-card" },
           h("h3", { className: "rdsh-mux-title" }, "モバイルUI"),
           h("p", { className: "rdsh-mux-desc" }, "スマホ幅の表示と操作を整えます。設定はこのブラウザに保存されます。"),
           h("p", { className: "rdsh-mux-note" }, "＋ は画像とファイルの添付だけを開きます（コマンドは / から）。"),
@@ -5292,6 +5555,9 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           get state() { return { ...state }; },
           get badgeCount() { return notificationTotal; },
           applyNotificationCount,
+          readDeviceTheme,
+          writeDeviceTheme,
+          applyDeviceTheme,
           build: BUILD,
           autoSettings: true,
           decorate: scheduleDecorate,
@@ -5356,6 +5622,11 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         // Session selection needs the workspace service, which arrives on its
         // own schedule; without it a notification tap can only raise a banner.
         ctx.inject(["uiWorkspace"], (scope) => attachSessionOpener(scope));
+        try {
+          attachDeviceTheme(ctx);
+        } catch (error) {
+          console.error("[rdsh-mobile-ux] device theme failed", error);
+        }
         try {
           boot(ctx);
         } catch (error) {

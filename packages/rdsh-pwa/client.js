@@ -43,9 +43,17 @@ window.__ModuleLoader__.load({
     const ROOT_ATTR = "data-rdsh-pwa";
     const UPDATE_POLL_MS = 30 * 60 * 1000;
     const UPDATE_MIN_GAP_MS = 5 * 60 * 1000;
+    // Phone layout, in one place for both halves of this file.
+    //
+    // Width alone called a landscape phone (852x393, 844x390) a desktop even
+    // though upstream DSH still treats everything below 1024 as narrow, which
+    // left the 768-1023 band hybrid: stock rail on the left, no drawer, no
+    // swipe, no floating button. The second clause covers that orientation
+    // without catching a narrow desktop window (a mouse reports
+    // `pointer: fine`) or a landscape tablet (short side above 500px).
+    const NARROW_QUERY = "(max-width: 767px), (orientation: landscape) and (max-width: 1023px) and (max-height: 500px) and (pointer: coarse)";
     const INSTALL_PROMPT_KEY = "rdsh-pwa:install-prompt-dismissed";
     const INSTALL_PROMPT_SNOOZE_MS = 30 * 24 * 60 * 60 * 1000;
-    const NARROW_QUERY = "(max-width: 767px)";
 
     const STANDALONE_QUERY = "(display-mode: standalone)";
     const FULLSCREEN_QUERY = "(display-mode: fullscreen)";
@@ -80,7 +88,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
 
 /* Phones: keep the toast column clear of the 64px sidebar header, and hang the
    install card on the right so the logo (session list) stays tappable. */
-@media (max-width: 767px) {
+@media ${NARROW_QUERY} {
   .rdsh-pwa-toasts { top: calc(env(safe-area-inset-top, 0px) + 8px); padding-top: 56px; }
   .rdsh-pwa-install { align-self: flex-end; max-width: min(330px, calc(100vw - 24px)); flex-wrap: wrap; row-gap: 8px; }
   .rdsh-pwa-install .rdsh-pwa-card-text { flex: 1 1 100%; }
@@ -893,7 +901,9 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     const useState = React.useState;
     const useEffect = React.useEffect;
 
-    const NARROW_QUERY = "(max-width: 767px)";
+    // Same predicate as the PWA part above: a landscape phone is a phone.
+    // Both halves must agree or the shell and the layout disagree on width.
+    const NARROW_QUERY = "(max-width: 767px), (orientation: landscape) and (max-width: 1023px) and (max-height: 500px) and (pointer: coarse)";
     const HIDE_OVERRIDE_KEY = "rdsh-mobile-ux:hide-disabled";
     const HIDE_EXTRA_KEY = "rdsh-mobile-ux:hide-extra";
     const CONFIG = globalThis.__RDSH_MOBILE_UX_CONFIG__ && typeof globalThis.__RDSH_MOBILE_UX_CONFIG__ === "object"
@@ -964,6 +974,20 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
 
     function narrow() {
       return window.matchMedia(NARROW_QUERY).matches;
+    }
+
+    /**
+     * Is the primary pointer a finger?
+     *
+     * Enter handling keys off this rather than off `narrow()`: a desktop
+     * window dragged narrow is still driven by a keyboard, and losing Enter
+     * there (the stock composer sends on plain Enter) is a real regression.
+     * A tablet in landscape is a phone for gestures but may have a keyboard
+     * attached; `pointer` describes the primary input, which is what the
+     * gesture came from.
+     */
+    function coarsePointer() {
+      return typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches;
     }
 
     const ENTER_TO_SEND_KEY = "rdsh-mobile-ux:enter-to-send";
@@ -1227,6 +1251,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     }
 
     function decorateSessionRows() {
+      rowHooksActive = true;
       for (const row of document.querySelectorAll('[data-row-key^="session:"]')) {
         row.setAttribute("data-rdsh-session", "");
         const children = [...row.children];
@@ -1262,6 +1287,58 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       }
     }
 
+    /** Whether the last pass wrote session-row hooks (so a wide pass is cheap). */
+    let rowHooksActive = false;
+
+    const SESSION_ROW_HOOKS = [
+      "data-rdsh-running",
+      "data-rdsh-ring-row",
+      "data-rdsh-open-row",
+      "data-rdsh-session-frame",
+      "data-rdsh-row-minor",
+      "data-rdsh-row-menu",
+      "data-rdsh-dragging",
+    ];
+
+    /**
+     * Strip every session-row hook.
+     *
+     * Reached when the window widens (or a rotation leaves the phone layout):
+     * the styling is inside the phone query, so the attributes are inert, but
+     * leaving them behind means a later narrow pass starts from another
+     * layout's leftovers, and `[data-rdsh-running]` on a desktop row is a lie
+     * to anything that reads the DOM.
+     */
+    function clearSessionRowHooks() {
+      rowHooksActive = false;
+      for (const attribute of SESSION_ROW_HOOKS) {
+        for (const element of document.querySelectorAll(`[${attribute}]`)) element.removeAttribute(attribute);
+      }
+      for (const element of document.querySelectorAll("[data-rdsh-session], [data-rdsh-status], [data-rdsh-session-title], [data-rdsh-ringed]")) {
+        if (element.hasAttribute("data-rdsh-session")) element.removeAttribute("data-rdsh-session");
+        if (element.hasAttribute("data-rdsh-status")) {
+          element.removeAttribute("data-rdsh-status");
+          element.removeAttribute("data-rdsh-status-empty");
+        }
+        if (element.hasAttribute("data-rdsh-session-title")) element.removeAttribute("data-rdsh-session-title");
+        element.removeAttribute("data-rdsh-ringed");
+      }
+    }
+
+    /**
+     * Strip the other phone-only hooks whose styling lives in the phone query.
+     *
+     * The typing overlay is painted above React's text with the real glyphs
+     * made transparent, so it has to go together with its attributes.
+     */
+    function clearPhoneHooks() {
+      for (const attribute of ["data-rdsh-header-title", "data-rdsh-header-running", "data-rdsh-typing", "data-rdsh-rtab"]) {
+        for (const element of document.querySelectorAll(`[${attribute}]`)) element.removeAttribute(attribute);
+      }
+      for (const layer of document.querySelectorAll("[data-rdsh-typing-layer]")) layer.remove();
+      clearSessionRowHooks();
+    }
+
     function decorateEditCards() {
       for (const element of document.querySelectorAll("[data-rdsh-edit-card]")) element.removeAttribute("data-rdsh-edit-card");
       for (const element of document.querySelectorAll("[data-rdsh-edit-header], [data-rdsh-edit-row]")) {
@@ -1287,11 +1364,44 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     let rightPanelWatch = null;
     let rightPanelIO = null;
 
+    /**
+     * Upstream's own wrapper for the right sidebar.
+     *
+     * Everything below searches inside this subtree only. Without a boundary
+     * the collapse button of a hidden `SessionView` (the full-screen Plugins
+     * and Automation-tasks routes keep one mounted at 0x0) walked up past its
+     * own panel to the app frame, and the frame then looked like an open
+     * panel: the header and the drawer button were hidden by CSS and there was
+     * no way back on a phone.
+     */
+    const RIGHT_PANEL_ROOT = "[data-sidebar-right-panel]";
+
+    /** The collapse button of a panel that is actually laid out. */
+    function visibleCollapseButton() {
+      for (const button of document.querySelectorAll('[aria-label="Collapse right sidebar"]')) {
+        // Visibility is deliberately not part of this: the real panel keeps
+        // its chrome mounted while closed (clipped to a zero-width column and
+        // parked off-screen), and its rect stays non-zero. Only a panel that
+        // never rendered is 0x0.
+        const rect = button.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) continue;
+        if (button.closest(RIGHT_PANEL_ROOT) === null) continue;
+        return button;
+      }
+      return null;
+    }
+
     function syncRightPanelOpen() {
       const panel = rightPanelNode;
-      const open = panel !== null && panel.isConnected
-        && getComputedStyle(panel).visibility !== "hidden"
-        && panel.getBoundingClientRect().width > 0;
+      let open = false;
+      if (panel !== null && panel.isConnected) {
+        // A panel inside a `[hidden]` subtree is upstream saying "another route
+        // owns the screen"; its own box may still measure, so check the host.
+        const host = panel.closest(RIGHT_PANEL_ROOT) ?? panel;
+        open = host.closest("[hidden]") === null
+          && getComputedStyle(panel).visibility !== "hidden"
+          && panel.getBoundingClientRect().width > 0;
+      }
       document.documentElement.toggleAttribute("data-rdsh-rightpanel-open", open);
     }
 
@@ -1306,6 +1416,23 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         rightPanelIO.observe(panel);
       }
       syncRightPanelOpen();
+    }
+
+    /**
+     * Drop every right-panel hook.
+     *
+     * The panel node is replaced when the route or the pane changes, and the
+     * old tag has to go with it: two tagged nodes at once apply the panel's
+     * phone layout (max-width, overflow, padding) to the whole app.
+     */
+    function forgetRightPanel() {
+      for (const node of document.querySelectorAll("[data-rdsh-rightpanel]")) node.removeAttribute("data-rdsh-rightpanel");
+      rightPanelWatch?.disconnect();
+      rightPanelIO?.disconnect();
+      rightPanelWatch = null;
+      rightPanelIO = null;
+      rightPanelNode = null;
+      document.documentElement.removeAttribute("data-rdsh-rightpanel-open");
     }
 
     /**
@@ -1330,19 +1457,48 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     }
 
     function decorateRightPanel() {
-      const collapse = document.querySelector('[aria-label="Collapse right sidebar"]');
-      if (collapse === null) return;
+      const collapse = visibleCollapseButton();
+      if (collapse === null) {
+        // No laid-out panel anywhere: close the state instead of keeping the
+        // last one. A full-screen route (Plugins, Automation tasks) leaves the
+        // chat's panel mounted but unrendered, and a stale "open" hides the
+        // header and the drawer button.
+        if (rightPanelNode !== null) forgetRightPanel();
+        return;
+      }
+      const boundary = collapse.closest(RIGHT_PANEL_ROOT);
       // The panel is the nearest ancestor that already spans the phone (the
       // fullscreen layer), not a hash-named class that changes per release.
       let node = collapse.parentElement;
-      while (node !== null && node !== document.body) {
+      while (node !== null && node !== boundary && node !== document.body) {
         const rect = node.getBoundingClientRect();
         if (rect.width >= window.innerWidth * 0.85 && rect.height >= window.innerHeight * 0.5) {
+          // A rotation changes those thresholds, so the next pass can pick a
+          // different node; exactly one may carry the hook.
+          for (const stale of document.querySelectorAll("[data-rdsh-rightpanel]")) {
+            if (stale !== node) stale.removeAttribute("data-rdsh-rightpanel");
+          }
           node.setAttribute("data-rdsh-rightpanel", "");
           watchRightPanel(node);
           return;
         }
         node = node.parentElement;
+      }
+      if (rightPanelNode !== null) forgetRightPanel();
+    }
+
+    /**
+     * Mark the right panel's tabs.
+     *
+     * dockkit draws them as `[role="tab"][data-dockkit-tab]`; the attribute is
+     * the stable part (the class is hashed per release), and the stylesheet
+     * needs its own hook to size and pan them on a phone. The tap compensation
+     * lives in the pointer handlers below and keys off the same attribute.
+     */
+    function decorateRightPanelTabs() {
+      if (!narrow()) return;
+      for (const tab of document.querySelectorAll('[data-rdsh-rightpanel] [role="tab"][data-dockkit-tab]')) {
+        tab.setAttribute("data-rdsh-rtab", "");
       }
     }
 
@@ -1495,6 +1651,10 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     }
 
     function decorateStatsDock() {
+      // `contextUsedMax` below opens the context panel to read its figures and
+      // closes it again. The probe only hides itself on a phone, so on a wide
+      // screen the panel would flash open on every decorate pass.
+      if (!narrow()) return;
       const dock = document.querySelector("[data-rdsh-composer-dock]");
       if (dock === null) return;
       const buttons = [...dock.querySelectorAll("button")].filter((button) => button.getAttribute("aria-label") !== null);
@@ -2135,6 +2295,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       // lightbox without the crop/safe-area hooks.
       decorateLightbox();
       decorateRightPanel();
+      decorateRightPanelTabs();
       decorateCodePreview();
       decorateQuestionCards();
       decorateTodoPanel();
@@ -2151,7 +2312,11 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       for (const slot of document.querySelectorAll('[data-slot="main.conversation"], [data-slot="conversation"]')) {
         slot.setAttribute("data-rdsh-conversation", "");
       }
-      decorateSessionRows();
+      // Session-row hooks are phone-only (their styling lives inside the phone
+      // query). Leaving them on a wide layout would also leave the attributes
+      // behind for the next narrow pass to mistake for its own.
+      if (narrow()) decorateSessionRows();
+      else if (rowHooksActive) clearSessionRowHooks();
       decorateComposer();
       decorateHeaderActivityChips();
       decorateSidebarSettingsRow();
@@ -2394,6 +2559,9 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     // Session rows: tap opens, long press drags
     // ---------------------------------------------------------------------
     let tapCandidate = null;
+    /** The right panel tab under the finger, for the same replay as a row. */
+    let tabCandidate = null;
+    let tabReplayTimer = 0;
     /** The row whose long press opened its menu, so the release click is eaten. */
     let menuOpenedUntil = 0;
     /** Long-press: held still this long and it opens the row menu. */
@@ -2469,6 +2637,14 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       if (send !== null && send !== undefined && send.disabled !== true && !/stop|停止/i.test(send.getAttribute("aria-label") || "")) {
         markMobileSession();
       }
+      // Right panel tabs: same native-drag problem as the session rows below.
+      // Upstream starts a tab drag after 4px, so a finger that moves slightly
+      // never produces the click that switches tabs.
+      const tab = event.target.closest && event.target.closest("[data-rdsh-rtab]");
+      if (tab !== null && tab !== undefined && event.pointerType !== "mouse") {
+        clearTimeout(tabReplayTimer);
+        tabCandidate = { tab, at: Date.now(), x: event.clientX, y: event.clientY, fired: false };
+      }
       const row = event.target.closest && event.target.closest('[data-row-key^="session:"]');
       if (row === null || row === undefined) return;
       if (event.pointerType === "mouse") return;
@@ -2489,6 +2665,24 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
 
     function onPointerUp(event) {
       cancelLongPress();
+      const tabTap = tabCandidate;
+      if (tabTap !== null) {
+        const moved = Math.abs(event.clientX - tabTap.x) + Math.abs(event.clientY - tabTap.y) > 14;
+        if (moved || Date.now() - tabTap.at > 600) {
+          tabCandidate = null;
+        } else {
+          // One replay, only if the app did not deliver the click itself: a
+          // pointerdown that became a tab drag leaves the active tab unchanged
+          // and the tap would otherwise do nothing at all.
+          clearTimeout(tabReplayTimer);
+          tabReplayTimer = window.setTimeout(() => {
+            if (tabCandidate === tabTap) tabCandidate = null;
+            if (tabTap.fired || !tabTap.tab.isConnected) return;
+            tabTap.fired = true;
+            tabTap.tab.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+          }, 250);
+        }
+      }
       const candidate = tapCandidate;
       if (candidate === null) return;
       tapCandidate = null;
@@ -2563,11 +2757,14 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       const panelOpen = document.documentElement.hasAttribute("data-rdsh-rightpanel-open");
       // While the preview is open, a rightward swipe anywhere on it goes back
       // to the chat, the way a pushed iOS screen does. This is checked before
-      // the edge rules below, which would otherwise return first.
-      if (panelOpen && !drawerOpen) {
+      // the edge rules below, which would otherwise return first. The left
+      // 36px stays the drawer's: a swipe from there is the open-the-session-
+      // list gesture, and letting the preview eat it made the drawer
+      // unreachable whenever the preview happened to be open.
+      if (panelOpen && !drawerOpen && touch.clientX > 36) {
         if (target instanceof Element) {
           if (scrolledLeftAncestor(target) !== null) return;
-          if (target.closest("input, textarea, [contenteditable=true]") !== null) return;
+          if (target.closest("input, textarea, [contenteditable=true], .xterm, [class*='xterm']") !== null) return;
         }
         edgeSwipe = { x: touch.clientX, y: touch.clientY, fromRight: false, closesPanel: true };
         return;
@@ -2587,6 +2784,12 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     }
     function onEdgeSwipeMove(event) {
       if (edgeSwipe === null || event.touches.length !== 1) return;
+      // A rotation can end the phone layout in the middle of a gesture; the
+      // stored start point then belongs to a layout that no longer exists.
+      if (!narrow()) {
+        edgeSwipe = null;
+        return;
+      }
       const touch = event.touches[0];
       const dx = touch.clientX - edgeSwipe.x;
       const dy = touch.clientY - edgeSwipe.y;
@@ -2594,7 +2797,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         if (dx < 64 || Math.abs(dy) > Math.abs(dx)) return;
         edgeSwipe = null;
         if (event.cancelable) event.preventDefault();
-        document.querySelector('[aria-label="Collapse right sidebar"]')?.click();
+        visibleCollapseButton()?.click();
         return;
       }
       if (edgeSwipe.fromRight) {
@@ -2609,7 +2812,28 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       if (event.cancelable) event.preventDefault();
       toggleDrawer();
     }
-    function onEdgeSwipeEnd() { edgeSwipe = null; }
+    /**
+     * Drop the in-flight gestures.
+     *
+     * A rotation (or the keyboard opening) can swallow the `touchend` that
+     * would have cleared these, and a stale start point turns the next
+     * touchmove into a jump-sized swipe: the drawer opens or the preview
+     * closes without a gesture. Also called when the phone layout turns off,
+     * so coordinates from the old layout cannot fire in the new one.
+     */
+    function resetGestures() {
+      edgeSwipe = null;
+      touchStart = null;
+      terminalDrag = null;
+      tapCandidate = null;
+      tabCandidate = null;
+      clearTimeout(tabReplayTimer);
+      cancelLongPress();
+    }
+    function onEdgeSwipeEnd() {
+      edgeSwipe = null;
+      endTerminalDrag();
+    }
 
     // ---------------------------------------------------------------------
     // Input: Enter inserts a newline unless the user opts into sending
@@ -2660,6 +2884,10 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     }
 
     function onKeyDownCapture(event) {
+      // `narrow()` would be wrong here: a narrow desktop window still has a
+      // keyboard, and the stock composer sends on plain Enter. Only a finger
+      // primary pointer gets the phone default (Enter = newline).
+      if (!coarsePointer()) return;
       if (event.key !== "Enter" || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return;
       const editor = composerEditor(event.target);
       if (editor === null) return;
@@ -2687,6 +2915,95 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     // ---------------------------------------------------------------------
     let touchStart = null;
 
+    // ---------------------------------------------------------------------
+    // Terminal: a finger drag becomes a wheel event
+    //
+    // The xterm.js that DSH 0.2.x bundles (6.0.0) has no touch path at all:
+    // `.xterm-viewport` is empty, the screen lives in `.xterm-scrollable-element`
+    // and a VS Code `SmoothScrollableElement` owns the scroll position in JS.
+    // Its only input is `wheel` (xtermjs/xterm.js#5489; the fix, #5563, is
+    // 6.1.0). So a touch drag has to be translated into wheel events rather
+    // than into CSS: there is no DOM scroller to unlock.
+    //
+    // The constants come from `StandardWheelEvent` + the Scrollable it feeds:
+    // a pixel-mode wheel delta is divided by 40 and then multiplied by 50, so
+    // 0.8 wheel-pixels per finger-pixel keeps the text under the finger.
+    // ---------------------------------------------------------------------
+    const XTERM_SCROLLER = ".xterm-scrollable-element";
+    /** Movement before a drag is read as a scroll rather than a tap. */
+    const TERMINAL_SLOP_PX = 4;
+    const TERMINAL_WHEEL_PER_PX = 0.8;
+    /** One event is at most this many pixels, so a jump cannot fling the view. */
+    const TERMINAL_WHEEL_MAX_PX = 32;
+    let terminalDrag = null;
+
+    /** The scrolling node of the terminal under `target`, or null. */
+    function xtermScroller(target) {
+      if (target === null || target === undefined || target.closest === undefined) return null;
+      const terminal = target.closest(".xterm");
+      if (terminal === null) return null;
+      return terminal.querySelector(XTERM_SCROLLER) ?? terminal.querySelector(".xterm-screen") ?? terminal;
+    }
+
+    function startTerminalDrag(event) {
+      if (CONFIG.terminalTouchScroll === false || event.touches.length !== 1) {
+        terminalDrag = null;
+        return;
+      }
+      const scroller = xtermScroller(event.target);
+      if (scroller === null) {
+        terminalDrag = null;
+        return;
+      }
+      const touch = event.touches[0];
+      terminalDrag = { scroller, x: touch.clientX, y: touch.clientY, vertical: false, cancelled: false };
+    }
+
+    /**
+     * Feed one finger movement to the terminal.
+     *
+     * Returns true when this gesture belongs to the terminal, so the caller
+     * leaves the event alone: the bridge has already done the preventDefault
+     * the overscroll guard would otherwise do for the wrong reason.
+     */
+    function moveTerminalDrag(event) {
+      const drag = terminalDrag;
+      if (drag === null || drag.cancelled || event.touches.length !== 1) return false;
+      const touch = event.touches[0];
+      const dy = touch.clientY - drag.y;
+      const dx = touch.clientX - drag.x;
+      if (!drag.vertical) {
+        if (Math.abs(dy) < TERMINAL_SLOP_PX) return true;
+        // A sideways drag is a gesture for something else (the preview's
+        // back-swipe used to claim it); stop tracking instead of scrolling.
+        if (Math.abs(dy) <= Math.abs(dx)) {
+          drag.cancelled = true;
+          return false;
+        }
+        drag.vertical = true;
+      }
+      drag.y = touch.clientY;
+      if (event.cancelable) event.preventDefault();
+      const pixels = Math.max(-TERMINAL_WHEEL_MAX_PX, Math.min(TERMINAL_WHEEL_MAX_PX, dy));
+      // A plain Event, not a WheelEvent: Chrome and Safari put `wheelDeltaY` on
+      // real WheelEvents, and xterm prefers that (120-based) value, which would
+      // make the speed browser-dependent. Without it, the pixel branch applies.
+      const wheel = new Event("wheel", { bubbles: true, cancelable: true });
+      wheel.deltaY = -pixels * TERMINAL_WHEEL_PER_PX;
+      wheel.deltaX = 0;
+      wheel.deltaMode = 0; /* DOM_DELTA_PIXEL */
+      wheel.clientX = touch.clientX;
+      wheel.clientY = touch.clientY;
+      wheel.pageX = touch.clientX;
+      wheel.pageY = touch.clientY;
+      drag.scroller.dispatchEvent(wheel);
+      return true;
+    }
+
+    function endTerminalDrag() {
+      terminalDrag = null;
+    }
+
     function scrollableAncestor(target) {
       let node = target;
       while (node !== null && node !== undefined && node !== document.body) {
@@ -2700,6 +3017,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     }
 
     function onTouchStart(event) {
+      startTerminalDrag(event);
       if (event.touches.length !== 1) {
         touchStart = null;
         return;
@@ -2708,6 +3026,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     }
 
     function onTouchMove(event) {
+      if (moveTerminalDrag(event)) return;
       if (touchStart === null || event.touches.length !== 1) return;
       const touch = event.touches[0];
       const dy = touch.clientY - touchStart.y;
@@ -2715,7 +3034,10 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       touchStart = { y: touch.clientY, x: touch.clientX };
       if (Math.abs(dy) <= Math.abs(dx)) return;
       const target = event.target;
-      if (target !== null && target.closest !== undefined && target.closest("textarea, input")) return;
+      // `.xterm` scrolls through JS, so `scrollableAncestor` never sees it and
+      // the guard below would cancel every vertical drag in the terminal. The
+      // bridge above owns those.
+      if (target !== null && target.closest !== undefined && target.closest("textarea, input, .xterm")) return;
       const scroller = scrollableAncestor(target);
       if (scroller === null) {
         if (event.cancelable) event.preventDefault();
@@ -2815,6 +3137,9 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     function onClickCapture(event) {
       const target = event.target;
       if (target === null || target.closest === undefined) return;
+
+      // The app delivered the tab click itself; the replay must stay cancelled.
+      if (tabCandidate !== null && target.closest("[data-rdsh-rtab]") === tabCandidate.tab) tabCandidate.fired = true;
 
       // xterm's helper textarea is the actual input; a click gesture focusing it
       // asks iOS to show the keyboard.
@@ -3431,6 +3756,9 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     }
 
     function decorateLightbox() {
+      // The crop button and the full-bleed styling are phone affordances: a
+      // desktop viewer keeps its own chrome and its own close button.
+      if (!narrow()) return;
       const dialog = lightboxDialog();
       if (dialog === null) return;
       if (!dialog.hasAttribute("data-rdsh-lightbox")) dialog.setAttribute("data-rdsh-lightbox", "");
@@ -4144,6 +4472,10 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     }
 
     function LiveSpeed({ sessionId }) {
+      // Re-render on media changes (boot emits `narrow`), so the label appears
+      // and disappears with the layout instead of polling on a desktop.
+      const store = useStore();
+      const phone = store.narrow;
       const [speed, setSpeed] = useState(null);
       useEffect(() => {
         currentSessionId = typeof sessionId === "string" && sessionId !== "" ? sessionId : null;
@@ -4152,7 +4484,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         };
       }, [sessionId]);
       useEffect(() => {
-        if (!sessionId) {
+        if (!sessionId || !phone) {
           setSpeed(null);
           return undefined;
         }
@@ -4176,8 +4508,8 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
           active = false;
           window.clearInterval(timer);
         };
-      }, [sessionId]);
-      if (speed === null) return null;
+      }, [sessionId, phone]);
+      if (!phone || speed === null) return null;
       return h("span", {
         className: "rdsh-mux-live-speed",
         title: "出力速度（ストリーム差分からの概算）",
@@ -4212,8 +4544,13 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
   display: none; pointer-events: none;
 }
 .rdsh-mux-fab-badge[data-visible] { display: block; }
-[data-rdsh-session-frame] {
-  box-shadow: inset 0 0 0 2px var(--rdsh-session-frame) !important;
+/* Phones only. A colour frame is a phone affordance (it stands in for the
+   sidebar's activity dot while the drawer is closed); on a wide screen the
+   stock sidebar already shows the session's state. */
+@media ${NARROW_QUERY} {
+  [data-rdsh-session-frame] {
+    box-shadow: inset 0 0 0 2px var(--rdsh-session-frame) !important;
+  }
 }
 .rdsh-frame-menu-item {
   width: 100%; display: flex; align-items: center; gap: 10px;
@@ -4289,26 +4626,29 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
 @keyframes rdsh-mux-pop { from { opacity: 0; transform: translateY(-4px) } to { opacity: 1; transform: none } }
 
 /* Image lightbox: keep the close/crop controls below the camera housing,
-   shrink the image into the remaining safe area, and darken the backdrop. */
-[data-rdsh-lightbox] { background: rgba(0,0,0,.96) !important; }
-[data-rdsh-lightbox] [class*="_mask_"] { background: rgba(0,0,0,.96) !important; }
-[data-rdsh-lightbox] [class*="_close_"] {
-  z-index: 5;
-  top: calc(env(safe-area-inset-top, 0px) + 12px) !important;
-  right: 16px !important;
-  width: 40px !important; height: 40px !important;
-  border-radius: 50% !important;
-  background: rgba(44,44,46,.95) !important;
-}
-[data-rdsh-lightbox] [class*="_image_"] {
-  max-height: calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 104px) !important;
-  max-width: calc(100vw - 24px) !important;
-}
-[data-rdsh-crop-button] {
-  position: absolute; z-index: 5; top: calc(env(safe-area-inset-top, 0px) + 12px); left: 16px;
-  width: 40px; height: 40px; border: 0; border-radius: 50%;
-  background: rgba(44,44,46,.95); color: #f9fafb;
-  display: grid; place-items: center; z-index: 2; padding: 0;
+   shrink the image into the remaining safe area, and darken the backdrop.
+   The viewer is a desktop surface too, so these stay on the phone. */
+@media ${NARROW_QUERY} {
+  [data-rdsh-lightbox] { background: rgba(0,0,0,.96) !important; }
+  [data-rdsh-lightbox] [class*="_mask_"] { background: rgba(0,0,0,.96) !important; }
+  [data-rdsh-lightbox] [class*="_close_"] {
+    z-index: 5;
+    top: calc(env(safe-area-inset-top, 0px) + 12px) !important;
+    right: 16px !important;
+    width: 40px !important; height: 40px !important;
+    border-radius: 50% !important;
+    background: rgba(44,44,46,.95) !important;
+  }
+  [data-rdsh-lightbox] [class*="_image_"] {
+    max-height: calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 104px) !important;
+    max-width: calc(100vw - 24px) !important;
+  }
+  [data-rdsh-crop-button] {
+    position: absolute; z-index: 5; top: calc(env(safe-area-inset-top, 0px) + 12px); left: 16px;
+    width: 40px; height: 40px; border: 0; border-radius: 50%;
+    background: rgba(44,44,46,.95); color: #f9fafb;
+    display: grid; place-items: center; z-index: 2; padding: 0;
+  }
 }
 .rdsh-crop-overlay {
   position: fixed; inset: 0; z-index: 1200;
@@ -4454,6 +4794,13 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
   border: .5px solid var(--dsw-alias-border-l3, rgba(255,255,255,.16));
 }
 
+/* Everything from here to the safe-area block below dresses upstream DOM the
+   phone view rearranges: the running-session animation, the open row's fill,
+   the header sheen, toasts and the typing effect. None of it has a meaning on
+   a desktop sidebar, so it is inside the phone query rather than wrapped
+   around it. The body is not re-indented: this is a scope change, and keeping
+   the lines untouched keeps the review to the two braces. */
+@media ${NARROW_QUERY} {
 /* Running session: animate the label itself, never the whole row. */
 html:not([data-rdsh-anim="none"]) [data-rdsh-running] [data-rdsh-status] { display: none !important; }
 [data-rdsh-running] [data-rdsh-session-title] {
@@ -4675,6 +5022,7 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   [data-rdsh-running] [data-rdsh-session-title]::after { animation: none }
   html[data-rdsh-anim="breathing"] [data-rdsh-running] [data-rdsh-session-title] { animation: none; color: var(--dsw-alias-label-primary, #f9fafb) }
 }
+}
 
 /* Safe-area insets measured at runtime: apply them even when the browser's
    display-mode query does not report standalone (iOS home-screen apps). */
@@ -4684,7 +5032,7 @@ html[data-rdsh-safe-bottom] #root { box-sizing: border-box; padding-bottom: env(
    below the web view, so an inner bottom safe-area pad only widens the blank. */
 html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !important; }
 
-@media (max-width: 767px) {
+@media ${NARROW_QUERY} {
   /* The mockup proved 100% is the layout viewport (844) while the native web
      view is 797 on iOS 26; the body could pan 47px. 100dvh is the web view
      height, and the grid makes the app fill exactly that one row. */
@@ -5120,6 +5468,11 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
     font-size: 16px !important;
     touch-action: manipulation;
   }
+  /* The bundled xterm 6.0 has no touch path and scrolls only on wheel events,
+     so the JS bridge owns the gesture. Keep the browser from claiming the drag
+     as a pan/zoom before the touchmove handler sees it. (This alone cannot
+     make the terminal scroll: there is no scrollable node behind it.) */
+  .xterm, .xterm .xterm-screen, .xterm .xterm-scrollable-element { touch-action: none; }
 
   /* Edit summary: tighter rows. */
   [data-rdsh-edit-header] { height: 44px !important; min-height: 44px !important; padding: 4px 10px !important; }
@@ -5150,6 +5503,39 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
   html[data-rdsh-rightpanel-open] header[data-rdsh-header] { display: none !important; }
   [data-rdsh-rightpanel] table { display: block; overflow-x: auto; max-width: 100%; }
   [data-rdsh-rightpanel] pre { max-width: 100%; }
+
+  /* Right panel tabs (dockkit's file/preview strip).
+     Upstream builds them for a mouse: 28px tall, with touch-action:none (which
+     makes the strip unscrollable by finger, so tabs past the right edge are
+     unreachable), and a drag threshold of 4px on every pointerdown, which
+     turns an ordinary tap into a tab drag. Give the row a finger-sized height,
+     let a tap stay a tap, and let the strip pan sideways. Drag-and-drop of tabs
+     is therefore mouse-only; nothing in this layout needs it. */
+  [data-rdsh-rightpanel] [data-dockkit-tab] {
+    height: 44px !important;
+    min-width: 88px !important;
+    max-width: 58vw !important;
+    touch-action: manipulation !important;
+  }
+  [data-rdsh-rightpanel] [data-dockkit-strip] { min-height: 52px; }
+  [data-rdsh-rightpanel] [data-dockkit-strip-tabs] {
+    touch-action: pan-x !important;
+    scroll-behavior: auto !important;
+    -webkit-overflow-scrolling: touch;
+  }
+  /* The close button is hover-only upstream; a phone has no hover, so it took
+     the top-right of the tap target without ever being visible. Show it on the
+     selected tab only, and keep it out of the tab's own tap area. */
+  [data-rdsh-rightpanel] [data-dockkit-tab-close] { display: none !important; }
+  [data-rdsh-rightpanel] [data-dockkit-tab][aria-selected="true"] [data-dockkit-tab-close] {
+    display: flex !important;
+    opacity: 1 !important;
+    pointer-events: auto !important;
+  }
+  /* Selected tab needs to read as selected without the hover colour shift. */
+  [data-rdsh-rtab][aria-selected="true"] {
+    box-shadow: inset 0 -2px 0 var(--dsw-alias-brand-primary-new-color, #4d6bfe);
+  }
 
   /* Code files: wrap every line, including a single long token (URLs,
      minified lines). Wrapping only at spaces left those overflowing, which
@@ -5198,7 +5584,11 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         document.documentElement.setAttribute("data-rdsh-anim", ANIMATION);
 
         const observer = new MutationObserver(scheduleDecorate);
-        observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["aria-label", "aria-selected", "data-state", "draggable"] });
+        // `data-sidebar-collapsed` / `data-rightbar-collapsed` are upstream's
+        // own open/close signals on the app frame. They change without a
+        // resize when the user toggles a sidebar, so without them the drawer
+        // and right-panel state only caught up on the next unrelated mutation.
+        observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["aria-label", "aria-selected", "data-state", "draggable", "data-sidebar-collapsed", "data-rightbar-collapsed"] });
 
         document.addEventListener("pointerdown", onPointerDown, true);
         document.addEventListener("pointermove", onPointerMove, true);
@@ -5219,13 +5609,30 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         document.addEventListener("touchstart", onTouchStart, { capture: true, passive: true });
         document.addEventListener("touchmove", onTouchMove, { capture: true, passive: false });
         measureSafeArea();
+        // A rotation changes both the query and the geometry, and iOS reports
+        // the new safe-area insets a frame or two after the event. Re-measure,
+        // forget the gestures that were in flight, and decorate twice: once
+        // now (so the drawer/button state follows the new width) and once
+        // after the transition has settled.
+        let rotationTimer = 0;
         const onResize = () => {
           // Do not close the attach sheet here: opening it blurs the composer,
           // and the resulting keyboard-close resize would remove it instantly.
+          resetGestures();
           measureSafeArea();
+          scheduleDecorate();
+          clearTimeout(rotationTimer);
+          rotationTimer = window.setTimeout(() => {
+            measureSafeArea();
+            scheduleDecorate();
+          }, 350);
         };
         window.addEventListener("resize", onResize);
         window.addEventListener("orientationchange", onResize);
+        // The visual viewport reports the keyboard and the rotation's own
+        // resize; without it an iPhone keyboard can leave the layout sized for
+        // the covered viewport.
+        window.visualViewport?.addEventListener("resize", onResize);
         patchCommandUi(ctx);
         document.addEventListener("dragstart", onDragStartCapture, true);
         document.addEventListener("dragend", onDragEndCapture, true);
@@ -5245,6 +5652,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         const media = window.matchMedia(NARROW_QUERY);
         const onMedia = () => {
           emit({ narrow: media.matches });
+          if (!media.matches) clearPhoneHooks();
           scheduleDecorate();
         };
         media.addEventListener("change", onMedia);
@@ -5276,6 +5684,8 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           document.removeEventListener("touchmove", onTouchMove, true);
           window.removeEventListener("resize", onResize);
           window.removeEventListener("orientationchange", onResize);
+          window.visualViewport?.removeEventListener("resize", onResize);
+          clearTimeout(rotationTimer);
           document.removeEventListener("dragstart", onDragStartCapture, true);
           document.removeEventListener("dragend", onDragEndCapture, true);
           document.removeEventListener("dblclick", onSessionTitleDoubleClick, true);

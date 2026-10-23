@@ -97,7 +97,13 @@ function element() {
 	});
 }
 
-test("the browser module registers and boots without a ReferenceError", () => {
+/**
+ * Evaluate the bundle in a stub browser and run the plugin's `apply`.
+ *
+ * `narrow` answers the phone-width media query, `configureDocument` lets a test
+ * wire up the few DOM nodes it cares about, and `schedule` replaces setTimeout.
+ */
+function bootClient({ narrow = false, configureDocument = () => {}, schedule = () => 0 } = {}) {
 	let definition;
 	const sandbox = {
 		window: {
@@ -117,16 +123,17 @@ test("the browser module registers and boots without a ReferenceError", () => {
 			doc.documentElement = element();
 			doc.createElement = () => element();
 			doc.styleSheets = [];
+			configureDocument(doc);
 			return doc;
 		})(),
 		navigator: stub(),
 		location: stub(),
 		localStorage: stub(),
 		sessionStorage: stub(),
-		matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
+		matchMedia: (query) => ({ matches: narrow && query === "(max-width: 767px)", addEventListener() {}, removeEventListener() {} }),
 		addEventListener() {},
 		removeEventListener() {},
-		setTimeout: () => 0,
+		setTimeout: schedule,
 		clearTimeout() {},
 		setInterval: () => 0,
 		clearInterval() {},
@@ -190,12 +197,8 @@ test("the browser module registers and boots without a ReferenceError", () => {
 	sandbox.window.innerHeight = 844;
 	vm.createContext(sandbox);
 
-	assert.doesNotThrow(() => {
-		vm.runInContext(CLIENT, sandbox, { filename: "client.js" });
-	}, "the module body must evaluate");
-
+	vm.runInContext(CLIENT, sandbox, { filename: "client.js" });
 	assert.ok(definition !== undefined, "the module registered itself");
-	assert.equal(definition.id, "rdsh-pwa");
 
 	const plugin = definition.factory((name) => stub());
 	assert.equal(typeof plugin.apply, "function", "the module returns a plugin");
@@ -219,5 +222,65 @@ test("the browser module registers and boots without a ReferenceError", () => {
 		get: () => undefined,
 		on: () => () => {},
 	};
-	assert.doesNotThrow(() => plugin.apply(ctx), "apply must not throw a ReferenceError");
+	plugin.apply(ctx);
+	return { definition, sandbox };
+}
+
+test("the browser module registers and boots without a ReferenceError", () => {
+	let booted;
+	assert.doesNotThrow(() => {
+		booted = bootClient();
+	}, "the module body must evaluate and apply must not throw a ReferenceError");
+	assert.equal(booted.definition.id, "rdsh-pwa");
+});
+
+/**
+ * Boot the client with an open drawer, tap a button carrying `label`, and say
+ * whether the drawer's own collapse button was pressed once timers settled.
+ */
+function drawerClosedAfterTapping(label, { narrow = true } = {}) {
+	const timers = [];
+	const clickHandlers = [];
+	let collapsePresses = 0;
+	const collapse = element();
+	collapse.click = () => {
+		collapsePresses += 1;
+	};
+	const drawerFrame = element();
+	const root = element();
+	root.firstElementChild = { firstElementChild: drawerFrame };
+
+	bootClient({
+		narrow,
+		schedule: (callback) => timers.push(callback),
+		configureDocument(doc) {
+			doc.getElementById = (id) => (id === "root" ? root : null);
+			doc.querySelector = (selector) => (selector === '[aria-label="Collapse sidebar"]' ? collapse : null);
+			doc.addEventListener = (type, handler) => {
+				if (type === "click") clickHandlers.push(handler);
+			};
+		},
+	});
+	assert.equal(clickHandlers.length, 1, "the client listens for clicks once");
+	timers.length = 0;
+
+	const button = element();
+	button.setAttribute("aria-label", label);
+	const target = { closest: (selector) => (selector === "button[aria-label]" ? button : null) };
+	clickHandlers[0]({ target, preventDefault() {}, stopImmediatePropagation() {} });
+	for (const callback of timers.splice(0)) callback();
+	return collapsePresses === 1;
+}
+
+test("tapping a New session button on a phone closes the drawer", () => {
+	assert.equal(drawerClosedAfterTapping("New session"), true, "sidebar button");
+	assert.equal(drawerClosedAfterTapping("New session in my-repo"), true, "workspace button");
+	assert.equal(drawerClosedAfterTapping("新建会话"), true, "zh sidebar button");
+	assert.equal(drawerClosedAfterTapping("在“my-repo”中新建会话"), true, "zh workspace button");
+});
+
+test("other buttons leave the drawer open, and so does a wide screen", () => {
+	assert.equal(drawerClosedAfterTapping("Plugins"), false);
+	assert.equal(drawerClosedAfterTapping("Session actions"), false);
+	assert.equal(drawerClosedAfterTapping("New session", { narrow: false }), false);
 });

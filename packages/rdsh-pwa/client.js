@@ -2845,6 +2845,95 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     // ---------------------------------------------------------------------
     let touchStart = null;
 
+    // ---------------------------------------------------------------------
+    // Terminal: a finger drag becomes a wheel event
+    //
+    // The xterm.js that DSH 0.2.x bundles (6.0.0) has no touch path at all:
+    // `.xterm-viewport` is empty, the screen lives in `.xterm-scrollable-element`
+    // and a VS Code `SmoothScrollableElement` owns the scroll position in JS.
+    // Its only input is `wheel` (xtermjs/xterm.js#5489; the fix, #5563, is
+    // 6.1.0). So a touch drag has to be translated into wheel events rather
+    // than into CSS: there is no DOM scroller to unlock.
+    //
+    // The constants come from `StandardWheelEvent` + the Scrollable it feeds:
+    // a pixel-mode wheel delta is divided by 40 and then multiplied by 50, so
+    // 0.8 wheel-pixels per finger-pixel keeps the text under the finger.
+    // ---------------------------------------------------------------------
+    const XTERM_SCROLLER = ".xterm-scrollable-element";
+    /** Movement before a drag is read as a scroll rather than a tap. */
+    const TERMINAL_SLOP_PX = 4;
+    const TERMINAL_WHEEL_PER_PX = 0.8;
+    /** One event is at most this many pixels, so a jump cannot fling the view. */
+    const TERMINAL_WHEEL_MAX_PX = 32;
+    let terminalDrag = null;
+
+    /** The scrolling node of the terminal under `target`, or null. */
+    function xtermScroller(target) {
+      if (target === null || target === undefined || target.closest === undefined) return null;
+      const terminal = target.closest(".xterm");
+      if (terminal === null) return null;
+      return terminal.querySelector(XTERM_SCROLLER) ?? terminal.querySelector(".xterm-screen") ?? terminal;
+    }
+
+    function startTerminalDrag(event) {
+      if (CONFIG.terminalTouchScroll === false || event.touches.length !== 1) {
+        terminalDrag = null;
+        return;
+      }
+      const scroller = xtermScroller(event.target);
+      if (scroller === null) {
+        terminalDrag = null;
+        return;
+      }
+      const touch = event.touches[0];
+      terminalDrag = { scroller, x: touch.clientX, y: touch.clientY, vertical: false, cancelled: false };
+    }
+
+    /**
+     * Feed one finger movement to the terminal.
+     *
+     * Returns true when this gesture belongs to the terminal, so the caller
+     * leaves the event alone: the bridge has already done the preventDefault
+     * the overscroll guard would otherwise do for the wrong reason.
+     */
+    function moveTerminalDrag(event) {
+      const drag = terminalDrag;
+      if (drag === null || drag.cancelled || event.touches.length !== 1) return false;
+      const touch = event.touches[0];
+      const dy = touch.clientY - drag.y;
+      const dx = touch.clientX - drag.x;
+      if (!drag.vertical) {
+        if (Math.abs(dy) < TERMINAL_SLOP_PX) return true;
+        // A sideways drag is a gesture for something else (the preview's
+        // back-swipe used to claim it); stop tracking instead of scrolling.
+        if (Math.abs(dy) <= Math.abs(dx)) {
+          drag.cancelled = true;
+          return false;
+        }
+        drag.vertical = true;
+      }
+      drag.y = touch.clientY;
+      if (event.cancelable) event.preventDefault();
+      const pixels = Math.max(-TERMINAL_WHEEL_MAX_PX, Math.min(TERMINAL_WHEEL_MAX_PX, dy));
+      // A plain Event, not a WheelEvent: Chrome and Safari put `wheelDeltaY` on
+      // real WheelEvents, and xterm prefers that (120-based) value, which would
+      // make the speed browser-dependent. Without it, the pixel branch applies.
+      const wheel = new Event("wheel", { bubbles: true, cancelable: true });
+      wheel.deltaY = -pixels * TERMINAL_WHEEL_PER_PX;
+      wheel.deltaX = 0;
+      wheel.deltaMode = 0; /* DOM_DELTA_PIXEL */
+      wheel.clientX = touch.clientX;
+      wheel.clientY = touch.clientY;
+      wheel.pageX = touch.clientX;
+      wheel.pageY = touch.clientY;
+      drag.scroller.dispatchEvent(wheel);
+      return true;
+    }
+
+    function endTerminalDrag() {
+      terminalDrag = null;
+    }
+
     function scrollableAncestor(target) {
       let node = target;
       while (node !== null && node !== undefined && node !== document.body) {
@@ -2858,6 +2947,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     }
 
     function onTouchStart(event) {
+      startTerminalDrag(event);
       if (event.touches.length !== 1) {
         touchStart = null;
         return;
@@ -2866,6 +2956,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     }
 
     function onTouchMove(event) {
+      if (moveTerminalDrag(event)) return;
       if (touchStart === null || event.touches.length !== 1) return;
       const touch = event.touches[0];
       const dy = touch.clientY - touchStart.y;
@@ -2873,7 +2964,10 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       touchStart = { y: touch.clientY, x: touch.clientX };
       if (Math.abs(dy) <= Math.abs(dx)) return;
       const target = event.target;
-      if (target !== null && target.closest !== undefined && target.closest("textarea, input")) return;
+      // `.xterm` scrolls through JS, so `scrollableAncestor` never sees it and
+      // the guard below would cancel every vertical drag in the terminal. The
+      // bridge above owns those.
+      if (target !== null && target.closest !== undefined && target.closest("textarea, input, .xterm")) return;
       const scroller = scrollableAncestor(target);
       if (scroller === null) {
         if (event.cancelable) event.preventDefault();
@@ -5301,6 +5395,11 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
     font-size: 16px !important;
     touch-action: manipulation;
   }
+  /* The bundled xterm 6.0 has no touch path and scrolls only on wheel events,
+     so the JS bridge owns the gesture. Keep the browser from claiming the drag
+     as a pan/zoom before the touchmove handler sees it. (This alone cannot
+     make the terminal scroll: there is no scrollable node behind it.) */
+  .xterm, .xterm .xterm-screen, .xterm .xterm-scrollable-element { touch-action: none; }
 
   /* Edit summary: tighter rows. */
   [data-rdsh-edit-header] { height: 44px !important; min-height: 44px !important; padding: 4px 10px !important; }

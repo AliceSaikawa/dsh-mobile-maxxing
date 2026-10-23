@@ -8,6 +8,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { apply, buildManifest, decorateIndex, normalizeConfig } from "../index.js";
+import { COPY } from "../lib/copy.js";
 
 /**
  * A context good enough to mount the plugin.
@@ -151,6 +152,36 @@ test("index decoration adds iOS metadata and an edge-to-edge viewport", () => {
 	assert.ok(html.includes("initial-scale=1"), "existing viewport parts survive");
 });
 
+test("manifest copy follows the dictionary, not the old hard-coded Japanese", () => {
+	const manifest = buildManifest({});
+	assert.equal(manifest.lang, "en", "the document is served in en");
+	assert.equal(manifest.description, COPY.en["manifest.description"]);
+	assert.deepEqual(manifest.screenshots.map((shot) => shot.label), [
+		COPY.en["manifest.screenshot.chat"],
+		COPY.en["manifest.screenshot.desktop"],
+	]);
+	// ja exists as a pack slot but has no strings yet, so it falls back to en.
+	const japanese = buildManifest({ lang: "ja" });
+	assert.equal(japanese.lang, "ja");
+	assert.equal(japanese.description, COPY.en["manifest.description"]);
+	// An unknown language is not accepted: manifest and copy would disagree.
+	assert.equal(buildManifest({ lang: "xx" }).lang, "en");
+});
+
+test("index decoration injects the dictionary and the label probes", () => {
+	const html = decorateIndex(INDEX, {});
+	assert.ok(html.includes("__RDSH_PWA_COPY__="), "the browser half needs the copy table");
+	assert.ok(html.includes("__RDSH_PWA_PROBES__="), "label matching needs every known locale");
+	const script = /<script>globalThis\.__RDSH_PWA_COPY__=(.*?);globalThis\.__RDSH_PWA_PROBES__=(.*?)<\/script>/.exec(html);
+	assert.ok(script !== null, "one inline script carries both");
+	const copy = JSON.parse(script[1].replaceAll("\\u003c", "<"));
+	const probes = JSON.parse(script[2].replaceAll("\\u003c", "<"));
+	assert.equal(copy.en["tab.mobile"], "Mobile");
+	assert.deepEqual(copy.ja, {}, "ja is a pack slot, not a translation");
+	assert.ok(probes.actions.includes("操作"), "probes stay bilingual");
+	assert.ok(!html.includes("</script><script>globalThis.__RDSH_PWA_COPY__"), "no raw tag break");
+});
+
 test("index decoration is idempotent", () => {
 	const once = decorateIndex(INDEX, {});
 	const twice = decorateIndex(once, {});
@@ -233,6 +264,10 @@ test("the worker injects the configured navigation timeout", async () => {
 	const worker = await call(routes.get("/sw.js"));
 	assert.match(worker.text, /"navigationTimeoutMs":2500/);
 	assert.match(worker.text, /self\.__RDSH_PWA_CONFIG__=/);
+	// The offline page and push defaults are rendered by the worker, so its
+	// copy travels in the same config header.
+	assert.match(worker.text, /"lang":"en"/);
+	assert.match(worker.text, /"sw\.offlineHeading":"You're offline"/);
 });
 
 test("routes reject methods they do not own", async () => {

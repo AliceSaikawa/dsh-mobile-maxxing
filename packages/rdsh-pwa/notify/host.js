@@ -27,6 +27,7 @@ import {
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { copyFor } from "../lib/copy.js";
 
 /** How long a push stays queued when the phone is offline. */
 const PUSH_TTL_SECONDS = 600;
@@ -248,6 +249,8 @@ export async function sendWebPush(subscription, payload, { keys, subject }) {
 export const NOTIFY_DEFAULTS = {
 	/** Prefix exposed as `{app}`; "" drops it. */
 	appName: "DSH",
+	/** Language the payload copy is rendered in. */
+	lang: "en",
 	/** VAPID contact. "" means "use the app's own origin". */
 	subject: "",
 	/** Only tell the phone about turns the phone itself started. */
@@ -273,18 +276,27 @@ export function fillTemplate(template, values) {
 	return String(template).replace(/\{(\w+)\}/g, (match, key) => (key in values ? String(values[key]) : match));
 }
 
+/** Fill `{name}` tokens and tolerate a missing dictionary entry. */
+function fillCopy(template, values) {
+	return typeof template === "string" ? fillTemplate(template, values) : "";
+}
+
+/** The dictionary for one payload, defaulting to English. */
+function stringsFor(context) {
+	return copyFor(typeof context?.lang === "string" ? context.lang : "en");
+}
+
 /** Title for a turn-end notification. */
 export function buildTurnEndPayload(sessionId, reason, context = {}) {
 	const kind = typeof reason?.kind === "string" ? reason.kind : "unknown";
-	const statuses = {
-		completed: "作業完了",
-		"max-tokens": "作業完了 (トークン上限)",
-		blocked: "停止 (拒否されました)",
-		error: "エラーで停止",
-		aborted: "停止 (中断)",
-	};
-	const status = statuses[kind] ?? `ターン終了 (${kind})`;
-	const detail = kind === "completed" ? "作業が完了しました。" : `終了理由: ${kind}`;
+	const strings = stringsFor(context);
+	const status = fillCopy(
+		strings[`notify.turn.${kind}`] ?? strings["notify.turn.other"],
+		{ kind },
+	);
+	const detail = kind === "completed"
+		? strings["notify.turn.detailCompleted"]
+		: fillCopy(strings["notify.turn.detailReason"], { kind });
 	const copy = context.copy ?? NOTIFY_DEFAULTS;
 	const values = {
 		app: copy.appName,
@@ -308,9 +320,12 @@ export function buildTurnEndPayload(sessionId, reason, context = {}) {
 export function buildQuestionPayload(request, context = {}) {
 	const questions = Array.isArray(request?.questions) ? request.questions : [];
 	const first = questions[0] ?? {};
-	const header = typeof first.header === "string" && first.header !== "" ? first.header : "確認";
+	const strings = stringsFor(context);
+	const header = typeof first.header === "string" && first.header !== "" ? first.header : strings["notify.questionHeader"];
 	const question = typeof first.question === "string" ? first.question : "";
-	const count = questions.length > 1 ? `（他 ${questions.length - 1} 件）` : "";
+	const count = questions.length > 1
+		? fillCopy(strings["notify.questionMore"], { count: questions.length - 1 })
+		: "";
 	const copy = context.copy ?? NOTIFY_DEFAULTS;
 	const values = {
 		app: copy.appName,
@@ -661,6 +676,7 @@ export function applyNotify(ctx, config) {
 			if (agent === undefined || !agents.roots().includes(agent)) return;
 			void fanOut(buildTurnEndPayload(session.id, event.data?.reason, {
 				copy,
+				lang: copy.lang,
 				session: sessionNameOf(ctx, session),
 			})).catch((error) => {
 				console.error("[rdsh-pwa] turn-end push failed", error);
@@ -674,6 +690,7 @@ export function applyNotify(ctx, config) {
 				const asking = request?.agent?.session;
 				void fanOut(buildQuestionPayload(request, {
 					copy,
+					lang: copy.lang,
 					session: asking === undefined ? "" : sessionNameOf(ctx, asking),
 				})).catch((error) => {
 					console.error("[rdsh-pwa] question push failed", error);
@@ -780,6 +797,7 @@ export function applyNotify(ctx, config) {
 					// Answers "what would you send?" without sending anything.
 					const url = new URL(req.url ?? "/", "http://127.0.0.1");
 					const sessionId = url.searchParams.get("sessionId") ?? "";
+					const previewStrings = copyFor(copy.lang);
 					const agents = ctx.get("agents");
 					const session = sessionId === "" ? undefined : agents?.get(sessionId)?.session;
 					const name = session === undefined ? "" : sessionNameOf(ctx, session);
@@ -789,8 +807,14 @@ export function applyNotify(ctx, config) {
 						sessionName: name,
 						copy,
 						subject: store.subject(copy.subject),
-						turnEnd: buildTurnEndPayload(sessionId, { kind: "completed" }, { copy, session: name }),
-						question: buildQuestionPayload({ agent: { id: sessionId }, questions: [{ header: "確認", question: "このまま進めますか？" }] }, { copy, session: name }),
+						turnEnd: buildTurnEndPayload(sessionId, { kind: "completed" }, { copy, lang: copy.lang, session: name }),
+						question: buildQuestionPayload({
+							agent: { id: sessionId },
+							questions: [{
+								header: previewStrings["notify.questionHeader"],
+								question: previewStrings["notify.previewQuestion"],
+							}],
+						}, { copy, lang: copy.lang, session: name }),
 					});
 				},
 			},
@@ -806,7 +830,13 @@ export function applyNotify(ctx, config) {
 					}
 					const body = await readJsonBody(req);
 					const sessionId = typeof body.sessionId === "string" ? body.sessionId : "";
-					const result = await fanOut(makePayload(sessionId, "test", "DSH テスト通知", "タップするとこのセッションが開きます。"));
+					const strings = copyFor(copy.lang);
+					const result = await fanOut(makePayload(
+						sessionId,
+						"test",
+						strings["notify.testTitle"],
+						strings["notify.testPayloadBody"],
+					));
 					json(res, 200, { ok: result.ok, ...result, count: store.subscriptions().length });
 				},
 			},

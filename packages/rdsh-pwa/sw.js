@@ -19,6 +19,11 @@
 const BUILD = typeof self.__RDSH_PWA_BUILD__ === "string" ? self.__RDSH_PWA_BUILD__ : "dev";
 const CONFIG = (self.__RDSH_PWA_CONFIG__ && typeof self.__RDSH_PWA_CONFIG__ === "object" ? self.__RDSH_PWA_CONFIG__ : {});
 const NAVIGATION_TIMEOUT_MS = Number.isFinite(CONFIG.navigationTimeoutMs) ? CONFIG.navigationTimeoutMs : 1500;
+// UI copy comes from the host's dictionary; the English fallbacks keep this
+// worker usable when it is loaded outside the plugin (dev, tests).
+const COPY = CONFIG.copy && typeof CONFIG.copy === "object" ? CONFIG.copy : {};
+const DOCUMENT_LANG = typeof CONFIG.lang === "string" ? CONFIG.lang.replace(/[^A-Za-z0-9-]/g, "") || "en" : "en";
+const copy = (key, fallback) => (typeof COPY[key] === "string" && COPY[key] !== "" ? COPY[key] : fallback);
 const CACHE_PREFIX = "rdsh-pwa-";
 const CACHE_NAME = CACHE_PREFIX + BUILD;
 const MAX_STATIC_ENTRIES = 250;
@@ -35,9 +40,9 @@ const STATIC_FILES = new Set(["favicon.svg", "favicon-dark.svg", "manifest.webma
 const BYPASS_SEGMENTS = ["/api", "/hmr", "/terminal", "/__"];
 
 const OFFLINE_HTML = `<!doctype html>
-<html lang="ja"><head><meta charset="utf-8">
+<html lang="${DOCUMENT_LANG}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>オフライン — DSH</title>
+<title>${copy("sw.documentTitle", "Offline — DSH")}</title>
 <style>
 :root{color-scheme:dark}
 html,body{height:100%}
@@ -52,9 +57,9 @@ button{font:inherit;font-size:14px;padding:10px 18px;border-radius:999px;border:
 button:active{transform:scale(.98)}
 </style></head>
 <body><main>
-<h1>オフラインです</h1>
-<p>DSH のサーバーに接続できませんでした。<br>ネットワーク接続を確認してください。</p>
-<button onclick="location.reload()">再試行</button>
+<h1>${copy("sw.offlineHeading", "You're offline")}</h1>
+<p>${copy("sw.offlineBody1", "Could not reach the DSH server.")}<br>${copy("sw.offlineBody2", "Check your network connection.")}</p>
+<button onclick="location.reload()">${copy("sw.retry", "Retry")}</button>
 </main></body></html>`;
 
 function isBypassed(url) {
@@ -209,7 +214,13 @@ self.addEventListener("fetch", (event) => {
  * already open across an upgrade.
  */
 function pushPayload(event) {
-	const payload = { title: "DSH", body: "新しい通知があります", url: "./", sessionId: "", kind: "notice" };
+	const payload = {
+		title: copy("sw.pushTitle", "DSH"),
+		body: copy("sw.pushBody", "You have a new notification"),
+		url: "./",
+		sessionId: "",
+		kind: "notice",
+	};
 	try {
 		const data = event.data === null ? null : event.data.json();
 		if (data !== null && typeof data === "object") {
@@ -281,7 +292,7 @@ self.addEventListener("push", (event) => {
 			renotify: true,
 			requireInteraction: true,
 			data: { url: payload.url, sessionId: payload.sessionId },
-			actions: [{ action: "open", title: "開く" }],
+			actions: [{ action: "open", title: copy("sw.open", "Open") }],
 		});
 	})());
 });

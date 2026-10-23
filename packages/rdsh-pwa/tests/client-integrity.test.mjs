@@ -179,3 +179,52 @@ test("no data attribute is styled without ever being written", () => {
 	}
 	assert.deepEqual(missing, [], "styled but never written");
 });
+
+/** The source of one top-level helper, from its declaration to its closing brace. */
+function helperBody(name) {
+	const start = CLIENT.indexOf(`function ${name}(`);
+	assert.notEqual(start, -1, `${name} exists`);
+	const close = CLIENT.indexOf("\n    }\n", start);
+	return CLIENT.slice(start, close === -1 ? undefined : close);
+}
+
+test("the context meter reads the projection instead of opening the popover", () => {
+	// #13: a real click opened the popover for about 80ms on every update, and
+	// the rule that hid it only lived inside the phone media query, so a
+	// settings modal flickered on desktop too.
+	assert.equal(/data-rdsh-context-probe/.test(CLIENT), false, "the probe attribute and its rule are gone");
+	const meter = helperBody("contextUsageText");
+	assert.equal(/\.click\(/.test(meter), false, "reading the meter must not click the button");
+	assert.match(meter, /projectionValues\(/, "the figures come from the Session projection");
+	assert.match(meter, /contextPressure/);
+	assert.match(meter, /pressureTokens/, "the same numerator the upstream panel uses");
+});
+
+test("the transcript keeps its column tag on every pass", () => {
+	// #14: the tag itself sets the 16px gutters, so the "24px or more"
+	// heuristic can never hold again — a second decorate dropped the column.
+	const body = helperBody("decorateTranscript");
+	assert.match(body, /hasAttribute\("data-rdsh-transcript"\)/, "an already tagged node short-circuits the heuristic");
+	assert.match(body, /data-rdsh-transcript-column/);
+});
+
+test("the question card fills the composer gutter and pads only its own children", () => {
+	// #8: 349px was the transcript's old fixed column, and partial class
+	// matches (`_option` → `_optionCopy`, `_footer` → `_footerActions`) stacked
+	// the same padding four levels deep.
+	assert.equal(/width:\s*349px/.test(CLIENT), false, "no fixed column width is left");
+	assert.match(CLIENT, /\[data-rdsh-question-frame\] > \[data-rdsh-question-card\] \{[^}]*max-width: 100% !important/);
+	assert.match(CLIENT, /\[data-rdsh-question-card\] > \[class\*="_header"\]/);
+	assert.match(CLIENT, /\[data-rdsh-question-card\] > \[class\*="_footer"\]/);
+	assert.equal(/\[data-rdsh-question-card\] \[class\*="_footer"\]/.test(CLIENT), false, "the descendant selector is gone");
+	assert.equal(/\[data-rdsh-question-card\] \[class\*="_option"\]/.test(CLIENT), false, "the ambiguous option selector is gone");
+	assert.match(CLIENT, /\[class\*="_field"\] > \* \{ font-size: 16px/, "the answer mirror and the textarea share the font");
+});
+
+test("the device theme never writes the shared preference", () => {
+	// #5: theme.setTheme() writes the profile, which is what propagated a phone
+	// change to every connected browser. The override must stay browser-local.
+	assert.equal(/setTheme\s*\(/.test(stripLiterals(CLIENT)), false, "theme.setTheme() must never be called");
+	assert.match(CLIENT, /rdsh-pwa:device-theme/, "the choice is stored per browser");
+	assert.match(CLIENT, /data-ds-dark-theme/, "the override repaints the upstream palette attribute");
+});

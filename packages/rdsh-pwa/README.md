@@ -51,6 +51,7 @@ ln -sfn /path/to/dsh-mobile-maxxing/packages/rdsh-pwa ~/.dsh/profiles/web/node_m
 | 通知 | アプリを見ている間はアプリ内バナー、それ以外は Web Push |
 | 通知音 | 合成した5種類。音量も設定可。音声ファイルは同梱しません |
 | スマホ幅のレイアウト | サイドバーがドロワーに、設定は1タップ、コードは折り返し |
+| テーマ（ライト／ダーク） | 上流のトークンに追従。PC と別に「この端末だけ」の配色を選べる |
 | CJK 表示の修正 | `**https://x**（メモ）` の太字とリンクが壊れない |
 | セッションIDのコピー | セッションメニューに1行追加 |
 
@@ -64,7 +65,7 @@ ln -sfn /path/to/dsh-mobile-maxxing/packages/rdsh-pwa ~/.dsh/profiles/web/node_m
 ## 開発
 
 ```sh
-npm test     # ブラウザ不要のテスト46件
+npm test     # ブラウザ不要のテスト58件（うち2件はスキップ）
 ```
 
 ビルド工程はありません。`client.js` はブラウザにそのまま配信され、`index.js` は Node
@@ -121,6 +122,7 @@ ln -sfn /path/to/dsh-mobile-maxxing/packages/rdsh-pwa ~/.dsh/profiles/web/node_m
 | Notifications | In-app banner while the app is on screen, Web Push otherwise |
 | Notification sounds | Five synthesised presets with a volume control; no audio files ship |
 | Phone layout | Sidebar becomes a drawer, settings open in one tap, code wraps |
+| Light / dark theme | Follows the host tokens; a per-device palette can differ from the PC |
 | CJK rendering | `**https://x**（memo）` keeps its bold and its link |
 | Session id copy | One row in the session row menu |
 
@@ -132,7 +134,7 @@ ln -sfn /path/to/dsh-mobile-maxxing/packages/rdsh-pwa ~/.dsh/profiles/web/node_m
 ## Development
 
 ```sh
-npm test     # 46 tests, no browser required
+npm test     # 58 tests, no browser required (2 are skipped)
 ```
 
 There is no build step: `client.js` is served verbatim and `index.js` uses only Node

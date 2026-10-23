@@ -43,6 +43,27 @@ English: [USAGE.en.md](USAGE.en.md)
 ![設定のアプリ欄](settings.png)
 ![スタンドアロン時のセーフエリア](standalone-safe-area.png)
 
+### テーマ（ライト／ダーク）
+
+配色は DSH 本体のテーマトークン（`--dsw-*`）から取ります。以前はダークの色を直接
+書いていたため、ライトテーマではサイドバーの選択行・ポップオーバー・トースト・設定の
+ボタンがほぼ読めませんでした。現在はライト／ダークのどちらでも上流のパレットに従います。
+
+設定 →「モバイル」→「テーマ（この端末だけ）」で、このブラウザだけ配色を選べます
+（共有設定に従う／ライト／ダーク／端末に合わせる）。値は `localStorage` にだけ保存し、
+DSH のプロファイル設定は書き換えないので、**スマホで変えても PC には伝わりません**。
+PC と共通のテーマは 設定 → 一般 → 外観 です。
+
+- 上流の DOM 契約（`body[data-ds-dark-theme]` / `html{color-scheme}`）が変わっていた場合は、
+  適用後に検査して**上書きを諦め、共有テーマに戻ります**（設定に理由が出ます）。
+- 登録テーマ（カスタムパレット）を使っている間はトークンが混ざるため、上書きは無効です。
+- インストール済みアプリのスプラッシュとタスク切替の色は manifest の `themeColor` 固定で、
+  端末別にはなりません。ライト固定で使うなら profile patch で `themeColor` /
+  `backgroundColor` を `#fff` にしてください。
+- ステータスバーの文字色は1つの meta では切り替えられないため、既定を `default`（黒文字）に
+  しました。ダーク固定なら profile patch で `appleStatusBarStyle: "black-translucent"` を
+  指定してください。
+
 ## スマホ向けUX
 
 インストールしたアプリの**使い勝手**を担当する部分です。セッション一覧をオーバーレイのドロワーにし、
@@ -178,6 +199,10 @@ npm pack                          # 配布用 tarball（リリースに添付す
 - HTTPS か localhost でのみサービスワーカーが動きます（Tailscale の `https://…ts.net` は可）。
 - DSH 本体の更新では `sw.js` のバイト列が変わらないため更新バナーは出ません。シェルは毎回
   network-first なので、本体更新は再読み込みだけで反映されます。
+- 端末ごとのテーマは**ブラウザ単位**です（同じ端末の別ブラウザは別扱い、サイトデータを
+  消すと既定の「共有設定に従う」に戻ります）。
+- オフラインページは保存済みテーマを読めない（Service Worker から `localStorage` を
+  参照できない）ため、OS のライト／ダーク設定に従います。
 
 ## iOS 26 の下余白（47px / 62px）
 
@@ -185,7 +210,7 @@ iOS 26 のホーム画面 PWA は、`apple-mobile-web-app-capable` などの App
 レガシーな view frame を使い、WebView をステータスバー分だけ短く作って下に未描画の帯を残す
 （[WebKit 301994](https://bugs.webkit.org/show_bug.cgi?id=301994)）。この帯は DOM の外なので
 CSS では消せない。この構成（manifest + `mobile-web-app-capable` +
-`black-translucent` + `apple-touch-icon`、Apple の capable/title なし）に合わせて、
+`appleStatusBarStyle`（既定は `default`）+ `apple-touch-icon`、Apple の capable/title なし）に合わせて、
 DSH も Apple 専用メタを外している。それでも残る場合の確認用に、PWA マークアップを外した
 以前は確認用に `/launch` というルートを同梱していたが、認証の無い診断用ページを
 出荷物に残さない方針にして削除した。

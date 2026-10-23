@@ -2285,6 +2285,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       // lightbox without the crop/safe-area hooks.
       decorateLightbox();
       decorateRightPanel();
+      decorateRightPanelTabs();
       decorateCodePreview();
       decorateQuestionCards();
       decorateTodoPanel();
@@ -2548,6 +2549,9 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     // Session rows: tap opens, long press drags
     // ---------------------------------------------------------------------
     let tapCandidate = null;
+    /** The right panel tab under the finger, for the same replay as a row. */
+    let tabCandidate = null;
+    let tabReplayTimer = 0;
     /** The row whose long press opened its menu, so the release click is eaten. */
     let menuOpenedUntil = 0;
     /** Long-press: held still this long and it opens the row menu. */
@@ -2623,6 +2627,14 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       if (send !== null && send !== undefined && send.disabled !== true && !/stop|停止/i.test(send.getAttribute("aria-label") || "")) {
         markMobileSession();
       }
+      // Right panel tabs: same native-drag problem as the session rows below.
+      // Upstream starts a tab drag after 4px, so a finger that moves slightly
+      // never produces the click that switches tabs.
+      const tab = event.target.closest && event.target.closest("[data-rdsh-rtab]");
+      if (tab !== null && tab !== undefined && event.pointerType !== "mouse") {
+        clearTimeout(tabReplayTimer);
+        tabCandidate = { tab, at: Date.now(), x: event.clientX, y: event.clientY, fired: false };
+      }
       const row = event.target.closest && event.target.closest('[data-row-key^="session:"]');
       if (row === null || row === undefined) return;
       if (event.pointerType === "mouse") return;
@@ -2643,6 +2655,24 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
 
     function onPointerUp(event) {
       cancelLongPress();
+      const tabTap = tabCandidate;
+      if (tabTap !== null) {
+        const moved = Math.abs(event.clientX - tabTap.x) + Math.abs(event.clientY - tabTap.y) > 14;
+        if (moved || Date.now() - tabTap.at > 600) {
+          tabCandidate = null;
+        } else {
+          // One replay, only if the app did not deliver the click itself: a
+          // pointerdown that became a tab drag leaves the active tab unchanged
+          // and the tap would otherwise do nothing at all.
+          clearTimeout(tabReplayTimer);
+          tabReplayTimer = window.setTimeout(() => {
+            if (tabCandidate === tabTap) tabCandidate = null;
+            if (tabTap.fired || !tabTap.tab.isConnected) return;
+            tabTap.fired = true;
+            tabTap.tab.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+          }, 250);
+        }
+      }
       const candidate = tapCandidate;
       if (candidate === null) return;
       tapCandidate = null;
@@ -3067,6 +3097,9 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     function onClickCapture(event) {
       const target = event.target;
       if (target === null || target.closest === undefined) return;
+
+      // The app delivered the tab click itself; the replay must stay cancelled.
+      if (tabCandidate !== null && target.closest("[data-rdsh-rtab]") === tabCandidate.tab) tabCandidate.fired = true;
 
       // xterm's helper textarea is the actual input; a click gesture focusing it
       // asks iOS to show the keyboard.
@@ -5430,6 +5463,39 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
   html[data-rdsh-rightpanel-open] header[data-rdsh-header] { display: none !important; }
   [data-rdsh-rightpanel] table { display: block; overflow-x: auto; max-width: 100%; }
   [data-rdsh-rightpanel] pre { max-width: 100%; }
+
+  /* Right panel tabs (dockkit's file/preview strip).
+     Upstream builds them for a mouse: 28px tall, with touch-action:none (which
+     makes the strip unscrollable by finger, so tabs past the right edge are
+     unreachable), and a drag threshold of 4px on every pointerdown, which
+     turns an ordinary tap into a tab drag. Give the row a finger-sized height,
+     let a tap stay a tap, and let the strip pan sideways. Drag-and-drop of tabs
+     is therefore mouse-only; nothing in this layout needs it. */
+  [data-rdsh-rightpanel] [data-dockkit-tab] {
+    height: 44px !important;
+    min-width: 88px !important;
+    max-width: 58vw !important;
+    touch-action: manipulation !important;
+  }
+  [data-rdsh-rightpanel] [data-dockkit-strip] { min-height: 52px; }
+  [data-rdsh-rightpanel] [data-dockkit-strip-tabs] {
+    touch-action: pan-x !important;
+    scroll-behavior: auto !important;
+    -webkit-overflow-scrolling: touch;
+  }
+  /* The close button is hover-only upstream; a phone has no hover, so it took
+     the top-right of the tap target without ever being visible. Show it on the
+     selected tab only, and keep it out of the tab's own tap area. */
+  [data-rdsh-rightpanel] [data-dockkit-tab-close] { display: none !important; }
+  [data-rdsh-rightpanel] [data-dockkit-tab][aria-selected="true"] [data-dockkit-tab-close] {
+    display: flex !important;
+    opacity: 1 !important;
+    pointer-events: auto !important;
+  }
+  /* Selected tab needs to read as selected without the hover colour shift. */
+  [data-rdsh-rtab][aria-selected="true"] {
+    box-shadow: inset 0 -2px 0 var(--dsw-alias-brand-primary-new-color, #4d6bfe);
+  }
 
   /* Code files: wrap every line, including a single long token (URLs,
      minified lines). Wrapping only at spaces left those overflowing, which

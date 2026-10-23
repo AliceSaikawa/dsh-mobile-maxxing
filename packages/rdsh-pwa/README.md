@@ -12,7 +12,7 @@ PWA・通知・モバイルUX・CJK表示の修正・セッションIDのコピ�
 
 ```sh
 cd ~/.dsh/profiles/web
-dsh plugin add https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.3.2/rdsh-pwa-0.3.2.tgz
+dsh plugin add https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.3.3/rdsh-pwa-0.3.3.tgz
 # DSH を再起動（例: systemctl --user restart dsh-web.service）
 ```
 
@@ -21,7 +21,7 @@ dsh plugin add https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download
 ```json
 {
   "dependencies": {
-    "rdsh-pwa": "https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.3.2/rdsh-pwa-0.3.2.tgz"
+    "rdsh-pwa": "https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.3.3/rdsh-pwa-0.3.3.tgz"
   },
   "dsh": {
     "profile": {
@@ -82,7 +82,7 @@ row. **It installs on a stock DSH** — no other `rdsh-*` plugin and no external
 
 ```sh
 cd ~/.dsh/profiles/web
-dsh plugin add https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.3.2/rdsh-pwa-0.3.2.tgz
+dsh plugin add https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.3.3/rdsh-pwa-0.3.3.tgz
 # then restart DSH (e.g. systemctl --user restart dsh-web.service)
 ```
 
@@ -91,7 +91,7 @@ dsh plugin add https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download
 ```json
 {
   "dependencies": {
-    "rdsh-pwa": "https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.3.2/rdsh-pwa-0.3.2.tgz"
+    "rdsh-pwa": "https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.3.3/rdsh-pwa-0.3.3.tgz"
   },
   "dsh": {
     "profile": {

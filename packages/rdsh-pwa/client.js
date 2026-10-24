@@ -961,7 +961,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     //     the drawer is closed, and taps on it open the drawer (the drawer's
     //     own DeepSeek HARNESS brand stays untouched)
     //   * opening a session closes the drawer and does not steal focus into the
-    //     composer
+    //     composer; starting a new session closes the drawer too
     //   * Settings stacks its navigation over the content instead of squeezing
     //     both into 390px
     //   * controls that cannot work inside an installed PWA (open in editor /
@@ -3478,6 +3478,20 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       document.addEventListener("pointerdown", dismiss, { once: true });
     }
 
+    /**
+     * Whether the click landed on a button that starts a new session.
+     *
+     * The app labels all three of them with the same wording: "New session" /
+     * "新建会话" for the sidebar button and brand row, "New session in <name>" /
+     * "在“<name>”中新建会话" for the per-workspace button.
+     */
+    const NEW_SESSION_LABEL = /^(?:new session\b|新建会话|在.*中新建会话)/i;
+
+    function isNewSessionButton(target) {
+      const button = target.closest("button[aria-label]");
+      return button !== null && NEW_SESSION_LABEL.test(button.getAttribute("aria-label") || "");
+    }
+
     function onClickCapture(event) {
       const target = event.target;
       if (target === null || target.closest === undefined) return;
@@ -3533,6 +3547,15 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         setTimeout(syncRightPanelOpen, 60);
         setTimeout(syncRightPanelOpen, 350);
         setTimeout(syncRightPanelOpen, 900);
+      }
+
+      // "New session" (the sidebar's own button, its brand row, and a
+      // workspace's "+") opens a blank session behind the drawer, so the drawer
+      // closes just as it does for a tapped session row. Match by label, not
+      // by hashed class; a session row never carries one of these buttons.
+      if (narrow() && isNewSessionButton(target)) {
+        setTimeout(closeDrawer, 0);
+        return;
       }
 
       const row = target.closest('[data-row-key^="session:"]');

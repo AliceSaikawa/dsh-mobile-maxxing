@@ -202,6 +202,28 @@ async function checkRuntime() {
 	// Text is localised, so assert the element rendered rather than its wording.
 	check("offline state is visible", typeof offline.pill === "string" && offline.pill.length > 0, offline.pill);
 	await cdp.send("Network.emulateNetworkConditions", { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+
+	// #17: width alone must not hide DSH's own UI. Device metrics keep the
+	// pointer `fine`, which is exactly a desktop window resized (or split).
+	// 683px used to hide the settings rows and the "+" commands; 1440px never
+	// did, so both are checked against the same expectation.
+	for (const width of [683, 1440]) {
+		await cdp.send("Emulation.setDeviceMetricsOverride", { width, height: 900, deviceScaleFactor: 1, mobile: false });
+		await cdp.send("Page.reload");
+		await sleep(2500);
+		const desktop = await cdp.eval(`(() => ({
+			width: window.innerWidth,
+			phone: globalThis.__RDSH_MOBILE_UX__ ? globalThis.__RDSH_MOBILE_UX__.phone() : null,
+			hideSettings: document.documentElement.hasAttribute('data-rdsh-hide-settings'),
+			hidden: document.querySelectorAll('[data-rdsh-hidden], [data-rdsh-setting-hidden]').length,
+		}))()`);
+		check(
+			`a ${width}x900 desktop window hides no controls`,
+			desktop.phone === false && desktop.hideSettings === false && desktop.hidden === 0,
+			desktop,
+		);
+	}
+
 	check("the plugin logs no errors", pluginErrors.length === 0, pluginErrors);
 	return cdp;
 }

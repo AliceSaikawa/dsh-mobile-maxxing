@@ -760,20 +760,26 @@ test("the question card viewport sizing is phone-only", () => {
 	}
 });
 
-test("the queue dock meets the composer and the preview never covers it", () => {
-	// Phone-only: the dock is as wide as the composer card, pulled flush to its
-	// top edge, with square bottom corners. The preview is fixed and height
-	// capped so a long queued text scrolls above the composer.
-	assert.match(CLIENT, /\[data-rdsh-queue-dock\] \{[^}]*width: calc\(100% - 32px\) !important;[^}]*margin-bottom: -6px !important;/, "the queue dock is not attached to the composer");
-	assert.match(CLIENT, /\[data-rdsh-queue-panel\] \{[^}]*border-bottom-left-radius: 0 !important;[^}]*border-bottom-right-radius: 0 !important;/, "the queue panel keeps floating bottom corners");
+test("the queue bridge meets both rounded composer sides without changing queue actions", () => {
+	// Geometry comes from the live panel/card bounds. A fixed negative margin
+	// and square panel corners alone leave the queue's outer ends floating.
+	assert.match(CLIENT, /function decorateQueueBridge\(dock, panel\)/);
+	assert.match(CLIENT, /const queueRect = panel\.getBoundingClientRect\(\);/);
+	assert.match(CLIENT, /const cardRect = card\.getBoundingClientRect\(\);/);
+	assert.match(CLIENT, /const height = cardRect\.top \+ radius - queueRect\.bottom \+ 1;/);
+	assert.match(CLIENT, /bridge\.firstElementChild\.setAttribute\("d", pathData\);/);
+	assert.match(CLIENT, /decorateQueueBridge\(dock, panel\);/);
+	assert.match(CLIENT, /bridge\.setAttribute\("aria-hidden", "true"\);/);
+	assert.match(CLIENT, /for \(const bridge of document\.querySelectorAll\("\[data-rdsh-queue-bridge\]"\)\) bridge\.remove\(\);/);
 	assert.match(CLIENT, /\.rdsh-mux-queue-preview \{[^}]*position: fixed;[^}]*max-height: min\(50vh, 360px\);[^}]*overflow-y: auto;/, "the queued text preview is not a capped overlay");
 	assert.match(CLIENT, /\.rdsh-mux-queue-menu \{[^}]*position: fixed;/, "the long-press menu is not an overlay");
 	const rules = cssBlocks().flatMap((css) => cssRules(css));
-	for (const head of ["[data-rdsh-queue-dock]", "[data-rdsh-queue-panel]", ".rdsh-mux-queue-preview", ".rdsh-mux-queue-menu"]) {
+	for (const head of ["[data-rdsh-queue-dock]", "[data-rdsh-queue-panel]", "[data-rdsh-queue-bridge]", ".rdsh-mux-queue-preview", ".rdsh-mux-queue-menu"]) {
 		const rule = rules.find((entry) => entry.head === head);
-		assert.ok(rule, `${head} is missing`);
-		assert.ok(rule.at.some((media) => /max-width:\s*767px/.test(media)), `${head} is outside the phone query`);
+		assert.ok(rule, head + " is missing");
+		assert.ok(rule.at.some((media) => /max-width:\s*767px/.test(media)), head + " is outside the phone query");
 	}
+	assert.match(CLIENT, /\[data-rdsh-queue-bridge\] \{[^}]*pointer-events: none;/, "the bridge intercepts queue controls");
 });
 
 test("the workspace picker caps its list and keeps Add workspace outside it", () => {

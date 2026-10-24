@@ -761,10 +761,12 @@ test("the question card viewport sizing is phone-only", () => {
 });
 
 test("the queue dock meets the composer and the preview never covers it", () => {
-	// Phone-only: the dock is as wide as the composer card, pulled flush to its
-	// top edge, with square bottom corners. The preview is fixed and height
-	// capped so a long queued text scrolls above the composer.
-	assert.match(CLIENT, /\[data-rdsh-queue-dock\] \{[^}]*width: calc\(100% - 32px\) !important;[^}]*margin-bottom: -6px !important;/, "the queue dock is not attached to the composer");
+	// Phone-only: the dock is inset 24px per side from the composer card, sits
+	// flush on its top edge (the gap is cancelled from the live row-gap), and
+	// keeps square bottom corners. The preview is fixed and height capped so a
+	// long queued text scrolls above the composer.
+	assert.match(CLIENT, /\[data-rdsh-queue-dock\] \{[^}]*width: calc\(100% - 32px\) !important;[^}]*margin-bottom: 0;/, "the queue dock is not attached to the composer");
+	assert.match(CLIENT, /dock\.style\.marginBottom = \(-\(gapPx \+ 1\)\) \+ "px";/, "the queue dock does not cancel the composer gap");
 	assert.match(CLIENT, /\[data-rdsh-queue-panel\] \{[^}]*border-bottom-left-radius: 0 !important;[^}]*border-bottom-right-radius: 0 !important;/, "the queue panel keeps floating bottom corners");
 	assert.match(CLIENT, /\.rdsh-mux-queue-preview \{[^}]*position: fixed;[^}]*max-height: min\(50vh, 360px\);[^}]*overflow-y: auto;/, "the queued text preview is not a capped overlay");
 	assert.match(CLIENT, /\.rdsh-mux-queue-menu \{[^}]*position: fixed;/, "the long-press menu is not an overlay");

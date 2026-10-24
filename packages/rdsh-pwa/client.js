@@ -3678,6 +3678,16 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       dock.setAttribute("data-rdsh-queue-dock", "");
       const panel = dock.querySelector('[class*="_panel"]');
       if (panel !== null) panel.setAttribute("data-rdsh-queue-panel", "");
+      // Drop the queue until its bottom edge rests on the card's top edge: the
+      // card is never moved and never reshaped. The composer stack is a flex
+      // column whose gap is 6px in a session and 8px in the hero, so cancel
+      // whatever the parent actually uses instead of guessing a constant.
+      if (narrow() && panel !== null && dock.parentElement !== null) {
+        const gapPx = Number.parseFloat(getComputedStyle(dock.parentElement).rowGap);
+        // 1px past the card's top edge so its 0.5px outline cannot draw a
+        // line across the join.
+        if (Number.isFinite(gapPx) && gapPx > 0) dock.style.marginBottom = (-(gapPx + 1)) + "px";
+      }
       let index = 0;
       for (const row of dock.querySelectorAll("li")) {
         const preview = row.querySelector('[class*="_preview"]');
@@ -6974,15 +6984,33 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
   /* Queue dock: match the composer card's width and sit flush on its top
      edge. The panel has a top radius only; its bottom is the composer. */
   [data-rdsh-queue-dock] {
+    /* Layered over the composer so the queue's straight bottom edge crosses
+       the card's top fillets instead of leaving them cut: this is the join
+       the reference screenshot shows. */
+    position: relative !important;
+    z-index: 1 !important;
+    /* Same width as the composer card: the percentage resolves against the
+       composer stack, which is exactly 32px wider than the card. */
     width: calc(100% - 32px) !important;
     max-width: none !important;
     margin-left: auto !important;
     margin-right: auto !important;
-    margin-bottom: -6px !important;
+    /* The composer stack is a flex column whose gap is 6px in a session and
+       8px in the hero, so any fixed margin leaves a band of background. The
+       dock measures the live seam and writes the margin inline instead. */
+    margin-bottom: 0;
     padding-left: 0 !important;
     padding-right: 0 !important;
   }
+  /* Only while a queue is present: the composer's top corners join the queue
+     so the pair reads as one panel. Removed the moment the queue empties. */
+  [data-rdsh-queue-dock]:has(li) ~ * [class*="_card"] {
+    border-top-left-radius: 0 !important;
+    border-top-right-radius: 0 !important;
+  }
   [data-rdsh-queue-panel] {
+    position: relative !important;
+    z-index: 1 !important;
     border-bottom-left-radius: 0 !important;
     border-bottom-right-radius: 0 !important;
   }

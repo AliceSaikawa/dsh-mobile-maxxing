@@ -3669,22 +3669,20 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       requestAnimationFrame(() => input.focus({ preventScroll: true }));
     }
 
-    // The queue is wider than the rounded composer on phones. A fixed negative
-    // margin joins their centres but leaves both outer corners unsupported.
-    // Paint a responsive bridge behind them, ending where the composer sides
-    // become vertical; the curves are tangent to both side edges.
-    function decorateQueueBridge(dock, panel) {
-      let bridge = dock.querySelector(":scope > [data-rdsh-queue-bridge]");
+    // Keep the composer's original fillets and outline untouched. Only shape
+    // the queue panel: its lower edge tapers inward until it meets the straight
+    // top segment *between* the composer's two rounded corners.
+    function decorateQueueJoin(panel) {
       const editor = document.querySelector("[data-composer-input]");
       const card = editor === null ? null : editor.closest('[class*="_card"]');
       if (!narrow() || panel === null || card === null) {
-        bridge?.remove();
+        panel?.style.removeProperty("clip-path");
+        panel?.removeAttribute("data-rdsh-queue-clip");
         return;
       }
 
       const queueRect = panel.getBoundingClientRect();
       const cardRect = card.getBoundingClientRect();
-      const dockRect = dock.getBoundingClientRect();
       const cardStyle = getComputedStyle(card);
       const cornerParts = cardStyle.borderTopLeftRadius.split(/\s+/);
       const verticalPart = cornerParts[1] || cornerParts[0];
@@ -3693,41 +3691,31 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         : parseFloat(verticalPart) || 0;
       const radius = Math.max(0, Math.min(verticalRadius, cardRect.height / 2));
       const width = queueRect.width;
-      const height = cardRect.top + radius - queueRect.bottom + 1;
-      if (width <= 0 || height <= 0) {
-        bridge?.remove();
+      // Upstream overlaps the two boxes by a few pixels. Stop at the card's
+      // top boundary, not its side: the lower card remains visibly rounded.
+      const bottom = Math.min(queueRect.height, cardRect.top - queueRect.top + 0.5);
+      const panelRadius = parseFloat(getComputedStyle(panel).borderTopLeftRadius) || 0;
+      const topRadius = Math.max(0, Math.min(panelRadius, width / 2, bottom / 2));
+      if (width <= 0 || bottom <= topRadius + 4) {
+        panel.style.removeProperty("clip-path");
+        panel.removeAttribute("data-rdsh-queue-clip");
         return;
       }
 
-      const left = Math.max(0, Math.min(width / 2, cardRect.left - queueRect.left));
-      const right = Math.max(0, Math.min(width / 2, queueRect.right - cardRect.right));
-      const y1 = height * 0.35;
-      const y2 = height * 0.65;
-      const pathData = "M 0 0 H " + width
-        + " C " + width + " " + y1 + " " + (width - right) + " " + y2
-        + " " + (width - right) + " " + height
-        + " H " + left + " C " + left + " " + y2 + " 0 " + y1 + " 0 0 Z";
-
-      if (bridge === null) {
-        bridge = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-        bridge.setAttribute("data-rdsh-queue-bridge", "");
-        bridge.setAttribute("aria-hidden", "true");
-        bridge.setAttribute("focusable", "false");
-        bridge.append(document.createElementNS("http://www.w3.org/2000/svg", "path"));
-        dock.append(bridge);
-      }
-      bridge.setAttribute("viewBox", "0 0 " + width + " " + height);
-      bridge.firstElementChild.setAttribute("d", pathData);
-      const panelColor = getComputedStyle(panel).backgroundColor;
-      const isTransparent = (color) => color === "transparent" || color === "rgba(0, 0, 0, 0)";
-      bridge.firstElementChild.setAttribute("fill",
-        !isTransparent(panelColor) ? panelColor
-          : !isTransparent(cardStyle.backgroundColor) ? cardStyle.backgroundColor
-            : "var(--dsw-alias-bg-module-platform, #2c2c2e)");
-      bridge.style.left = (queueRect.left - dockRect.left) + "px";
-      bridge.style.top = (queueRect.bottom - dockRect.top - 1) + "px";
-      bridge.style.width = width + "px";
-      bridge.style.height = height + "px";
+      const left = Math.max(0, Math.min(width / 2, cardRect.left + radius - queueRect.left));
+      const right = Math.min(width, Math.max(width / 2, cardRect.right - radius - queueRect.left));
+      const curveTop = Math.max(topRadius, bottom - 16);
+      const controlY = Math.max(curveTop, bottom - 2);
+      const pathData = "M " + topRadius + " 0 H " + (width - topRadius)
+        + " Q " + width + " 0 " + width + " " + topRadius
+        + " V " + curveTop
+        + " C " + width + " " + controlY + " " + width + " " + bottom + " " + right + " " + bottom
+        + " H " + left
+        + " C 0 " + bottom + " 0 " + controlY + " 0 " + curveTop
+        + " V " + topRadius + " Q 0 0 " + topRadius + " 0 Z";
+      const clip = 'path("' + pathData + '")';
+      if (panel.style.clipPath !== clip) panel.style.clipPath = clip;
+      panel.setAttribute("data-rdsh-queue-clip", "");
     }
 
     function decorateQueueDock() {
@@ -3739,7 +3727,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       dock.setAttribute("data-rdsh-queue-dock", "");
       const panel = dock.querySelector('[class*="_panel"]');
       if (panel !== null) panel.setAttribute("data-rdsh-queue-panel", "");
-      decorateQueueBridge(dock, panel);
+      decorateQueueJoin(panel);
       let index = 0;
       for (const row of dock.querySelectorAll("li")) {
         const preview = row.querySelector('[class*="_preview"]');
@@ -7036,9 +7024,6 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
   /* Queue dock: match the composer card's width and sit flush on its top
      edge. The panel has a top radius only; its bottom is the composer. */
   [data-rdsh-queue-dock] {
-    position: relative !important;
-    isolation: isolate;
-    overflow: visible !important;
     width: calc(100% - 32px) !important;
     max-width: none !important;
     margin-left: auto !important;
@@ -7050,13 +7035,6 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
   [data-rdsh-queue-panel] {
     border-bottom-left-radius: 0 !important;
     border-bottom-right-radius: 0 !important;
-  }
-  [data-rdsh-queue-bridge] {
-    position: absolute;
-    display: block;
-    z-index: -1;
-    overflow: visible;
-    pointer-events: none;
   }
   .rdsh-mux-queue-preview {
     position: fixed; left: 16px; right: 16px; z-index: 985;
@@ -7396,7 +7374,10 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
             closeDetailPopover();
             clearQuestionArrows();
             closeQueueUi();
-            for (const bridge of document.querySelectorAll("[data-rdsh-queue-bridge]")) bridge.remove();
+            for (const panel of document.querySelectorAll("[data-rdsh-queue-clip]")) {
+              panel.style.removeProperty("clip-path");
+              panel.removeAttribute("data-rdsh-queue-clip");
+            }
             clearWorkspacePicker();
             rightPanelFitPending = false;
             style.remove();

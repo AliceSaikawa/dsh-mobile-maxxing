@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "DSH PWA + Mobile UX",
+    "description": "Installable PWA, phone-width layout, notifications, a CJK rendering fix and a session-id copy row."
+  }
+}

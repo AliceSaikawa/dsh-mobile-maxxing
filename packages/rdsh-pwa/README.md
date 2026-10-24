@@ -11,12 +11,12 @@ PWA・通知・モバイルUX・CJK表示の修正・セッションIDのコピ�
 ## インストール
 
 ```sh
-cd ~/.dsh/profiles/web
-dsh plugin add https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.3.3/rdsh-pwa-0.3.3.tgz
-# DSH を再起動（例: systemctl --user restart dsh-web.service）
+dsh plugin --profile web add https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.3.3/rdsh-pwa-0.3.3.tgz
+# DSH を再起動して読み込む（例: systemctl --user restart dsh-web.service）
 ```
 
-`dsh plugin add` が依存と bundle の両方を更新します。手で書く場合はこうです。
+`dsh plugin --profile web add` が依存と bundle の両方を更新します
+（`--profile` は必須で、`cd ~/.dsh/profiles/web` は要りません）。手で書く場合はこうです。
 
 ```json
 {
@@ -32,13 +32,13 @@ dsh plugin add https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download
 ```
 
 ```sh
-npm install        # プロファイル内。pnpm でも可
+pnpm install        # プロファイル内。npm ではなく pnpm（DSH の profile は pnpm 管理）
 ```
 
-開発中にこのチェックアウトを使う場合:
+開発中にこのチェックアウトを使う場合（依存と bundle の両方が入ります）:
 
 ```sh
-ln -sfn /path/to/dsh-mobile-maxxing/packages/rdsh-pwa ~/.dsh/profiles/web/node_modules/rdsh-pwa
+dsh plugin --profile web add link:/path/to/dsh-mobile-maxxing/packages/rdsh-pwa
 ```
 
 **必要なのはこれだけです。** 追加のプラグインも、`web-push` などのライブラリも要りません。
@@ -82,12 +82,12 @@ row. **It installs on a stock DSH** — no other `rdsh-*` plugin and no external
 ## Install
 
 ```sh
-cd ~/.dsh/profiles/web
-dsh plugin add https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.3.3/rdsh-pwa-0.3.3.tgz
-# then restart DSH (e.g. systemctl --user restart dsh-web.service)
+dsh plugin --profile web add https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.3.3/rdsh-pwa-0.3.3.tgz
+# then restart DSH to load it (e.g. systemctl --user restart dsh-web.service)
 ```
 
-`dsh plugin add` updates both the dependency and the bundle list. By hand:
+`dsh plugin --profile web add` updates both the dependency and the bundle list
+(`--profile` is required; the `cd ~/.dsh/profiles/web` is not). By hand:
 
 ```json
 {
@@ -103,13 +103,13 @@ dsh plugin add https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download
 ```
 
 ```sh
-npm install        # inside the profile; pnpm works too
+pnpm install        # inside the profile; DSH profiles are pnpm-managed
 ```
 
-To develop against this checkout:
+To develop against this checkout (installs the dependency and the bundle):
 
 ```sh
-ln -sfn /path/to/dsh-mobile-maxxing/packages/rdsh-pwa ~/.dsh/profiles/web/node_modules/rdsh-pwa
+dsh plugin --profile web add link:/path/to/dsh-mobile-maxxing/packages/rdsh-pwa
 ```
 
 **That is all.** No companion plugin, no `web-push`, no build step.

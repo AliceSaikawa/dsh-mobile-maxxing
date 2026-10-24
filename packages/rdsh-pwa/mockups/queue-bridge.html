@@ -20,15 +20,14 @@
     .story { padding: 14px 20px 340px; line-height: 1.9; font-size: 16px; }
     .story p { margin: 0 0 24px; }
     .thinking { display: flex; gap: 8px; align-items: center; color: var(--blue); border-top: 1px solid #29292c; padding-top: 12px; font-size: 14px; }
-    .input-area { position: fixed; bottom: max(34px, env(safe-area-inset-bottom)); width: min(100%, 480px); left: 50%; transform: translateX(-50%); }
-    .queue-dock { position: relative; isolation: isolate; overflow: visible; width: calc(100% - 8px); margin: 0 auto -5px; }
+    .input-area { position: fixed; bottom: max(34px, env(safe-area-inset-bottom)); width: min(100%, 383px); left: 50%; transform: translateX(-50%); }
+    .queue-dock { position: relative; width: calc(100% - 64px); margin: 0 auto -5px; }
     .queue-panel { position: relative; min-height: 42px; display: flex; align-items: center; gap: 10px; padding: 0 14px; background: var(--surface); border-radius: 20px 20px 0 0; }
     .queue-icon { font-size: 17px; color: #b7b7c0; }
     .queue-text { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 15px; }
     .queue-actions { display: flex; gap: 15px; align-items: center; }
     button { border: 0; color: inherit; background: transparent; font: inherit; cursor: pointer; }
     .queue-actions button { color: #b1b1ba; padding: 3px; font-size: 20px; }
-    .queue-bridge { position: absolute; z-index: -1; display: block; pointer-events: none; overflow: visible; }
     .composer { position: relative; width: calc(100% - 32px); min-height: 124px; margin: 0 auto; border-radius: 30px; background: var(--surface); display: flex; flex-direction: column; justify-content: flex-end; padding: 16px 10px 8px; }
     .composer-input { width: 100%; min-height: 56px; border: 0; background: transparent; outline: none; resize: none; color: #f4f4f5; font: inherit; font-size: 16px; padding: 0 8px; }
     .composer-toolbar { display: flex; align-items: center; gap: 8px; color: #b6b6bd; }
@@ -59,7 +58,7 @@
     </main>
     <section class="input-area" aria-label="入力エリア">
       <div class="queue-dock" id="queueDock">
-        <div class="queue-panel" id="queuePanel">
+        <div class="queue-panel" id="queuePanel" data-rdsh-queue-panel>
           <span class="queue-icon">☷</span>
           <span class="queue-text" id="queueText">あ</span>
           <div class="queue-actions">
@@ -68,7 +67,6 @@
             <button title="今すぐ送信" aria-label="今すぐ送信">↑</button>
           </div>
         </div>
-        <svg id="bridge" class="queue-bridge" aria-hidden="true" focusable="false"><path></path></svg>
       </div>
       <div class="composer" id="composer">
         <textarea class="composer-input" aria-label="入力" id="composerInput"></textarea>
@@ -78,42 +76,41 @@
     </section>
   </div>
   <script>
-    const dock = document.getElementById("queueDock");
     const panel = document.getElementById("queuePanel");
     const card = document.getElementById("composer");
-    const bridge = document.getElementById("bridge");
-    function drawBridge() {
-      if (panel.hidden) { bridge.hidden = true; return; }
-      bridge.hidden = false;
+    function drawJoin() {
+      if (panel.hidden) { panel.style.clipPath = ""; return; }
       const q = panel.getBoundingClientRect();
       const c = card.getBoundingClientRect();
-      const host = dock.getBoundingClientRect();
-      const style = getComputedStyle(card);
-      const radius = Math.min(parseFloat(style.borderTopLeftRadius) || 0, c.height / 2);
+      const radius = Math.min(parseFloat(getComputedStyle(card).borderTopLeftRadius) || 0, c.height / 2);
       const w = q.width;
-      const h = Math.max(1, c.top + radius - q.bottom + 1);
-      const left = Math.max(0, Math.min(w / 2, c.left - q.left));
-      const right = Math.max(0, Math.min(w / 2, q.right - c.right));
-      const d = "M 0 0 H " + w + " C " + w + " " + (h * .35) + " " + (w - right) + " " + (h * .65) + " " + (w - right) + " " + h + " H " + left + " C " + left + " " + (h * .65) + " 0 " + (h * .35) + " 0 0 Z";
-      bridge.setAttribute("viewBox", "0 0 " + w + " " + h);
-      bridge.querySelector("path").setAttribute("d", d);
-      bridge.querySelector("path").setAttribute("fill", style.backgroundColor);
-      bridge.style.left = (q.left - host.left) + "px";
-      bridge.style.top = (q.bottom - host.top - 1) + "px";
-      bridge.style.width = w + "px";
-      bridge.style.height = h + "px";
+      const bottom = Math.min(q.height, c.top - q.top + 0.5);
+      const topRadius = Math.min(parseFloat(getComputedStyle(panel).borderTopLeftRadius) || 0, w / 2, bottom / 2);
+      const left = Math.max(0, Math.min(w / 2, c.left + radius - q.left));
+      const right = Math.min(w, Math.max(w / 2, c.right - radius - q.left));
+      const curveTop = Math.max(topRadius, bottom - 16);
+      const controlY = Math.max(curveTop, bottom - 2);
+      const d = "M " + topRadius + " 0 H " + (w - topRadius)
+        + " Q " + w + " 0 " + w + " " + topRadius
+        + " V " + curveTop
+        + " C " + w + " " + controlY + " " + w + " " + bottom + " " + right + " " + bottom
+        + " H " + left + " C 0 " + bottom + " 0 " + controlY + " 0 " + curveTop
+        + " V " + topRadius + " Q 0 0 " + topRadius + " 0 Z";
+      panel.style.clipPath = 'path("' + d + '")';
+      panel.setAttribute("data-rdsh-queue-clip", "");
     }
-    const update = () => requestAnimationFrame(drawBridge);
+    const update = () => requestAnimationFrame(drawJoin);
     window.addEventListener("resize", update);
     new ResizeObserver(update).observe(card);
     new ResizeObserver(update).observe(panel);
+    const dock = document.getElementById("queueDock");
     document.getElementById("removeQueue").addEventListener("click", () => { dock.hidden = true; update(); });
     document.getElementById("addQueue").addEventListener("click", () => { dock.hidden = false; panel.hidden = false; update(); });
     document.getElementById("editQueue").addEventListener("click", () => {
       document.getElementById("queueText").textContent = "キューのテキストを編集しました";
       update();
     });
-    drawBridge();
+    drawJoin();
   </script>
 </body>
 </html>

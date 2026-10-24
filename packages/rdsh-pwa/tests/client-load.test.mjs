@@ -99,12 +99,45 @@ function element() {
 }
 
 /**
+ * A localStorage that remembers, for tests that boot with a saved choice.
+ *
+ * The plain stub answers every call, which is enough for code that only checks
+ * for a missing key but cannot express "this browser opted in".
+ */
+function memoryStorage(initial = {}) {
+	const map = new Map(Object.entries(initial));
+	return {
+		getItem: (key) => (map.has(key) ? map.get(key) : null),
+		setItem: (key, value) => {
+			map.set(key, String(value));
+		},
+		removeItem: (key) => {
+			map.delete(key);
+		},
+		clear: () => map.clear(),
+		key: (index) => [...map.keys()][index] ?? null,
+		get length() {
+			return map.size;
+		},
+	};
+}
+
+/**
  * Evaluate the bundle in a stub browser and run the plugin's `apply`.
  *
- * `narrow` answers the phone-width media query, `configureDocument` lets a test
- * wire up the few DOM nodes it cares about, and `schedule` replaces setTimeout.
+ * `narrow` answers the phone-width media query, `coarse` and `standalone`
+ * answer the device queries `phone()` asks, `storage` supplies remembered
+ * localStorage entries, `configureDocument` lets a test wire up the few DOM
+ * nodes it cares about, and `schedule` replaces setTimeout.
  */
-function bootClient({ narrow = false, configureDocument = () => {}, schedule = () => 0 } = {}) {
+function bootClient({
+	narrow = false,
+	coarse = false,
+	standalone = false,
+	storage = null,
+	configureDocument = () => {},
+	schedule = () => 0,
+} = {}) {
 	let definition;
 	const sandbox = {
 		// index.js injects the probe table into the page; the stub needs the same
@@ -133,9 +166,17 @@ function bootClient({ narrow = false, configureDocument = () => {}, schedule = (
 		})(),
 		navigator: stub(),
 		location: stub(),
-		localStorage: stub(),
+		localStorage: storage === null ? stub() : memoryStorage(storage),
 		sessionStorage: stub(),
-		matchMedia: (query) => ({ matches: narrow && query.includes("max-width: 767px"), addEventListener() {}, removeEventListener() {} }),
+		matchMedia: (query) => ({
+			matches: Boolean(
+				(narrow && query.includes("max-width: 767px"))
+				|| (coarse && query === "(pointer: coarse)")
+				|| (standalone && query === "(any-pointer: coarse)"),
+			),
+			addEventListener() {},
+			removeEventListener() {},
+		}),
 		addEventListener() {},
 		removeEventListener() {},
 		setTimeout: schedule,
@@ -288,4 +329,42 @@ test("other buttons leave the drawer open, and so does a wide screen", () => {
 	assert.equal(drawerClosedAfterTapping("Plugins"), false);
 	assert.equal(drawerClosedAfterTapping("Session actions"), false);
 	assert.equal(drawerClosedAfterTapping("New session", { narrow: false }), false);
+});
+
+/**
+ * The device predicate is the #17 fix, so it is exposed on the diagnostics
+ * object the boot already publishes (`globalThis.__RDSH_MOBILE_UX__`).
+ */
+function phoneOf(options) {
+	const { sandbox } = bootClient(options);
+	const diagnostics = sandbox.__RDSH_MOBILE_UX__;
+	assert.ok(diagnostics !== undefined, "the mobile half booted and published its diagnostics");
+	assert.equal(typeof diagnostics.phone, "function", "phone() is observable");
+	return diagnostics.phone();
+}
+
+test("phone() follows the pointer and the display mode, not the width", () => {
+	assert.equal(phoneOf({ narrow: false }), false, "a wide mouse window is not a phone");
+	assert.equal(phoneOf({ narrow: true }), false, "a narrow desktop window is not a phone");
+	assert.equal(phoneOf({ narrow: true, coarse: true }), true, "a coarse pointer is a phone");
+	assert.equal(phoneOf({ narrow: false, coarse: true }), true, "a coarse-pointer tablet is a phone at any width");
+	// #17: an installed desktop PWA and a fullscreen desktop window both have a
+	// keyboard and local editors, so they stay desktops even though their
+	// display-mode is standalone/fullscreen.
+	assert.equal(phoneOf({ narrow: false, standalone: true }), false, "an installed desktop app is not a phone");
+	assert.equal(phoneOf({ narrow: true, standalone: true }), true, "a touch screen in a narrow window is");
+});
+
+test("the store reports the device separately from the layout", () => {
+	const { sandbox } = bootClient({ narrow: true });
+	const state = sandbox.__RDSH_MOBILE_UX__.state;
+	assert.equal(state.narrow, true, "the layout still measures width");
+	assert.equal(state.phone, false, "a narrow desktop window is not a phone");
+});
+
+test("the desktop notification opt-in is read from this browser", () => {
+	const off = bootClient();
+	assert.equal(off.sandbox.__RDSH_MOBILE_UX__.state.notifyDeviceTurns, false, "phone-only stays the default");
+	const on = bootClient({ storage: { "rdsh-mobile-ux:notify-device-turns": "1" } });
+	assert.equal(on.sandbox.__RDSH_MOBILE_UX__.state.notifyDeviceTurns, true, "the saved opt-in is read");
 });

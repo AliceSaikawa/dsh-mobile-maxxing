@@ -976,8 +976,14 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     // Same predicate as the PWA part above: a landscape phone is a phone.
     // Both halves must agree or the shell and the layout disagree on width.
     const NARROW_QUERY = "(max-width: 767px), (orientation: landscape) and (max-width: 1023px) and (max-height: 500px) and (pointer: coarse)";
+    // `phone()` asks what the device is, not how wide the window is. A desktop
+    // window dragged to 683px still has a mouse, a keyboard and a local editor,
+    // so hiding the app's own controls there is a regression (#17).
+    const COARSE_QUERY = "(pointer: coarse)";
+    const ANY_COARSE_QUERY = "(any-pointer: coarse)";
     const HIDE_OVERRIDE_KEY = "rdsh-mobile-ux:hide-disabled";
     const HIDE_EXTRA_KEY = "rdsh-mobile-ux:hide-extra";
+    const NOTIFY_DEVICE_TURNS_KEY = "rdsh-mobile-ux:notify-device-turns";
     const CONFIG = globalThis.__RDSH_MOBILE_UX_CONFIG__ && typeof globalThis.__RDSH_MOBILE_UX_CONFIG__ === "object"
       ? globalThis.__RDSH_MOBILE_UX_CONFIG__
       : {};
@@ -998,17 +1004,19 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     const CACHE_PROBE = probeRegex("cacheHit", "i", "cache hit");
     const CONTEXT_PROBE = probeRegex("context", "i", "context");
 
-    /** Controls that have no meaning inside an installed app on a phone. */
+    /**
+     * Controls that have no meaning on a phone.
+     *
+     * Fail open: only an action that is guaranteed to dead-end in a phone
+     * browser belongs here. "Built-in plugins", "Show coding view" and
+     * "Keyboard shortcuts" are useful on a narrow desktop window (and arguably
+     * on a phone), so they stay (#17). Every label that is only matched by
+     * style/class does not belong here either.
+     */
     const HIDE_DEFAULT = [
+      // The config file lives on the host; a phone browser cannot open it.
+      "Open configuration file",
       "Open in Files",
-      "More ways to open",
-      "More actions",
-      "Feedback",
-      "Sign in",
-      "Keyboard shortcuts",
-      "Desktop notifications",
-      "Show coding view",
-      "Built-in plugins",
       // Bundled editors and file managers are desktop affordances; on a phone
       // the tap only produces an error or a dead end.
       "Open in Text Editor",
@@ -1034,6 +1042,9 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
 
     const state = {
       narrow: window.matchMedia(NARROW_QUERY).matches,
+      // What kind of device this is (see `phone()`), kept in the store so the
+      // settings UI can stop offering phone-only rows on a desktop.
+      phone: phone(),
       drawerOpen: false,
       hidden: [],
       hideDisabled: false,
@@ -1041,6 +1052,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       notice: "",
       bootError: "",
       enterToSend: readEnterToSend(),
+      notifyDeviceTurns: readNotifyDeviceTurns(),
       deviceTheme: readDeviceTheme(),
       deviceThemeNote: "",
     };
@@ -1069,6 +1081,32 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
 
     function narrow() {
       return window.matchMedia(NARROW_QUERY).matches;
+    }
+
+    /**
+     * Is this a phone (or an installed app), as opposed to a narrow window on
+     * a desktop?
+     *
+     * #17: width alone is not a phone signal. A 683px desktop window is still
+     * driven by a mouse and a keyboard and still has local editors and file
+     * managers, so the controls it can use must stay visible. This predicate
+     * is the one for hiding, label rewriting and send-side behaviour; the
+     * layout (drawer, columns) keeps using `narrow()`, which really is about
+     * width.
+     *
+     * Standalone/fullscreen counts because an installed app has no browser
+     * chrome to fall back on. `navigator.standalone` covers iOS, which does not
+     * report `display-mode` for a home-screen app.
+     */
+    function phone() {
+      if (typeof window.matchMedia !== "function") return false;
+      if (window.matchMedia(COARSE_QUERY).matches) return true;
+      // A phone with a mouse attached reports a fine primary pointer, and a
+      // touchscreen laptop reports a coarse secondary one. Only the narrow
+      // layout separates them, so the fallback asks both questions. Installed
+      // desktop PWAs and a fullscreen desktop window stay desktops: they have
+      // a keyboard and local editors, and hiding stock UI there is #17.
+      return narrow() && window.matchMedia(ANY_COARSE_QUERY).matches;
     }
 
     /**
@@ -1103,6 +1141,41 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         /* private mode: the choice lasts for this page */
       }
       emit({ enterToSend: value });
+    }
+
+    /**
+     * Treat turns sent from this browser as phone turns (#15).
+     *
+     * The host defaults to `onlyMobileTurns: true`, and the client only marks a
+     * session after a send from a phone. A desktop send is therefore never
+     * notified. The setting writer for the host config is not available to a
+     * browser module, so this is a per-browser opt-in: while it is on, this
+     * browser announces its sends through the same mobile-send endpoint a phone
+     * uses. The host config stays untouched, which also means the choice is
+     * remembered per browser profile rather than per profile.
+     */
+    function readNotifyDeviceTurns() {
+      try {
+        return localStorage.getItem(NOTIFY_DEVICE_TURNS_KEY) === "1";
+      } catch {
+        return false;
+      }
+    }
+
+    function writeNotifyDeviceTurns(value) {
+      try {
+        if (value) localStorage.setItem(NOTIFY_DEVICE_TURNS_KEY, "1");
+        else localStorage.removeItem(NOTIFY_DEVICE_TURNS_KEY);
+      } catch {
+        /* private mode: the choice lasts for this page */
+      }
+      emit({ notifyDeviceTurns: value });
+      scheduleDecorate();
+    }
+
+    /** The live value of the #15 opt-in (the store copy only drives the UI). */
+    function notifyDeviceTurns() {
+      return readNotifyDeviceTurns();
     }
 
     // ---------------------------------------------------------------------
@@ -1453,53 +1526,73 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     function applyHideList(disabled) {
       const labels = hideLabels();
       const hidden = new Set();
+      // #17: hiding is a phone decision. A narrow desktop window keeps every
+      // control it can use, and the settings card stays honest about it.
+      const hideOnThisDevice = !disabled && phone();
       for (const element of document.querySelectorAll("button[aria-label], [role='menuitem']")) {
         const label = labelOf(element);
         if (label === "" || label.length > 48) continue;
-        if (!disabled && shouldHide(label, labels)) {
+        if (hideOnThisDevice && shouldHide(label, labels)) {
           element.setAttribute("data-rdsh-hidden", "");
           hidden.add(label);
         } else {
           element.removeAttribute("data-rdsh-hidden");
         }
       }
-      // Mobile settings: merge the PWA/Input tabs and hide PC-only rows/tabs.
-      if (narrow()) {
-        const modal = document.querySelector('[data-shortcut-modal="settings"]');
-        if (modal !== null) {
-          for (const button of modal.querySelectorAll("nav button")) {
-            const label = (button.textContent || "").trim();
-            const merged = label === t("tab.pwa") || label === t("tab.input");
-            const hideTab = merged || (!disabled && shouldHide(label, labels));
-            button.toggleAttribute("data-rdsh-settings-tab-hidden", hideTab);
-            if (hideTab) hidden.add(label);
-          }
-          const rowHidden = new Set();
-          for (const element of modal.querySelectorAll("*")) {
-            if (element.children.length !== 0) continue;
-            const text = (element.textContent || "").trim().replace(/\s+/g, " ");
-            if (text === "" || text.length > 48 || disabled || !shouldHide(text, labels)) continue;
-            let row = element;
-            while (row !== null && row !== modal) {
-              const cls = typeof row.className === "string" ? row.className : "";
-              if (/(^|_)(?:row|setting)(?:_|$)|dswsnd-row/.test(cls)) {
-                row.setAttribute("data-rdsh-setting-hidden", "");
-                rowHidden.add(row);
-                hidden.add(text);
-                break;
-              }
-              row = row.parentElement;
+      const modal = document.querySelector('[data-shortcut-modal="settings"]');
+      // The tab merge is the phone layout: `MobileSection` inlines the PWA and
+      // Input sections there, so the separate tabs vanish with them (#15). It
+      // asks the device as well as the width, because a narrow desktop window
+      // inlines nothing and must keep all three tabs.
+      if (modal !== null && narrow() && phone()) {
+        for (const button of modal.querySelectorAll("nav button")) {
+          const label = (button.textContent || "").trim();
+          const merged = label === t("tab.pwa") || label === t("tab.input");
+          const hideTab = merged || (hideOnThisDevice && shouldHide(label, labels));
+          button.toggleAttribute("data-rdsh-settings-tab-hidden", hideTab);
+          if (hideTab) hidden.add(label);
+        }
+      } else if (modal !== null) {
+        for (const button of modal.querySelectorAll("[data-rdsh-settings-tab-hidden]")) {
+          button.removeAttribute("data-rdsh-settings-tab-hidden");
+        }
+      }
+      // PC-only settings rows and action buttons. Matched by their label, not
+      // by an upstream class: the row container is found through structure,
+      // and a bare action button ("Open configuration file") is hidden as the
+      // button itself.
+      if (modal !== null && hideOnThisDevice) {
+        const rowHidden = new Set();
+        for (const element of modal.querySelectorAll("*")) {
+          if (element.children.length !== 0) continue;
+          const text = (element.textContent || "").trim().replace(/\s+/g, " ");
+          if (text === "" || text.length > 48 || !shouldHide(text, labels)) continue;
+          let row = element;
+          while (row !== null && row !== modal) {
+            const cls = typeof row.className === "string" ? row.className : "";
+            const isRow = /(^|_)(?:row|setting)(?:_|$)|dswsnd-row/.test(cls);
+            const isButton = row.tagName === "BUTTON" || row.getAttribute("role") === "button";
+            if (isRow || isButton) {
+              row.setAttribute("data-rdsh-setting-hidden", "");
+              rowHidden.add(row);
+              hidden.add(text);
+              break;
             }
-          }
-          for (const row of modal.querySelectorAll("[data-rdsh-setting-hidden]")) {
-            if (!rowHidden.has(row)) row.removeAttribute("data-rdsh-setting-hidden");
+            row = row.parentElement;
           }
         }
+        for (const row of modal.querySelectorAll("[data-rdsh-setting-hidden]")) {
+          if (!rowHidden.has(row)) row.removeAttribute("data-rdsh-setting-hidden");
+        }
+      } else if (modal !== null) {
+        // Leaving the phone (or turning hiding off) must not leave a stale
+        // attribute behind for the next pass to trip over.
+        for (const row of modal.querySelectorAll("[data-rdsh-setting-hidden]")) row.removeAttribute("data-rdsh-setting-hidden");
       }
       // Two plugins can add a "copy this session's id" row. Keep one: prefer the
       // localised rdsh row (it reports success) and drop the stock duplicate.
       const menu = document.querySelector("[role='menu']");
-      if (menu !== null && !disabled) {
+      if (menu !== null && hideOnThisDevice) {
         const items = [...menu.querySelectorAll("[role='menuitem']")];
         const localised = items.find((item) => (item.textContent || "").includes(t("sessionId.label")));
         const stock = items.find((item) => /^Copy Session ID$/i.test(labelOf(item)));
@@ -2497,7 +2590,17 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     }
 
     function decorateSidebarSettingsRow() {
-      if (!narrow()) return;
+      // #17: the replacement row belongs to the phone drawer. In a narrow
+      // desktop window the stock account row is still reachable, and swapping
+      // it there only loses the stock menu.
+      if (!phone()) {
+        // A resize out of the phone layout must undo the swap, or the tagged
+        // account row stays hidden by the phone stylesheet (its rule is inside
+        // the width query) and Settings becomes unreachable.
+        for (const tagged of document.querySelectorAll("[data-rdsh-more-row]")) tagged.removeAttribute("data-rdsh-more-row");
+        for (const injected of document.querySelectorAll("[data-rdsh-settings-row]")) injected.remove();
+        return;
+      }
       const nav = document.querySelector("nav.hHd-Xa_panelList");
       if (nav === null) return;
       // The account "More" row is not used on the phone.
@@ -2564,7 +2667,10 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         return;
       }
       add.setAttribute("data-rdsh-add", "");
-      if (narrow()) {
+      // #17: the short "attach only" label and the picker hijack below are a
+      // phone affordance. A narrow desktop window keeps the stock label and
+      // the stock command list behind "+".
+      if (phone()) {
         if (add.getAttribute("aria-label") !== ADD_LABEL) add.setAttribute("aria-label", ADD_LABEL);
       } else if (add.getAttribute("aria-label") === ADD_LABEL) {
         add.setAttribute("aria-label", ADD_STOCK_LABEL);
@@ -2662,7 +2768,12 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       // nothing. The dock strip is the real signal: it sits on-screen only
       // while the panel is open.
       const hideListDisabled = hideDisabled();
-      document.documentElement.toggleAttribute("data-rdsh-hide-settings", !hideListDisabled && narrow());
+      // #17: the attribute that hides upstream settings rows follows the
+      // device, not the window width. Its CSS therefore lives outside the
+      // phone media block (see the stylesheet).
+      const onPhone = phone();
+      if (onPhone !== state.phone) emit({ phone: onPhone });
+      document.documentElement.toggleAttribute("data-rdsh-hide-settings", !hideListDisabled && onPhone);
       applyHideList(hideListDisabled);
       maybeOpenSettings();
     }
@@ -2754,9 +2865,17 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
 
     let currentSessionId = null;
 
-    /** Tell the push host that the next turn belongs to this phone. */
+    /**
+     * Tell the push host that the next turn belongs to this device.
+     *
+     * A phone send is marked automatically. On a desktop that is the #15
+     * opt-in: without it the host's `onlyMobileTurns` default means a PC send
+     * is never notified, and a narrow window silently changing that would be
+     * the same width-based behaviour #17 removes.
+     */
     function markMobileSession() {
-      if (!narrow() || currentSessionId === null) return;
+      if (currentSessionId === null) return;
+      if (!phone() && !notifyDeviceTurns()) return;
       void fetch(`${PUSH_API}/mobile-send`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -2892,7 +3011,9 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
 
     /** The composer focuses the editor on mousedown; that opens the keyboard. */
     function onMouseDownCapture(event) {
-      if (!narrow()) return;
+      // Paired with the "+" hijack below: on a desktop the stock mousedown must
+      // reach the composer's own menu (#17).
+      if (!phone()) return;
       if (addButtonOf(event.target) === null) return;
       event.preventDefault();
       event.stopImmediatePropagation();
@@ -3230,8 +3351,12 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       // `narrow()` would be wrong here: a narrow desktop window still has a
       // keyboard, and the stock composer sends on plain Enter. Only a finger
       // primary pointer gets the phone default (Enter = newline).
-      if (!coarsePointer()) return;
+      const finger = coarsePointer();
       if (event.key !== "Enter" || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return;
+      // Desktop stays out of the key path entirely unless the #15 opt-in is on.
+      // When it is, the stock composer still owns the send; this only marks the
+      // session so the host notifies this device.
+      if (!finger && !notifyDeviceTurns()) return;
       const editor = composerEditor(event.target);
       if (editor === null) return;
       // Only the message composer. A rename field or another contenteditable
@@ -3244,6 +3369,10 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       if (editor.querySelector("[data-selected]") !== null) return;
       // While a menu is open, Enter selects its highlighted row.
       if (openPopup() !== null) return;
+      if (!finger) {
+        markMobileSession();
+        return;
+      }
       if (state.enterToSend) {
         markMobileSession();
         return;
@@ -3511,15 +3640,17 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
           if (input !== null) input.focus({ preventScroll: true });
         }
       }
-      // Fallback for keyboard activation of the send/queue button.
-      if (narrow()) {
+      // Fallback for keyboard activation of the send/queue button, and the
+      // #15 opt-in that treats this browser's turns as phone turns.
+      if (phone() || notifyDeviceTurns()) {
         const primary = target.closest && target.closest('[data-rdsh-composer-root] [class*="primary"]');
         if (primary !== null && primary !== undefined && primary.disabled !== true && !STOP_PROBE.test(primary.getAttribute("aria-label") || "")) {
           markMobileSession();
         }
       }
       // Phone "+": open the OS file/photo picker directly. Commands live in "/".
-      if (addButtonOf(target) !== null && narrow()) {
+      // #17: on a desktop-width-only window the stock menu stays intact.
+      if (addButtonOf(target) !== null && phone()) {
         event.preventDefault();
         event.stopImmediatePropagation();
         pickFiles("file");
@@ -4624,6 +4755,10 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
 
     function MobileSection() {
       const s = useStore();
+      // #15: the phone-only rows and the "hidden controls" card are decided by
+      // the device, not the window width, so a desktop never reads "this is
+      // what we hide from you" about controls that are all visible.
+      const onPhone = s.phone === true;
       const [message, setMessage] = useState("");
       const [busy, setBusy] = useState(false);
       const [disabled, setDisabled] = useState(hideDisabled());
@@ -4705,13 +4840,22 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
           "div",
           { className: "rdsh-mux-card" },
           h("h3", { className: "rdsh-mux-title" }, t("mux.section.title")),
-          h("p", { className: "rdsh-mux-desc" }, t("mux.section.desc")),
-          h("p", { className: "rdsh-mux-note" }, t("mux.section.plusNote")),
+          // #15: on a desktop this card must not describe a layout it is not
+          // running, and the layout row is a phone/window fact. The
+          // notification controls below stay: they are useful everywhere.
+          h("p", { className: "rdsh-mux-desc" }, onPhone ? t("mux.section.desc") : t("mux.section.desc.desktop")),
+          onPhone ? h("p", { className: "rdsh-mux-note" }, t("mux.section.plusNote")) : null,
           h(
             "dl",
             { className: "rdsh-mux-rows" },
-            h("dt", null, t("mux.row.layout")),
-            h("dd", null, s.narrow ? t("mux.row.layout.narrow") : t("mux.row.layout.wide")),
+            onPhone
+              ? h(
+                React.Fragment,
+                null,
+                h("dt", null, t("mux.row.layout")),
+                h("dd", null, s.narrow ? t("mux.row.layout.narrow") : t("mux.row.layout.wide")),
+              )
+              : null,
             h("dt", null, t("mux.row.sessions")),
             h("dd", null, s.drawerOpen ? t("mux.row.sessions.open") : t("mux.row.sessions.closed")),
             h("dt", null, t("mux.row.notifications")),
@@ -4798,43 +4942,63 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
             }),
             h("span", { className: "rdsh-mux-slider-value" }, `${Math.round(volume * 100)}%`),
           ),
-          h("p", { className: "rdsh-mux-note" }, t("mux.note.notifyScope")),
-          message !== "" ? h("p", { className: "rdsh-mux-note" }, message) : null,
-        ),
-        h(
-          "div",
-          { className: "rdsh-mux-card" },
-          h("h3", { className: "rdsh-mux-title" }, t("mux.hidden.title")),
-          h("p", { className: "rdsh-mux-desc" }, t("mux.hidden.desc")),
-          h(
-            "div",
-            { className: "rdsh-mux-chips" },
-            s.hidden.length === 0
-              ? h("span", { className: "rdsh-mux-chip" }, t("mux.hidden.none"))
-              : s.hidden.map((label) => h("span", { className: "rdsh-mux-chip", key: label }, label)),
-          ),
+          // #15: the host defaults to `onlyMobileTurns: true`, so a desktop
+          // send is never notified unless this browser opts in.
           h(
             "label",
             { className: "rdsh-mux-check" },
-            h("input", { type: "checkbox", checked: disabled, onChange: (event) => toggleDisabled(event.target.checked) }),
-            t("mux.hidden.disable"),
-          ),
-          h("div", null,
-            h("div", { className: "rdsh-mux-label" }, t("mux.hidden.extra")),
-            h("textarea", {
-              value: extra,
-              rows: 3,
-              spellCheck: false,
-              onChange: (event) => setExtra(event.target.value),
-              className: "rdsh-mux-textarea",
+            h("input", {
+              type: "checkbox",
+              checked: s.notifyDeviceTurns === true,
+              onChange: (event) => writeNotifyDeviceTurns(event.target.checked),
             }),
+            t("mux.notify.deviceTurns"),
           ),
-          h("div", { className: "rdsh-mux-actions" },
-            h("button", { type: "button", onClick: saveExtra }, t("mux.hidden.save")),
-          ),
+          h("p", { className: "rdsh-mux-note" }, t("mux.notify.deviceTurns.note")),
+          h("p", { className: "rdsh-mux-note" }, t("mux.note.notifyScope")),
+          message !== "" ? h("p", { className: "rdsh-mux-note" }, message) : null,
         ),
-        h(InputSection),
-        typeof globalThis.__RDSH_PWA_SETTINGS_SECTION__ === "function"
+        onPhone
+          ? h(
+            "div",
+            { className: "rdsh-mux-card" },
+            h("h3", { className: "rdsh-mux-title" }, t("mux.hidden.title")),
+            h("p", { className: "rdsh-mux-desc" }, t("mux.hidden.desc")),
+            h(
+              "div",
+              { className: "rdsh-mux-chips" },
+              s.hidden.length === 0
+                ? h("span", { className: "rdsh-mux-chip" }, t("mux.hidden.none"))
+                : s.hidden.map((label) => h("span", { className: "rdsh-mux-chip", key: label }, label)),
+            ),
+            h(
+              "label",
+              { className: "rdsh-mux-check" },
+              h("input", { type: "checkbox", checked: disabled, onChange: (event) => toggleDisabled(event.target.checked) }),
+              t("mux.hidden.disable"),
+            ),
+            h("div", null,
+              h("div", { className: "rdsh-mux-label" }, t("mux.hidden.extra")),
+              h("textarea", {
+                value: extra,
+                rows: 3,
+                spellCheck: false,
+                onChange: (event) => setExtra(event.target.value),
+                className: "rdsh-mux-textarea",
+              }),
+            ),
+            h("div", { className: "rdsh-mux-actions" },
+              h("button", { type: "button", onClick: saveExtra }, t("mux.hidden.save")),
+            ),
+          )
+          : null,
+        // #15: the PWA and Input sections are registered as their own tabs.
+        // Inlining them into "Mobile" as well duplicated every heading on a
+        // desktop, where none of the three tabs are merged. Both halves of the
+        // merge must agree: `applyHideList` hides those tabs under the same
+        // `narrow() && phone()` condition.
+        s.narrow && onPhone ? h(InputSection) : null,
+        s.narrow && onPhone && typeof globalThis.__RDSH_PWA_SETTINGS_SECTION__ === "function"
           ? h(globalThis.__RDSH_PWA_SETTINGS_SECTION__)
           : null,
         s.bootError !== "" ? h("p", { className: "rdsh-mux-note" }, t("mux.bootError", { error: s.bootError })) : null,
@@ -5434,6 +5598,16 @@ html[data-rdsh-safe-bottom] #root { box-sizing: border-box; padding-bottom: env(
    below the web view, so an inner bottom safe-area pad only widens the blank. */
 html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !important; }
 
+/* Controls the hide list matched. The attribute these selectors key off is
+   only written while the phone predicate holds (see applyHideList), so the
+   rule can live outside the width query: a landscape phone and a
+   coarse-pointer tablet are phones at any width. On a narrow desktop window
+   the attribute is absent, so nothing here applies (#17). The merged-tab
+   attribute is different: it follows the phone *layout*, so its rule stays
+   inside the width query below. */
+html[data-rdsh-hide-settings] [data-rdsh-hidden],
+html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !important; }
+
 @media ${NARROW_QUERY} {
   /* The mockup proved 100% is the layout viewport (844) while the native web
      view is 797 on iOS 26; the body could pan 47px. 100dvh is the web view
@@ -5504,9 +5678,12 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
      inside the panel list, so the original row is hidden. */
   [data-rdsh-more-row] { display: none !important; }
 
-  [data-rdsh-hidden],
-  [data-rdsh-setting-hidden],
+  /* The phone layout merges the App and Input tabs into Mobile (the section
+     inlines them). This attribute is only written under the same
+     narrow-and-phone condition, so a narrow desktop window keeps all three
+     tabs. */
   [data-rdsh-settings-tab-hidden] { display: none !important; }
+
   [data-rdsh-settings-nav-arrow] {
     position: fixed; z-index: 1006; width: 30px; height: 30px;
     display: grid; place-items: center; padding: 0;
@@ -5780,12 +5957,15 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
   [data-shortcut-modal="settings"] > nav + div { min-height: 0; }
   /* The close is fixed to the title row now; the old header row only held
      "Open configuration file" (a desktop action). Collapse it so the content
-     begins directly at the tab strip. */
-  [data-shortcut-modal="settings"] > nav + div > div:first-child {
+     begins directly at the tab strip. Tied to the hide list: with "stop
+     hiding" the header (and that action) comes back, which is also how the
+     debug switch can be checked. A narrow desktop window has no
+     data-rdsh-hide-settings, so it keeps the stock header (#17). */
+  html[data-rdsh-hide-settings] [data-shortcut-modal="settings"] > nav + div > div:first-child {
     height: 0 !important; min-height: 0 !important; padding: 0 !important;
     overflow: visible;
   }
-  [data-shortcut-modal="settings"] > nav + div > div:first-child [class*="VOzbGW_actions"] { display: none !important; }
+  html[data-rdsh-hide-settings] [data-shortcut-modal="settings"] > nav + div > div:first-child [class*="VOzbGW_actions"] { display: none !important; }
   [data-shortcut-modal="settings"] > nav + div > div:last-child { padding: 0 12px 16px; }
 
   /* Settings: theme tiles side by side, never crushed. */
@@ -5801,11 +5981,10 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
   }
   [data-shortcut-modal="settings"] [class*="_8HJdBW_cubeRow"] > * > * { max-width: 100%; }
 
-  /* Hide the PC-only rows before their tab paints, so switching back to
-     General never flashes them. Sounds stays: it is useful in the PWA too. */
-  html[data-rdsh-hide-settings] [data-shortcut-modal="settings"] .nhfO0a_setting,
-  html[data-rdsh-hide-settings] [data-shortcut-modal="settings"] [class*="Pt1bsG_row"],
-  html[data-rdsh-hide-settings] [data-shortcut-modal="settings"] [class*="dswsnd-row"]:has([class*="dswsnd-actions"]) { display: none !important; }
+  /* Rows matched by the hide list are hidden by
+     html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] above. There is
+     deliberately no blanket rule over upstream row classes: it hid whole
+     groups regardless of their label, which is what #17 reported. */
 
   /* Settings: no accidental horizontal scrolling in tab panels. */
   [data-shortcut-modal="settings"] [class*="VOzbGW_options"] {
@@ -6060,11 +6239,22 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         }
         const media = window.matchMedia(NARROW_QUERY);
         const onMedia = () => {
-          emit({ narrow: media.matches });
+          emit({ narrow: media.matches, phone: phone() });
           if (!media.matches) clearPhoneHooks();
           scheduleDecorate();
         };
         media.addEventListener("change", onMedia);
+        // #17: the device predicate can change without a width change (a
+        // tablet switching to a keyboard, a window entering fullscreen), and
+        // the settings UI has to follow it.
+        const coarseMedia = window.matchMedia(COARSE_QUERY);
+        const onPointerKind = () => {
+          emit({ phone: phone() });
+          scheduleDecorate();
+        };
+        coarseMedia.addEventListener("change", onPointerKind);
+        const anyCoarseMedia = window.matchMedia(ANY_COARSE_QUERY);
+        anyCoarseMedia.addEventListener("change", onPointerKind);
 
         scheduleDecorate();
         void refreshNotificationStatus();
@@ -6079,6 +6269,9 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           build: BUILD,
           autoSettings: true,
           decorate: scheduleDecorate,
+          // Diagnostics used by the unit tests: the device predicate is the
+          // #17 fix, so it must be observable without a browser.
+          phone,
           closeDrawer,
           openDrawer: toggleDrawer,
           enableNotifications,
@@ -6114,6 +6307,8 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           document.removeEventListener("pointermove", onPointerMove, true);
           document.removeEventListener("focusout", onModelFocusOut, true);
           media.removeEventListener("change", onMedia);
+          coarseMedia.removeEventListener("change", onPointerKind);
+          displayMedia.removeEventListener("change", onPointerKind);
           style.remove();
           rightPanelWatch?.disconnect();
           rightPanelIO?.disconnect();

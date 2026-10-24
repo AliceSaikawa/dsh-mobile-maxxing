@@ -287,8 +287,16 @@ test("upstream hooks are styled only inside the phone query", () => {
 	// phone ring, the open row was painted with a hard-coded #232324, image
 	// previews were darkened and cropped. Those rules used to sit outside the
 	// media block. The safe-area rules are the only exception: they key off
-	// `env()` values, which are zero on a desktop.
-	const allow = [/^html\[data-rdsh-safe-(top|bottom|left|right)\]/, /^html\[data-rdsh-native-gap\]/, /^html\[data-rdsh-pwa=/];
+	// `env()` values, which are zero on a desktop. The hide-list rules are the
+	// second: their attributes are only written while the phone predicate
+	// holds, so the attribute itself is the gate (#17); another test asserts
+	// that the writer uses it.
+	const allow = [
+		/^html\[data-rdsh-safe-(top|bottom|left|right)\]/,
+		/^html\[data-rdsh-native-gap\]/,
+		/^html\[data-rdsh-pwa=/,
+		/^html\[data-rdsh-hide-settings\]/,
+	];
 	const phone = (at) => at.some((head) => /max-width:\s*767px/.test(head));
 	const leaked = [];
 	for (const css of cssBlocks()) {
@@ -324,9 +332,10 @@ test("Enter keeps its desktop behaviour", () => {
 	// The phone default (Enter inserts a newline) is the opposite of the stock
 	// composer. Gating that on width killed Enter-to-send for anyone with a
 	// narrow desktop window, so the guard keys off the pointer instead.
-	const head = functionHead("onKeyDownCapture", 600);
-	assert.match(head, /if \(!coarsePointer\(\)\) return;/, "onKeyDownCapture is not gated on a coarse pointer");
-	assert.doesNotMatch(head, /if \(!narrow\(\)\) return;/, "a narrow desktop window would lose Enter");
+	const head = functionHead("onKeyDownCapture", 1200);
+	assert.match(head, /const finger = coarsePointer\(\);/, "onKeyDownCapture no longer asks about the pointer");
+	assert.match(head, /if \(!finger && !notifyDeviceTurns\(\)\) return;/, "a desktop only enters the key path for the #15 opt-in");
+	assert.doesNotMatch(stripLiterals(head), /narrow\s*\(/, "a narrow desktop window would lose Enter");
 });
 
 test("panel-wide decorations stay off the desktop", () => {
@@ -347,7 +356,7 @@ test("leaving the phone layout removes its hooks", () => {
 		/if \(narrow\(\)\) decorateSessionRows\(\);\s*\n\s*else if \(rowHooksActive\) clearSessionRowHooks\(\)/,
 		"rows are decorated off the phone",
 	);
-	assert.match(CLIENT, /const onMedia = \(\) => \{\s*\n\s*emit\(\{ narrow: media\.matches \}\);\s*\n\s*if \(!media\.matches\) clearPhoneHooks\(\);/, "a resize to desktop keeps the phone hooks");
+	assert.match(CLIENT, /const onMedia = \(\) => \{\s*\n\s*emit\(\{ narrow: media\.matches, phone: phone\(\) \}\);\s*\n\s*if \(!media\.matches\) clearPhoneHooks\(\);/, "a resize to desktop keeps the phone hooks");
 });
 
 test("the live-speed poller only runs on a phone", () => {

@@ -73,6 +73,14 @@ The landscape clause exists because a phone held sideways reports 844x390 or
 852x393, which used to fall into the desktop layout (no drawer button, no swipe).
 A narrow desktop window is unaffected: a mouse reports `pointer: fine`.
 
+The layout is the only thing width decides. **Hiding the app's own controls,
+rewriting their labels, or replacing "+" with the file picker** asks what the
+device is instead (`phone()`): a coarse primary pointer, or an installed app
+(a coarse primary pointer, or a coarse pointer in a narrow window). Width alone
+never counts, so a narrow desktop window keeps the stock UI.
+A narrow desktop window keeps every control, the stock account menu and the
+stock "+" command list.
+
 What changes:
 
 - The sidebar becomes an overlay drawer you open with the floating button
@@ -130,6 +138,13 @@ Volume is 0–100% and both choices are stored in `localStorage`.
       onlyMobileTurns: true   # only turns sent from this phone
       subject: ""             # VAPID contact; "" means the app's own origin
 ```
+
+With the `onlyMobileTurns: true` default a desktop send is never notified. To get
+notifications on a desktop too, turn on **Settings → Mobile → "Notify me for turns
+sent from this browser too"** in that browser. It does not write the host config:
+it marks the browser's own sends as phone sends, so the choice is per browser
+(`localStorage`). Set `onlyMobileTurns: false` in the profile to notify every
+device instead.
 
 Placeholders: `{app}` `{session}` everywhere; `{status}` `{detail}` `{reason}` for a
 turn end; `{header}` `{question}` `{count}` for a question. An unknown placeholder stays

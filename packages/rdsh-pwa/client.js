@@ -3689,16 +3689,16 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       const queueRect = panel.getBoundingClientRect();
       const cardRect = card.getBoundingClientRect();
       const dockRect = dock.getBoundingClientRect();
-      const radiusPair = (value, dimension) => {
+      const radiusPair = (value, width, height) => {
         const parts = String(value || "0").trim().split(/\s+/);
-        const resolve = (part) => part.endsWith("%")
+        const resolve = (part, dimension) => part.endsWith("%")
           ? dimension * (parseFloat(part) || 0) / 100
           : parseFloat(part) || 0;
-        return { x: resolve(parts[0]), y: resolve(parts[1] || parts[0]) };
+        return { x: resolve(parts[0], width), y: resolve(parts[1] || parts[0], height) };
       };
       const cardStyle = getComputedStyle(card);
-      const leftRadius = radiusPair(cardStyle.borderTopLeftRadius, Math.min(cardRect.width, cardRect.height));
-      const rightRadius = radiusPair(cardStyle.borderTopRightRadius, Math.min(cardRect.width, cardRect.height));
+      const leftRadius = radiusPair(cardStyle.borderTopLeftRadius, cardRect.width, cardRect.height);
+      const rightRadius = radiusPair(cardStyle.borderTopRightRadius, cardRect.width, cardRect.height);
       const leftRx = Math.min(leftRadius.x, cardRect.width / 2);
       const leftRy = Math.min(leftRadius.y, cardRect.height / 2);
       const rightRx = Math.min(rightRadius.x, cardRect.width / 2);

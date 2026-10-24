@@ -250,6 +250,8 @@ export const PROBES = {
 	context: ["context", "コンテキスト"],
 	/** Any aria-label that identifies the stats dock. */
 	stats: ["tok", "turns", "context", "ターン", "コンテキスト"],
+	/** A control that starts a new session (sidebar button, brand row, workspace "+"). */
+	newSession: ["new session", "新建会话", "中新建会话"],
 	/** Labels of a session that has no name yet. */
 	untitled: ["new session", "new chat", "untitled", "新しいセッション", "新しいチャット", "無題", "未命名", "新会话"],
 };

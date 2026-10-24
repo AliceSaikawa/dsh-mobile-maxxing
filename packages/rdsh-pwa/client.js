@@ -3481,15 +3481,18 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     /**
      * Whether the click landed on a button that starts a new session.
      *
-     * The app labels all three of them with the same wording: "New session" /
-     * "新建会话" for the sidebar button and brand row, "New session in <name>" /
-     * "在“<name>”中新建会话" for the per-workspace button.
+     * The app labels all three of them with the same wording: "New session" for
+     * the sidebar button and the brand row, "New session in <name>" for a
+     * workspace's "+". The vocabulary lives in the probe table, like every
+     * other upstream label this package matches.
      */
-    const NEW_SESSION_LABEL = /^(?:new session\b|新建会话|在.*中新建会话)/i;
+    let newSessionPattern = null;
 
     function isNewSessionButton(target) {
       const button = target.closest("button[aria-label]");
-      return button !== null && NEW_SESSION_LABEL.test(button.getAttribute("aria-label") || "");
+      if (button === null) return false;
+      if (newSessionPattern === null) newSessionPattern = probeRegex("newSession", "i", "new session") ?? /new session/i;
+      return newSessionPattern.test(button.getAttribute("aria-label") || "");
     }
 
     function onClickCapture(event) {

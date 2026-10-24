@@ -18,6 +18,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import vm from "node:vm";
+import { PROBES } from "../lib/copy.js";
 
 const CLIENT = readFileSync(new URL("../client.js", import.meta.url), "utf8");
 
@@ -106,6 +107,10 @@ function element() {
 function bootClient({ narrow = false, configureDocument = () => {}, schedule = () => 0 } = {}) {
 	let definition;
 	const sandbox = {
+		// index.js injects the probe table into the page; the stub needs the same
+		// vocabulary or the bilingual upstream-label matching falls back to
+		// English and the Chinese cases never match.
+		__RDSH_PWA_PROBES__: PROBES,
 		window: {
 			__ModuleLoader__: {
 				load(value) {
@@ -130,7 +135,7 @@ function bootClient({ narrow = false, configureDocument = () => {}, schedule = (
 		location: stub(),
 		localStorage: stub(),
 		sessionStorage: stub(),
-		matchMedia: (query) => ({ matches: narrow && query === "(max-width: 767px)", addEventListener() {}, removeEventListener() {} }),
+		matchMedia: (query) => ({ matches: narrow && query.includes("max-width: 767px"), addEventListener() {}, removeEventListener() {} }),
 		addEventListener() {},
 		removeEventListener() {},
 		setTimeout: schedule,

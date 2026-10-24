@@ -21,8 +21,8 @@
     .story p { margin: 0 0 24px; }
     .thinking { display: flex; gap: 8px; align-items: center; color: var(--blue); border-top: 1px solid #29292c; padding-top: 12px; font-size: 14px; }
     .input-area { position: fixed; bottom: max(34px, env(safe-area-inset-bottom)); width: min(100%, 383px); left: 50%; transform: translateX(-50%); }
-    .queue-dock { position: relative; width: calc(100% - 64px); margin: 0 auto -5px; }
-    .queue-panel { position: relative; min-height: 42px; display: flex; align-items: center; gap: 10px; padding: 0 14px; background: var(--surface); border-radius: 20px 20px 0 0; }
+    .queue-dock { position: relative; z-index: 1; overflow: visible; width: calc(100% - 32px); margin: 0 auto -5px; }
+    .queue-panel { position: relative; z-index: 1; min-height: 42px; display: flex; align-items: center; gap: 10px; padding: 0 14px; background: var(--surface); border-radius: 20px 20px 0 0; }
     .queue-icon { font-size: 17px; color: #b7b7c0; }
     .queue-text { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 15px; }
     .queue-actions { display: flex; gap: 15px; align-items: center; }
@@ -78,32 +78,85 @@
   <script>
     const panel = document.getElementById("queuePanel");
     const card = document.getElementById("composer");
+    const dock = document.getElementById("queueDock");
+    const svgNS = "http://www.w3.org/2000/svg";
+    const fmt = (value) => String(Number(value.toFixed(3)));
+
+    function radiusPair(value, dimension) {
+      const parts = String(value || "0").trim().split(/\s+/);
+      const resolve = (part) => part.endsWith("%") ? dimension * (parseFloat(part) || 0) / 100 : parseFloat(part) || 0;
+      return { x: resolve(parts[0]), y: resolve(parts[1] || parts[0]) };
+    }
+
+    function cornerPath(side, q, c, rx, ry, overlap) {
+      if (rx <= 0 || ry <= 0 || overlap >= ry) return null;
+      const tangent = side === "left" ? c.left + rx : c.right - rx;
+      const start = side === "left" ? Math.max(q.left, c.left) : Math.min(q.right, c.right);
+      let end = side === "left" ? Math.min(q.right, tangent) : Math.max(q.left, tangent);
+      if (side === "left" ? start >= end : start <= end) return null;
+      if (overlap > 0) {
+        const inset = rx * Math.sqrt(Math.max(0, 1 - Math.pow(1 - overlap / ry, 2)));
+        const zeroY = side === "left" ? tangent - inset : tangent + inset;
+        end = side === "left" ? Math.min(end, zeroY) : Math.max(end, zeroY);
+      }
+      const depthAt = (x) => {
+        const t = side === "left" ? (tangent - x) / rx : (x - tangent) / rx;
+        return ry * (1 - Math.sqrt(Math.max(0, 1 - t * t))) - overlap;
+      };
+      if (side === "left" ? start >= end : start <= end) return null;
+      if (depthAt(start) <= 0) return null;
+      let path = "M " + fmt(start - q.left) + " 0 L " + fmt(end - q.left) + " 0";
+      for (let i = 1; i <= 20; i += 1) {
+        const x = end + (start - end) * i / 20;
+        path += " L " + fmt(x - q.left) + " " + fmt(Math.max(0, depthAt(x)));
+      }
+      return path + " Z";
+    }
+
     function drawJoin() {
-      if (panel.hidden) { panel.style.clipPath = ""; return; }
+      const existing = dock.querySelector("[data-rdsh-queue-join]");
+      if (dock.hidden || panel.hidden) { existing?.remove(); return; }
       const q = panel.getBoundingClientRect();
       const c = card.getBoundingClientRect();
-      const radius = Math.min(parseFloat(getComputedStyle(card).borderTopLeftRadius) || 0, c.height / 2);
-      const w = q.width;
-      const bottom = Math.min(q.height, c.top - q.top + 0.5);
-      const topRadius = Math.min(parseFloat(getComputedStyle(panel).borderTopLeftRadius) || 0, w / 2, bottom / 2);
-      const left = Math.max(0, Math.min(w / 2, c.left + radius - q.left));
-      const right = Math.min(w, Math.max(w / 2, c.right - radius - q.left));
-      const curveTop = Math.max(topRadius, bottom - 16);
-      const controlY = Math.max(curveTop, bottom - 2);
-      const d = "M " + topRadius + " 0 H " + (w - topRadius)
-        + " Q " + w + " 0 " + w + " " + topRadius
-        + " V " + curveTop
-        + " C " + w + " " + controlY + " " + w + " " + bottom + " " + right + " " + bottom
-        + " H " + left + " C 0 " + bottom + " 0 " + controlY + " 0 " + curveTop
-        + " V " + topRadius + " Q 0 0 " + topRadius + " 0 Z";
-      panel.style.clipPath = 'path("' + d + '")';
-      panel.setAttribute("data-rdsh-queue-clip", "");
+      const d = dock.getBoundingClientRect();
+      const css = getComputedStyle(card);
+      const left = radiusPair(css.borderTopLeftRadius, Math.min(c.width, c.height));
+      const right = radiusPair(css.borderTopRightRadius, Math.min(c.width, c.height));
+      const overlap = q.bottom - c.top;
+      const paths = [
+        cornerPath("left", q, c, Math.min(left.x, c.width / 2), Math.min(left.y, c.height / 2), overlap),
+        cornerPath("right", q, c, Math.min(right.x, c.width / 2), Math.min(right.y, c.height / 2), overlap),
+      ].filter(Boolean);
+      const gap = Math.max(0, -overlap);
+      const flatLeft = Math.max(q.left, c.left + left.x);
+      const flatRight = Math.min(q.right, c.right - right.x);
+      if (gap > 0 && flatRight > flatLeft) {
+        paths.push("M " + fmt(flatLeft - q.left) + " 0 H " + fmt(flatRight - q.left) + " V " + fmt(gap) + " H " + fmt(flatLeft - q.left) + " Z");
+      }
+      if (!paths.length) { existing?.remove(); return; }
+      const depthNumbers = paths.join(" ").match(/-?\d+(?:\.\d+)?/g)?.map(Number) || [];
+      const height = Math.max(1, ...depthNumbers.filter((_, index) => index % 2 === 1));
+      const svg = existing || document.createElementNS(svgNS, "svg");
+      svg.setAttribute("data-rdsh-queue-join", "");
+      svg.setAttribute("aria-hidden", "true");
+      svg.setAttribute("viewBox", "0 0 " + fmt(q.width) + " " + fmt(height));
+      svg.setAttribute("preserveAspectRatio", "none");
+      Object.assign(svg.style, { position: "absolute", left: (q.left - d.left) + "px", top: (q.bottom - d.top) + "px", width: q.width + "px", height: height + "px", overflow: "visible", pointerEvents: "none", zIndex: "0" });
+      svg.replaceChildren();
+      const fill = getComputedStyle(panel).backgroundColor;
+      for (const data of paths) {
+        const shape = document.createElementNS(svgNS, "path");
+        shape.setAttribute("d", data);
+        shape.setAttribute("fill", fill);
+        svg.append(shape);
+      }
+      if (!existing) dock.append(svg);
     }
+
     const update = () => requestAnimationFrame(drawJoin);
     window.addEventListener("resize", update);
     new ResizeObserver(update).observe(card);
     new ResizeObserver(update).observe(panel);
-    const dock = document.getElementById("queueDock");
     document.getElementById("removeQueue").addEventListener("click", () => { dock.hidden = true; update(); });
     document.getElementById("addQueue").addEventListener("click", () => { dock.hidden = false; panel.hidden = false; update(); });
     document.getElementById("editQueue").addEventListener("click", () => {

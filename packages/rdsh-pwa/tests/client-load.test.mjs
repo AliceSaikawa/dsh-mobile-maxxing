@@ -172,7 +172,7 @@ function bootClient({
 			matches: Boolean(
 				(narrow && query.includes("max-width: 767px"))
 				|| (coarse && query === "(pointer: coarse)")
-				|| (standalone && query === "(display-mode: standalone), (display-mode: fullscreen)"),
+				|| (standalone && query === "(any-pointer: coarse)"),
 			),
 			addEventListener() {},
 			removeEventListener() {},
@@ -348,7 +348,11 @@ test("phone() follows the pointer and the display mode, not the width", () => {
 	assert.equal(phoneOf({ narrow: true }), false, "a narrow desktop window is not a phone");
 	assert.equal(phoneOf({ narrow: true, coarse: true }), true, "a coarse pointer is a phone");
 	assert.equal(phoneOf({ narrow: false, coarse: true }), true, "a coarse-pointer tablet is a phone at any width");
-	assert.equal(phoneOf({ narrow: false, standalone: true }), true, "an installed app is a phone");
+	// #17: an installed desktop PWA and a fullscreen desktop window both have a
+	// keyboard and local editors, so they stay desktops even though their
+	// display-mode is standalone/fullscreen.
+	assert.equal(phoneOf({ narrow: false, standalone: true }), false, "an installed desktop app is not a phone");
+	assert.equal(phoneOf({ narrow: true, standalone: true }), true, "a touch screen in a narrow window is");
 });
 
 test("the store reports the device separately from the layout", () => {

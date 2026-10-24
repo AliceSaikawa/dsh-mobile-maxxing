@@ -76,7 +76,8 @@ A narrow desktop window is unaffected: a mouse reports `pointer: fine`.
 The layout is the only thing width decides. **Hiding the app's own controls,
 rewriting their labels, or replacing "+" with the file picker** asks what the
 device is instead (`phone()`): a coarse primary pointer, or an installed app
-(`display-mode: standalone` / `fullscreen`, or `navigator.standalone` on iOS).
+(a coarse primary pointer, or a coarse pointer in a narrow window). Width alone
+never counts, so a narrow desktop window keeps the stock UI.
 A narrow desktop window keeps every control, the stock account menu and the
 stock "+" command list.
 

@@ -980,7 +980,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     // window dragged to 683px still has a mouse, a keyboard and a local editor,
     // so hiding the app's own controls there is a regression (#17).
     const COARSE_QUERY = "(pointer: coarse)";
-    const APP_DISPLAY_QUERY = "(display-mode: standalone), (display-mode: fullscreen)";
+    const ANY_COARSE_QUERY = "(any-pointer: coarse)";
     const HIDE_OVERRIDE_KEY = "rdsh-mobile-ux:hide-disabled";
     const HIDE_EXTRA_KEY = "rdsh-mobile-ux:hide-extra";
     const NOTIFY_DEVICE_TURNS_KEY = "rdsh-mobile-ux:notify-device-turns";
@@ -1101,8 +1101,12 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     function phone() {
       if (typeof window.matchMedia !== "function") return false;
       if (window.matchMedia(COARSE_QUERY).matches) return true;
-      if (window.matchMedia(APP_DISPLAY_QUERY).matches) return true;
-      return typeof navigator !== "undefined" && navigator.standalone === true;
+      // A phone with a mouse attached reports a fine primary pointer, and a
+      // touchscreen laptop reports a coarse secondary one. Only the narrow
+      // layout separates them, so the fallback asks both questions. Installed
+      // desktop PWAs and a fullscreen desktop window stay desktops: they have
+      // a keyboard and local editors, and hiding stock UI there is #17.
+      return narrow() && window.matchMedia(ANY_COARSE_QUERY).matches;
     }
 
     /**
@@ -6249,8 +6253,8 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
           scheduleDecorate();
         };
         coarseMedia.addEventListener("change", onPointerKind);
-        const displayMedia = window.matchMedia(APP_DISPLAY_QUERY);
-        displayMedia.addEventListener("change", onPointerKind);
+        const anyCoarseMedia = window.matchMedia(ANY_COARSE_QUERY);
+        anyCoarseMedia.addEventListener("change", onPointerKind);
 
         scheduleDecorate();
         void refreshNotificationStatus();

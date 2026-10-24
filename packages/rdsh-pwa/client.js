@@ -994,6 +994,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     const HIDE_OVERRIDE_KEY = "rdsh-mobile-ux:hide-disabled";
     const HIDE_EXTRA_KEY = "rdsh-mobile-ux:hide-extra";
     const NOTIFY_DEVICE_TURNS_KEY = "rdsh-mobile-ux:notify-device-turns";
+    const ENTER_TO_SEND_KEY = "rdsh-mobile-ux:enter-to-send";
     const CONFIG = globalThis.__RDSH_MOBILE_UX_CONFIG__ && typeof globalThis.__RDSH_MOBILE_UX_CONFIG__ === "object"
       ? globalThis.__RDSH_MOBILE_UX_CONFIG__
       : {};
@@ -1112,8 +1113,6 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     function phone() {
       return narrow();
     }
-
-    const ENTER_TO_SEND_KEY = "rdsh-mobile-ux:enter-to-send";
 
     function readEnterToSend() {
       try {

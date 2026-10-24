@@ -120,8 +120,8 @@
       const c = card.getBoundingClientRect();
       const d = dock.getBoundingClientRect();
       const css = getComputedStyle(card);
-      const left = radiusPair(css.borderTopLeftRadius, Math.min(c.width, c.height));
-      const right = radiusPair(css.borderTopRightRadius, Math.min(c.width, c.height));
+      const left = radiusPair(css.borderTopLeftRadius, c.width, c.height);
+      const right = radiusPair(css.borderTopRightRadius, c.width, c.height);
       const overlap = q.bottom - c.top;
       const paths = [
         cornerPath("left", q, c, Math.min(left.x, c.width / 2), Math.min(left.y, c.height / 2), overlap),

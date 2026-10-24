@@ -134,8 +134,7 @@
         paths.push("M " + fmt(flatLeft - q.left) + " 0 H " + fmt(flatRight - q.left) + " V " + fmt(gap) + " H " + fmt(flatLeft - q.left) + " Z");
       }
       if (!paths.length) { existing?.remove(); return; }
-      const depthNumbers = paths.join(" ").match(/-?\d+(?:\.\d+)?/g)?.map(Number) || [];
-      const height = Math.max(1, ...depthNumbers.filter((_, index) => index % 2 === 1));
+      const height = Math.max(1, left.y, right.y, gap);
       const svg = existing || document.createElementNS(svgNS, "svg");
       svg.setAttribute("data-rdsh-queue-join", "");
       svg.setAttribute("aria-hidden", "true");

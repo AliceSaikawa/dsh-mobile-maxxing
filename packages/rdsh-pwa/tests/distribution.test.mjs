@@ -1,0 +1,60 @@
+/**
+ * Distribution checks: the tarball has to be something `dsh plugin add`
+ * accepts and something DSH's plugin inventory can render, and the docs have
+ * to show the command DSH actually takes.
+ *
+ * These run without a DSH process and without a browser, like the other unit
+ * tests; they only read the files that `npm pack` ships.
+ */
+
+import assert from "node:assert/strict";
+import { readFile, stat } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { test } from "node:test";
+import { fileURLToPath } from "node:url";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const packageDir = join(here, "..");
+const repo = join(packageDir, "..", "..");
+const manifest = JSON.parse(await readFile(join(packageDir, "package.json"), "utf8"));
+
+test("the manifest is a DSH bundle with a client half", async () => {
+	assert.equal(manifest.dsh?.bundle?.patch, "./cordis.patch.yml", "a bundle declares its patch");
+	assert.ok(manifest.exports?.["./client"], "the client half needs the ./client export");
+	assert.equal(manifest.dsh?.client?.platform, "web");
+	await stat(join(packageDir, manifest.dsh.bundle.patch));
+
+	const client = await readFile(join(packageDir, "client.js"), "utf8");
+	assert.match(client, new RegExp(`id: "${manifest.name}"`),
+		"the browser module id has to equal the package name");
+});
+
+test("the inventory can read a title, a description and an icon", async () => {
+	assert.ok(manifest.exports?.["./locale/*.json"], "locale resources must be exported");
+	for (const language of ["en", "ja"]) {
+		const locale = JSON.parse(await readFile(join(packageDir, "locale", `${language}.json`), "utf8"));
+		assert.ok(locale.meta?.title, `${language}.json needs meta.title`);
+		assert.ok(locale.meta?.description, `${language}.json needs meta.description`);
+	}
+	assert.ok(manifest.files.includes("locale/*.json"), "locale files have to ship");
+
+	// DSH resolves the icon as the exported `./icon` resource, not through a
+	// top-level `icon` field: package.json is not an exported subpath, so the
+	// manifest never sees that field.
+	const icon = manifest.exports["./icon"];
+	assert.ok(icon, "the icon has to be exported as ./icon");
+	const file = await stat(join(packageDir, icon));
+	assert.ok(file.isFile(), "the exported icon has to exist");
+	assert.ok(file.size <= 256 * 1024, "DSH refuses an icon above 256 KiB");
+	assert.ok(manifest.files.includes("assets/*.png"), "the icon has to ship");
+});
+
+test("the docs use the plugin command DSH takes", async () => {
+	for (const doc of ["README.md", join("packages", "rdsh-pwa", "README.md")]) {
+		const text = await readFile(join(repo, doc), "utf8");
+		assert.doesNotMatch(text, /dsh plugin add\b/, `${doc}: "dsh plugin add" needs --profile`);
+		assert.doesNotMatch(text, /^\s*cd ~\/\.dsh\/profiles\/web/m,
+			`${doc}: the install command works from any directory`);
+		assert.ok(text.includes("dsh plugin --profile web add "), `${doc}: show the install command`);
+	}
+});

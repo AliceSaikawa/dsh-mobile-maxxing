@@ -9,12 +9,12 @@ PWA・通知・モバイルUX・CJK表示の修正・セッションIDのコピ�
 ## インストール
 
 ```sh
-cd ~/.dsh/profiles/web
-dsh plugin add https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.3.3/rdsh-pwa-0.3.3.tgz
-# DSH を再起動（例: systemctl --user restart dsh-web.service）
+dsh plugin --profile web add https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.3.3/rdsh-pwa-0.3.3.tgz
+# DSH を再起動して読み込む（例: systemctl --user restart dsh-web.service）
 ```
 
-これだけです。`dsh plugin add` が依存と bundle の両方を更新します。
+これだけです。`dsh plugin --profile web add` が依存と bundle の両方を更新します
+（`--profile` は必須で、`cd ~/.dsh/profiles/web` は要りません）。
 追加のプラグインも、通知用ライブラリも要りません。
 
 ## できること
@@ -45,10 +45,10 @@ node scripts/pack-all.mjs   # dist/ に tarball を作る
 各パッケージは `packages/<name>/` に閉じています。共通のビルド工程はありません
 （クライアント側は生の JS をそのまま配信し、ホスト側は Node 標準モジュールだけで動きます）。
 
-チェックアウトをそのまま使う場合:
+チェックアウトをそのまま使う場合（依存と bundle の両方が入ります）:
 
 ```sh
-ln -sfn /path/to/dsh-mobile-maxxing/packages/rdsh-pwa ~/.dsh/profiles/web/node_modules/rdsh-pwa
+dsh plugin --profile web add link:/path/to/dsh-mobile-maxxing/packages/rdsh-pwa
 ```
 
 ## リリース
@@ -61,7 +61,7 @@ gh release create vX.Y.Z dist/*.tgz
 `dist/` には版付き（`rdsh-pwa-<version>.tgz`）と版なし（`rdsh-pwa.tgz`）の両方ができます。
 
 **README が指すのは版付きの URL です。** 版なしの `releases/latest/download/rdsh-pwa.tgz` は
-人が手で落とすには便利ですが、`dsh plugin add`（pnpm）は URL 単位でキャッシュするため、
+人が手で落とすには便利ですが、`dsh plugin --profile web add`（pnpm）は URL 単位でキャッシュするため、
 同じ URL のまま更新すると古い tarball が入ります。版付き URL ならリリースごとに別 URL になり、
 この問題が起きません。
 
@@ -78,13 +78,13 @@ row. **It installs on a stock DSH** — no other `rdsh-*` plugin and no external
 ## Install
 
 ```sh
-cd ~/.dsh/profiles/web
-dsh plugin add https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.3.3/rdsh-pwa-0.3.3.tgz
-# then restart DSH (e.g. systemctl --user restart dsh-web.service)
+dsh plugin --profile web add https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.3.3/rdsh-pwa-0.3.3.tgz
+# then restart DSH to load it (e.g. systemctl --user restart dsh-web.service)
 ```
 
-That is all: `dsh plugin add` updates both the dependency and the bundle list. No companion
-plugin and no push library are needed.
+That is all: `dsh plugin --profile web add` updates both the dependency and the bundle list
+(`--profile` is required; the `cd ~/.dsh/profiles/web` is not). No companion plugin and no
+push library are needed.
 
 ## What it does
 
@@ -124,7 +124,7 @@ gh release create vX.Y.Z dist/*.tgz
 
 **The READMEs link the versioned URL.** The alias
 (`releases/latest/download/rdsh-pwa.tgz`) is handy for a manual download, but
-`dsh plugin add` (pnpm) caches by URL, so updating behind the same URL installs the old
+`dsh plugin --profile web add` (pnpm) caches by URL, so updating behind the same URL installs the old
 tarball. A versioned URL changes every release and avoids that.
 
 `node scripts/pack-all.mjs` rewrites the URLs in the READMEs to match `package.json`.

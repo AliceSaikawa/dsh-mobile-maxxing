@@ -13,7 +13,7 @@ const dist = join(root, "dist");
 rmSync(dist, { recursive: true, force: true });
 mkdirSync(dist, { recursive: true });
 
-const packed = [];
+const packages = [];
 for (const entry of readdirSync(join(root, "packages"))) {
 	const directory = join(root, "packages", entry);
 	let manifest;
@@ -26,23 +26,24 @@ for (const entry of readdirSync(join(root, "packages"))) {
 		console.log(`skip ${manifest.name} (private)`);
 		continue;
 	}
-	execFileSync("npm", ["pack", "--pack-destination", dist], { cwd: directory, stdio: "pipe" });
-	const file = `${manifest.name}-${manifest.version}.tgz`;
-	// A second copy under a version-free name, so documentation can link
-	// `releases/latest/download/rdsh-pwa.tgz` and keep working across versions.
-	const alias = `${manifest.name}.tgz`;
-	copyFileSync(join(dist, file), join(dist, alias));
-	packed.push({ name: manifest.name, version: manifest.version, file, alias });
-	console.log(`packed ${file} (+ ${alias})`);
+	packages.push({
+		directory,
+		name: manifest.name,
+		version: manifest.version,
+		file: `${manifest.name}-${manifest.version}.tgz`,
+		alias: `${manifest.name}.tgz`,
+	});
 }
 
-
-// Keep the install commands in the READMEs on the version just packed. A
-// version-free install URL would be cached by pnpm, so the docs must point at
-// the versioned one, and a human will forget to bump it.
-for (const item of packed) {
+// Rewrite the READMEs BEFORE packing. `npm pack` snapshots the files, so
+// rewriting afterwards ships the previous version's install URL inside the
+// tarball — which is how the 0.3.3 tarball came to point at 0.3.2.
+//
+// Keep the install commands on the version just packed: a version-free install
+// URL is cached by pnpm, so the docs must point at the versioned one.
+for (const item of packages) {
 	const url = `https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v${item.version}/${item.file}`;
-	for (const doc of [join(root, "README.md"), join(root, "packages", item.name, "README.md")]) {
+	for (const doc of [join(root, "README.md"), join(item.directory, "README.md")]) {
 		let text;
 		try {
 			text = readFileSync(doc, "utf8");
@@ -58,6 +59,16 @@ for (const item of packed) {
 			console.log(`updated ${doc.slice(root.length)} -> v${item.version}`);
 		}
 	}
+}
+
+const packed = [];
+for (const item of packages) {
+	execFileSync("npm", ["pack", "--pack-destination", dist], { cwd: item.directory, stdio: "pipe" });
+	// A second copy under a version-free name, so documentation can link
+	// `releases/latest/download/rdsh-pwa.tgz` and keep working across versions.
+	copyFileSync(join(dist, item.file), join(dist, item.alias));
+	packed.push(item);
+	console.log(`packed ${item.file} (+ ${item.alias})`);
 }
 
 console.log(`\n${packed.length} tarballs in dist/`);

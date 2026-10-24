@@ -6,7 +6,9 @@
   "description": "DSH Web GUI をインストール可能なアプリにし、スマホ幅のUX・通知・小物をまとめて改善する統合プラグイン",
   "exports": {
     ".": "./index.js",
-    "./client": "./client.js"
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./assets/icon-192.png"
   },
   "files": [
     "index.js",
@@ -15,6 +17,7 @@
     "notify",
     "lib",
     "cordis.patch.yml",
+    "locale/*.json",
     "assets/*.png",
     "assets/*.svg",
     "docs/*.png",
@@ -38,7 +41,7 @@
   },
   "meta": {
     "title": "DSH PWA + モバイルUX",
-    "description": "PWA化、スマホ幅の操作感、通知（アプリ内バナーとWeb Push）、CJK表示の修正、外部アプリで開く、セッションIDのコピーをまとめて提供します。"
+    "description": "PWA化、スマホ幅の操作感、通知（アプリ内バナーとWeb Push）、CJK表示の修正、セッションIDのコピーをまとめて提供します。"
   },
   "author": "kuraneko1",
   "keywords": [

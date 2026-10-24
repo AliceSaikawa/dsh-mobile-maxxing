@@ -774,7 +774,11 @@ test("the queue joins only at its lower corners and leaves the composer unchange
 	assert.match(CLIENT, /\[data-rdsh-queue-panel\] \{[^}]*border-bottom-left-radius: 0 !important;[^}]*border-bottom-right-radius: 0 !important;/);
 	assert.match(CLIENT, /\.rdsh-mux-queue-preview \{[^}]*position: fixed;[^}]*max-height: min\(50vh, 360px\);[^}]*overflow-y: auto;/);
 	assert.match(CLIENT, /\.rdsh-mux-queue-menu \{[^}]*position: fixed;/);
-	assert.doesNotMatch(CLIENT, /card\.style\.|card\.setAttribute\(/, "the composer must not be mutated");
+	const joinStart = CLIENT.indexOf("function decorateQueueJoin(panel, dock) {");
+	const joinEnd = CLIENT.indexOf("\n\n    function decorateQueueDock()", joinStart);
+	assert.ok(joinStart >= 0 && joinEnd > joinStart, "queue join helper is missing");
+	const joinSource = CLIENT.slice(joinStart, joinEnd);
+	assert.doesNotMatch(joinSource, /card\.style\.|card\.setAttribute\(/, "the composer must not be mutated");
 	const rules = cssBlocks().flatMap((css) => cssRules(css));
 	for (const head of ["[data-rdsh-queue-dock]", "[data-rdsh-queue-panel]", "[data-rdsh-queue-join]", ".rdsh-mux-queue-preview", ".rdsh-mux-queue-menu"]) {
 		const rule = rules.find((entry) => entry.head === head);

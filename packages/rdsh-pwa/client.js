@@ -1052,6 +1052,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       notice: "",
       bootError: "",
       enterToSend: readEnterToSend(),
+      notifyDeviceTurns: readNotifyDeviceTurns(),
       deviceTheme: readDeviceTheme(),
       deviceThemeNote: "",
     };
@@ -1136,6 +1137,41 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         /* private mode: the choice lasts for this page */
       }
       emit({ enterToSend: value });
+    }
+
+    /**
+     * Treat turns sent from this browser as phone turns (#15).
+     *
+     * The host defaults to `onlyMobileTurns: true`, and the client only marks a
+     * session after a send from a phone. A desktop send is therefore never
+     * notified. The setting writer for the host config is not available to a
+     * browser module, so this is a per-browser opt-in: while it is on, this
+     * browser announces its sends through the same mobile-send endpoint a phone
+     * uses. The host config stays untouched, which also means the choice is
+     * remembered per browser profile rather than per profile.
+     */
+    function readNotifyDeviceTurns() {
+      try {
+        return localStorage.getItem(NOTIFY_DEVICE_TURNS_KEY) === "1";
+      } catch {
+        return false;
+      }
+    }
+
+    function writeNotifyDeviceTurns(value) {
+      try {
+        if (value) localStorage.setItem(NOTIFY_DEVICE_TURNS_KEY, "1");
+        else localStorage.removeItem(NOTIFY_DEVICE_TURNS_KEY);
+      } catch {
+        /* private mode: the choice lasts for this page */
+      }
+      emit({ notifyDeviceTurns: value });
+      scheduleDecorate();
+    }
+
+    /** The live value of the #15 opt-in (the store copy only drives the UI). */
+    function notifyDeviceTurns() {
+      return readNotifyDeviceTurns();
     }
 
     // ---------------------------------------------------------------------
@@ -2825,9 +2861,17 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
 
     let currentSessionId = null;
 
-    /** Tell the push host that the next turn belongs to this phone. */
+    /**
+     * Tell the push host that the next turn belongs to this device.
+     *
+     * A phone send is marked automatically. On a desktop that is the #15
+     * opt-in: without it the host's `onlyMobileTurns` default means a PC send
+     * is never notified, and a narrow window silently changing that would be
+     * the same width-based behaviour #17 removes.
+     */
     function markMobileSession() {
-      if (!narrow() || currentSessionId === null) return;
+      if (currentSessionId === null) return;
+      if (!phone() && !notifyDeviceTurns()) return;
       void fetch(`${PUSH_API}/mobile-send`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -3303,8 +3347,12 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       // `narrow()` would be wrong here: a narrow desktop window still has a
       // keyboard, and the stock composer sends on plain Enter. Only a finger
       // primary pointer gets the phone default (Enter = newline).
-      if (!coarsePointer()) return;
+      const finger = coarsePointer();
       if (event.key !== "Enter" || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return;
+      // Desktop stays out of the key path entirely unless the #15 opt-in is on.
+      // When it is, the stock composer still owns the send; this only marks the
+      // session so the host notifies this device.
+      if (!finger && !notifyDeviceTurns()) return;
       const editor = composerEditor(event.target);
       if (editor === null) return;
       // Only the message composer. A rename field or another contenteditable
@@ -3317,6 +3365,10 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       if (editor.querySelector("[data-selected]") !== null) return;
       // While a menu is open, Enter selects its highlighted row.
       if (openPopup() !== null) return;
+      if (!finger) {
+        markMobileSession();
+        return;
+      }
       if (state.enterToSend) {
         markMobileSession();
         return;
@@ -3584,8 +3636,9 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
           if (input !== null) input.focus({ preventScroll: true });
         }
       }
-      // Fallback for keyboard activation of the send/queue button.
-      if (narrow()) {
+      // Fallback for keyboard activation of the send/queue button, and the
+      // #15 opt-in that treats this browser's turns as phone turns.
+      if (phone() || notifyDeviceTurns()) {
         const primary = target.closest && target.closest('[data-rdsh-composer-root] [class*="primary"]');
         if (primary !== null && primary !== undefined && primary.disabled !== true && !STOP_PROBE.test(primary.getAttribute("aria-label") || "")) {
           markMobileSession();
@@ -4698,6 +4751,10 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
 
     function MobileSection() {
       const s = useStore();
+      // #15: the phone-only rows and the "hidden controls" card are decided by
+      // the device, not the window width, so a desktop never reads "this is
+      // what we hide from you" about controls that are all visible.
+      const onPhone = s.phone === true;
       const [message, setMessage] = useState("");
       const [busy, setBusy] = useState(false);
       const [disabled, setDisabled] = useState(hideDisabled());
@@ -4779,13 +4836,22 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
           "div",
           { className: "rdsh-mux-card" },
           h("h3", { className: "rdsh-mux-title" }, t("mux.section.title")),
-          h("p", { className: "rdsh-mux-desc" }, t("mux.section.desc")),
-          h("p", { className: "rdsh-mux-note" }, t("mux.section.plusNote")),
+          // #15: on a desktop this card must not describe a layout it is not
+          // running, and the layout row is a phone/window fact. The
+          // notification controls below stay: they are useful everywhere.
+          h("p", { className: "rdsh-mux-desc" }, onPhone ? t("mux.section.desc") : t("mux.section.desc.desktop")),
+          onPhone ? h("p", { className: "rdsh-mux-note" }, t("mux.section.plusNote")) : null,
           h(
             "dl",
             { className: "rdsh-mux-rows" },
-            h("dt", null, t("mux.row.layout")),
-            h("dd", null, s.narrow ? t("mux.row.layout.narrow") : t("mux.row.layout.wide")),
+            onPhone
+              ? h(
+                React.Fragment,
+                null,
+                h("dt", null, t("mux.row.layout")),
+                h("dd", null, s.narrow ? t("mux.row.layout.narrow") : t("mux.row.layout.wide")),
+              )
+              : null,
             h("dt", null, t("mux.row.sessions")),
             h("dd", null, s.drawerOpen ? t("mux.row.sessions.open") : t("mux.row.sessions.closed")),
             h("dt", null, t("mux.row.notifications")),
@@ -4872,43 +4938,63 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
             }),
             h("span", { className: "rdsh-mux-slider-value" }, `${Math.round(volume * 100)}%`),
           ),
-          h("p", { className: "rdsh-mux-note" }, t("mux.note.notifyScope")),
-          message !== "" ? h("p", { className: "rdsh-mux-note" }, message) : null,
-        ),
-        h(
-          "div",
-          { className: "rdsh-mux-card" },
-          h("h3", { className: "rdsh-mux-title" }, t("mux.hidden.title")),
-          h("p", { className: "rdsh-mux-desc" }, t("mux.hidden.desc")),
-          h(
-            "div",
-            { className: "rdsh-mux-chips" },
-            s.hidden.length === 0
-              ? h("span", { className: "rdsh-mux-chip" }, t("mux.hidden.none"))
-              : s.hidden.map((label) => h("span", { className: "rdsh-mux-chip", key: label }, label)),
-          ),
+          // #15: the host defaults to `onlyMobileTurns: true`, so a desktop
+          // send is never notified unless this browser opts in.
           h(
             "label",
             { className: "rdsh-mux-check" },
-            h("input", { type: "checkbox", checked: disabled, onChange: (event) => toggleDisabled(event.target.checked) }),
-            t("mux.hidden.disable"),
-          ),
-          h("div", null,
-            h("div", { className: "rdsh-mux-label" }, t("mux.hidden.extra")),
-            h("textarea", {
-              value: extra,
-              rows: 3,
-              spellCheck: false,
-              onChange: (event) => setExtra(event.target.value),
-              className: "rdsh-mux-textarea",
+            h("input", {
+              type: "checkbox",
+              checked: s.notifyDeviceTurns === true,
+              onChange: (event) => writeNotifyDeviceTurns(event.target.checked),
             }),
+            t("mux.notify.deviceTurns"),
           ),
-          h("div", { className: "rdsh-mux-actions" },
-            h("button", { type: "button", onClick: saveExtra }, t("mux.hidden.save")),
-          ),
+          h("p", { className: "rdsh-mux-note" }, t("mux.notify.deviceTurns.note")),
+          h("p", { className: "rdsh-mux-note" }, t("mux.note.notifyScope")),
+          message !== "" ? h("p", { className: "rdsh-mux-note" }, message) : null,
         ),
-        h(InputSection),
-        typeof globalThis.__RDSH_PWA_SETTINGS_SECTION__ === "function"
+        onPhone
+          ? h(
+            "div",
+            { className: "rdsh-mux-card" },
+            h("h3", { className: "rdsh-mux-title" }, t("mux.hidden.title")),
+            h("p", { className: "rdsh-mux-desc" }, t("mux.hidden.desc")),
+            h(
+              "div",
+              { className: "rdsh-mux-chips" },
+              s.hidden.length === 0
+                ? h("span", { className: "rdsh-mux-chip" }, t("mux.hidden.none"))
+                : s.hidden.map((label) => h("span", { className: "rdsh-mux-chip", key: label }, label)),
+            ),
+            h(
+              "label",
+              { className: "rdsh-mux-check" },
+              h("input", { type: "checkbox", checked: disabled, onChange: (event) => toggleDisabled(event.target.checked) }),
+              t("mux.hidden.disable"),
+            ),
+            h("div", null,
+              h("div", { className: "rdsh-mux-label" }, t("mux.hidden.extra")),
+              h("textarea", {
+                value: extra,
+                rows: 3,
+                spellCheck: false,
+                onChange: (event) => setExtra(event.target.value),
+                className: "rdsh-mux-textarea",
+              }),
+            ),
+            h("div", { className: "rdsh-mux-actions" },
+              h("button", { type: "button", onClick: saveExtra }, t("mux.hidden.save")),
+            ),
+          )
+          : null,
+        // #15: the PWA and Input sections are registered as their own tabs.
+        // Inlining them into "Mobile" as well duplicated every heading on a
+        // desktop, where none of the three tabs are merged. Both halves of the
+        // merge must agree: `applyHideList` hides those tabs under the same
+        // `narrow() && phone()` condition.
+        s.narrow && onPhone ? h(InputSection) : null,
+        s.narrow && onPhone && typeof globalThis.__RDSH_PWA_SETTINGS_SECTION__ === "function"
           ? h(globalThis.__RDSH_PWA_SETTINGS_SECTION__)
           : null,
         s.bootError !== "" ? h("p", { className: "rdsh-mux-note" }, t("mux.bootError", { error: s.bootError })) : null,

@@ -760,26 +760,60 @@ test("the question card viewport sizing is phone-only", () => {
 	}
 });
 
-test("the queue bridge meets both rounded composer sides without changing queue actions", () => {
-	// Geometry comes from the live panel/card bounds. A fixed negative margin
-	// and square panel corners alone leave the queue's outer ends floating.
-	assert.match(CLIENT, /function decorateQueueBridge\(dock, panel\)/);
+test("the queue alone tapers onto the composer's unmodified top boundary", () => {
+	// The real mobile DOM has an inset queue (x=32, width=319) above a wider
+	// composer (x=16, width=351). The old bridge clamped both offsets to zero.
+	assert.match(CLIENT, /function decorateQueueJoin\(panel\)/);
 	assert.match(CLIENT, /const queueRect = panel\.getBoundingClientRect\(\);/);
 	assert.match(CLIENT, /const cardRect = card\.getBoundingClientRect\(\);/);
-	assert.match(CLIENT, /const height = cardRect\.top \+ radius - queueRect\.bottom \+ 1;/);
-	assert.match(CLIENT, /bridge\.firstElementChild\.setAttribute\("d", pathData\);/);
-	assert.match(CLIENT, /decorateQueueBridge\(dock, panel\);/);
-	assert.match(CLIENT, /bridge\.setAttribute\("aria-hidden", "true"\);/);
-	assert.match(CLIENT, /for \(const bridge of document\.querySelectorAll\("\[data-rdsh-queue-bridge\]"\)\) bridge\.remove\(\);/);
+	assert.match(CLIENT, /const bottom = Math\.min\(queueRect\.height, cardRect\.top - queueRect\.top \+ 0\.5\);/);
+	assert.match(CLIENT, /cardRect\.left \+ radius - queueRect\.left/);
+	assert.match(CLIENT, /cardRect\.right - radius - queueRect\.left/);
+	assert.match(CLIENT, /panel\.style\.clipPath = clip;/);
+	assert.match(CLIENT, /decorateQueueJoin\(panel\);/);
+	assert.doesNotMatch(CLIENT, /data-rdsh-queue-bridge/, "the discarded overpainting SVG should not remain");
 	assert.match(CLIENT, /\.rdsh-mux-queue-preview \{[^}]*position: fixed;[^}]*max-height: min\(50vh, 360px\);[^}]*overflow-y: auto;/, "the queued text preview is not a capped overlay");
 	assert.match(CLIENT, /\.rdsh-mux-queue-menu \{[^}]*position: fixed;/, "the long-press menu is not an overlay");
 	const rules = cssBlocks().flatMap((css) => cssRules(css));
-	for (const head of ["[data-rdsh-queue-dock]", "[data-rdsh-queue-panel]", "[data-rdsh-queue-bridge]", ".rdsh-mux-queue-preview", ".rdsh-mux-queue-menu"]) {
+	for (const head of ["[data-rdsh-queue-dock]", "[data-rdsh-queue-panel]", ".rdsh-mux-queue-preview", ".rdsh-mux-queue-menu"]) {
 		const rule = rules.find((entry) => entry.head === head);
 		assert.ok(rule, head + " is missing");
 		assert.ok(rule.at.some((media) => /max-width:\s*767px/.test(media)), head + " is outside the phone query");
 	}
-	assert.match(CLIENT, /\[data-rdsh-queue-bridge\] \{[^}]*pointer-events: none;/, "the bridge intercepts queue controls");
+	const start = CLIENT.indexOf("function decorateQueueJoin(panel) {");
+	const end = CLIENT.indexOf("\n    function decorateQueueDock()", start);
+	assert.ok(start >= 0 && end > start, "queue shape helper is missing");
+	const source = CLIENT.slice(start, end);
+	const bounds = {
+		queue: { left: 32, right: 351, top: 0, bottom: 42, width: 319, height: 42 },
+		card: { left: 16, right: 367, top: 34, bottom: 164, width: 351, height: 130 },
+	};
+	const attributes = new Set();
+	const style = { clipPath: "", removeProperty(key) { if (key === "clip-path") this.clipPath = ""; } };
+	const panel = {
+		style,
+		getBoundingClientRect: () => bounds.queue,
+		setAttribute: (key) => attributes.add(key),
+		removeAttribute: (key) => attributes.delete(key),
+	};
+	const card = { getBoundingClientRect: () => bounds.card };
+	const document = { querySelector: () => ({ closest: () => card }) };
+	const getComputedStyle = (node) => node === card
+		? { borderTopLeftRadius: "30px" }
+		: { borderTopLeftRadius: "20px" };
+	let mobile = true;
+	const join = new Function("document", "getComputedStyle", "narrow",
+		source + "\nreturn decorateQueueJoin;")(document, getComputedStyle, () => mobile);
+	join(panel);
+	assert.ok(attributes.has("data-rdsh-queue-clip"));
+	assert.match(style.clipPath, /305 34\.5 H 14 C/, "queue should meet the card's flat top at x=14..305");
+	assert.ok(!("style" in card), "the composer should remain entirely untouched");
+	bounds.queue = { left: 40, right: 343, top: 0, bottom: 42, width: 303, height: 42 };
+	join(panel);
+	assert.match(style.clipPath, /297 34\.5 H 6 C/, "the shape must adapt to a narrower queue");
+	mobile = false;
+	join(panel);
+	assert.equal(style.clipPath, "", "leaving phone layout restores the queue panel");
 });
 
 test("the workspace picker caps its list and keeps Add workspace outside it", () => {

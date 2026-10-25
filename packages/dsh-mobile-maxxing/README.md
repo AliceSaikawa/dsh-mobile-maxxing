@@ -66,7 +66,7 @@ dsh plugin --profile web add link:/path/to/dsh-mobile-maxxing
 ## 開発
 
 ```sh
-npm test     # ブラウザ不要のテスト114件
+npm test     # テスト145件（うち3件は Chrome がある時だけ実行）
 ```
 
 ビルド工程はありません。`client.js` はブラウザにそのまま配信され、`index.js` は Node
@@ -136,7 +136,7 @@ dsh plugin --profile web add link:/path/to/dsh-mobile-maxxing
 ## Development
 
 ```sh
-npm test     # 114 tests, no browser required
+npm test     # 145 tests (3 run only when Chrome is available)
 ```
 
 There is no build step: `client.js` is served verbatim and `index.js` uses only Node

@@ -244,6 +244,9 @@ npm pack                          # 配布用 tarball（リリースに添付す
   消すと既定の「共有設定に従う」に戻ります）。
 - オフラインページは保存済みテーマを読めない（Service Worker から `localStorage` を
   参照できない）ため、OS のライト／ダーク設定に従います。
+- 同じ `DSH_HOME` を2つのインスタンスで共有できるのは、**両方が現行の origin-aware
+  host** のときだけです。旧 host は origin を無視するため、購読消失や二重通知の risk が
+  あります（[2アプリのホスト前提](ios-manual-acceptance.md)）。
 
 ## iOS 26 の下余白（47px / 62px）
 

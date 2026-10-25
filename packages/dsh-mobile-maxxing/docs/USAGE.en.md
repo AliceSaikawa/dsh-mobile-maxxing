@@ -247,6 +247,9 @@ the module against a stub environment.
   same phone is separate, and clearing site data returns it to "follow the shared theme")
 - The offline page cannot read the stored theme (a service worker has no `localStorage`
   access), so it follows the OS light/dark preference
+- Sharing one `DSH_HOME` between two instances is only safe when **both run the current
+  origin-aware host**. An older host ignores the origin, risking lost subscriptions and
+  double notifications; see [the two-app host prerequisite](ios-manual-acceptance.md).
 
 ## The iOS 26 bottom strip (47px / 62px)
 

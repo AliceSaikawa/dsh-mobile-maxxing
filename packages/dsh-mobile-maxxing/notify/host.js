@@ -386,26 +386,41 @@ function clip(value, limit) {
 }
 
 /**
+ * Normalize an app origin for storage and comparison.
+ *
+ * `URL.origin` drops a trailing slash and an explicit default port, so a
+ * subscription registered as `https://app.example:443/` matches the request
+ * origin `https://app.example`. Values that cannot be parsed are kept as
+ * trimmed text so an unusual but previously accepted entry is not discarded.
+ *
+ * @param {string} value - stored or requested origin.
+ * @returns {string} the normalized origin, or "" when absent.
+ */
+function normalizeOrigin(value) {
+	const text = typeof value === "string" ? value.trim() : "";
+	if (text === "") return "";
+	try {
+		return new URL(text).origin;
+	} catch {
+		return text;
+	}
+}
+
+/**
  * Whether two recorded app origins name the same deployment.
  *
  * A legacy entry may carry a trailing slash or an explicit default port while
- * the request's origin is the normalized `URL.origin`. Compare through `URL`
- * so that app can still retire its own subscription; unparsable values fall
- * back to an exact string comparison.
+ * the request's origin is the normalized `URL.origin`. Compare the normalized
+ * forms so that app can still retire its own subscription.
  *
  * @param {string} left - stored origin.
  * @param {string} right - requesting origin.
  * @returns {boolean} true when both name the same origin.
  */
 function sameOrigin(left, right) {
-	const a = typeof left === "string" ? left.trim() : "";
-	const b = typeof right === "string" ? right.trim() : "";
-	if (a === "" || b === "") return false;
-	try {
-		return new URL(a).origin === new URL(b).origin;
-	} catch {
-		return a === b;
-	}
+	const a = normalizeOrigin(left);
+	const b = normalizeOrigin(right);
+	return a !== "" && b !== "" && a === b;
 }
 
 // ---------------------------------------------------------------------------
@@ -520,7 +535,12 @@ export class PushStore {
 			endpoint,
 			keys: { p256dh: subscription.keys.p256dh, auth: subscription.keys.auth },
 			label: typeof meta.label === "string" ? meta.label.slice(0, 120) : "",
-			origin: typeof meta.origin === "string" ? meta.origin : "",
+			// Store the canonical origin so exact-origin routing (which compares
+			// against a request's URL.origin) cannot miss a new subscription
+			// just because the caller sent a trailing slash or `:443`. Entries
+			// already on disk are not rewritten: an unnormalized legacy entry
+			// can still miss exact routing until the app subscribes again.
+			origin: normalizeOrigin(meta.origin),
 			addedAt: Date.now(),
 		};
 		this.reload();

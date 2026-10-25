@@ -352,6 +352,61 @@ test("an explicit body.origin wins over a proxy's inner request origin", withHom
 	assert.equal(home, process.env.DSH_HOME);
 }));
 
+test("a new subscription with a non-canonical origin still receives exact-origin pushes", withHome(async (home, file) => {
+	mkdirSync(dirname(file), { recursive: true });
+	const app = makeInstance();
+	const slash = subscription("https://web.push.apple.com/slash-new");
+	const defaultPort = subscription("https://web.push.apple.com/default-port-new");
+
+	// The body origin is valid but not canonical (`/` or an explicit `:443`).
+	// Storing it verbatim would miss exact-origin routing, which compares
+	// against the request's normalized URL.origin.
+	assert.equal(
+		(await request(app, "/api/rdsh-pwa/push/subscribe", {
+			body: { subscription: slash, label: "slash", origin: `${NEW_ORIGIN}/` },
+			origin: INTERNAL_ORIGIN,
+		})).status,
+		200,
+	);
+	assert.equal(
+		(await request(app, "/api/rdsh-pwa/push/subscribe", {
+			body: { subscription: defaultPort, label: "port", origin: "https://app.example:443" },
+			origin: INTERNAL_ORIGIN,
+		})).status,
+		200,
+	);
+
+	assert.deepEqual(
+		new PushStore(file).subscriptions().map((item) => [item.endpoint, item.origin]).sort(),
+		[[slash.endpoint, NEW_ORIGIN], [defaultPort.endpoint, "https://app.example"]].sort(),
+		"a non-canonical origin was stored verbatim",
+	);
+
+	const fetchRecorder = withFetch(() => ({ status: 201, ok: true }));
+	try {
+		assert.equal((await request(app, "/api/rdsh-pwa/push/test", { body: {}, origin: NEW_ORIGIN })).status, 200);
+		await settle();
+		assert.deepEqual(fetchRecorder.calls, [slash.endpoint], "the trailing-slash subscription was not delivered to");
+
+		fetchRecorder.calls.length = 0;
+		assert.equal((await request(app, "/api/rdsh-pwa/push/test", { body: {}, origin: "https://app.example" })).status, 200);
+		await settle();
+		assert.deepEqual(fetchRecorder.calls, [defaultPort.endpoint], "the :443 subscription was not delivered to");
+	} finally {
+		fetchRecorder.restore();
+	}
+
+	// An origin that cannot be parsed is kept as text for compatibility.
+	const unusual = subscription("https://web.push.apple.com/unusual");
+	new PushStore(file).add(unusual, { origin: "not an origin" });
+	assert.equal(
+		new PushStore(file).subscriptions().find((item) => item.endpoint === unusual.endpoint).origin,
+		"not an origin",
+		"an unparsable origin was rewritten or dropped",
+	);
+	assert.equal(home, process.env.DSH_HOME);
+}));
+
 // ---------------------------------------------------------------------------
 // #27: startup before config, known origins, unknown fallback
 // ---------------------------------------------------------------------------

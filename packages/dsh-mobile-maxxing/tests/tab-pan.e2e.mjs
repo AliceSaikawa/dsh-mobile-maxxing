@@ -101,7 +101,7 @@ html,body{margin:0;height:1000px}
 #panel{position:absolute;inset:0;width:390px;height:700px;background:#fff}
 /* Installed dockkit strip CSS: none on the scroll chain; fill has no rule. */
 [data-dockkit-strip]{display:flex;flex:none;align-items:center;height:28px;padding:10px 6px 0 10px;overflow:visible;touch-action:none;width:390px}
-[data-dockkit-strip-tabs]{display:flex;flex:0 1 auto;align-items:center;min-width:0;width:200px;overflow-x:auto;overflow-y:hidden;scroll-behavior:smooth;scrollbar-width:none;touch-action:none}
+[data-dockkit-strip-tabs]{display:flex;flex:0 1 auto;align-items:center;min-width:0;overflow-x:auto;overflow-y:hidden;scroll-behavior:smooth;scrollbar-width:none;touch-action:none}
 [data-dockkit-strip-fill]{flex:1 1 0;min-width:0;height:28px;background:#eee}
 [data-dockkit-tab]{position:relative;display:flex;flex:0 1 auto;align-items:center;min-width:120px;max-width:170px;height:28px;padding:0 10px;white-space:nowrap;touch-action:none;user-select:none;background:#ddd;border-right:1px solid #999}
 [data-dockkit-caret]{flex:0 0 12px;height:28px;background:#bbb}
@@ -132,7 +132,8 @@ const styleProbe = `(() => {
     const node = document.querySelector(selector);
     if (node === null) return null;
     const style = getComputedStyle(node, pseudo ?? undefined);
-    return { touchAction: style.touchAction, overflowX: style.overflowX, scrollBehavior: style.scrollBehavior };
+    return { touchAction: style.touchAction, overflowX: style.overflowX, scrollBehavior: style.scrollBehavior,
+      width: Math.round(node.getBoundingClientRect().width) };
   };
   return { tab: read("[data-dockkit-tab]"), strip: read("[data-dockkit-strip]"),
     tabs: read("[data-dockkit-strip-tabs]"), fill: read("[data-dockkit-strip-fill]") };
@@ -195,15 +196,13 @@ try {
 			after);
 		await drag(page, [100, 50], horizontal(100));
 		check("a tab-body swipe pans the strip", (await scrollLeft(page)) > 20, await scrollLeft(page));
-		await reset(page);
-		await drag(page, [300, 50], horizontal(300));
-		check("a strip-fill swipe pans the strip", (await scrollLeft(page)) > 20, await scrollLeft(page));
+		check("the installed flex layout leaves no strip-fill hit area", before?.fill?.width === 0, before?.fill);
 		await reset(page);
 		await drag(page, [155, 50], horizontal(155));
 		check("an inter-tab caret swipe pans the strip", (await scrollLeft(page)) > 20, await scrollLeft(page));
 		await reset(page);
-		await drag(page, [300, 50], [[300, 52], [301, 80], [302, 100], [303, 120]]);
-		check("a vertical strip-fill drag does not pan", (await scrollLeft(page)) === 0, await scrollLeft(page));
+		await drag(page, [155, 50], [[155, 52], [156, 80], [157, 100], [158, 120]]);
+		check("a vertical caret drag does not pan", (await scrollLeft(page)) === 0, await scrollLeft(page));
 	} finally {
 		await page.close();
 	}

@@ -695,6 +695,61 @@ test("a touch pan that starts on the strip gutter or fill scrolls without arming
 	desktop.disposeAll();
 });
 
+test("a new primary strip pan drops a stale tab replay, stale pan and secondary cancel", () => {
+	const booted = bootGestures({ narrow: true });
+	booted.drainFrames();
+	const down = booted.handler("pointerdown", "onPointerDown");
+	const up = booted.handler("pointerup", "onPointerUp");
+	const move = booted.handler("pointermove", "onPointerMove");
+	const cancel = booted.handler("pointercancel", "onPointerCancel");
+
+	const { tab, target } = tabFixture();
+	down(pointerEvent(target, 100, 50));
+	up(pointerEvent(target, 100, 51));
+	assert.equal(hasTimer(booted, 250), true, "the tab tap did not schedule a replay");
+
+	const rightPanel = new FakeElement("div");
+	rightPanel.setAttribute("data-sidebar-right-panel", "");
+	const strip = new FakeElement("div");
+	strip.setAttribute("data-dockkit-strip-tabs", "");
+	strip.scrollLeft = 100;
+	strip.clientWidth = 200;
+	strip.scrollWidth = 400;
+	strip.style.scrollBehavior = "smooth";
+	const gutter = new FakeElement("div");
+	gutter._closest = (selector) => {
+		if (selector.includes("data-sidebar-right-panel")) return rightPanel;
+		if (selector.includes("data-dockkit-strip-tabs")) return strip;
+		return null;
+	};
+
+	down(pointerEvent(gutter, 300, 50));
+	assert.equal(hasTimer(booted, 250), false, "the gutter down kept the old tab replay");
+	booted.runTimers(250);
+	assert.equal(tab.dispatched.length, 0, "the old tab click fired during the pan");
+	assert.equal(strip.style.scrollBehavior, "auto", "the pan did not force auto scroll");
+
+	// A duplicate primary down without an up releases the old candidate before
+	// storing its scroll-behavior, so the strip can return to smooth.
+	down(pointerEvent(gutter, 300, 50));
+	assert.equal(strip.style.scrollBehavior, "auto");
+	up(pointerEvent(gutter, 300, 51));
+	assert.equal(strip.style.scrollBehavior, "smooth", "the stale candidate restored auto");
+
+	// A secondary pointercancel must not stop the primary pan.
+	strip.scrollLeft = 100;
+	strip.style.scrollBehavior = "smooth";
+	down(pointerEvent(gutter, 300, 50));
+	move(pointerEvent(gutter, 290, 50));
+	assert.equal(strip.scrollLeft, 110, "the primary pan did not start");
+	cancel(pointerEvent(gutter, 290, 50, { id: 9, primary: false }));
+	move(pointerEvent(gutter, 280, 50));
+	assert.equal(strip.scrollLeft, 120, "a secondary cancel stopped the primary pan");
+	up(pointerEvent(gutter, 280, 50));
+	assert.equal(strip.style.scrollBehavior, "smooth");
+	booted.disposeAll();
+});
+
 test("a plain tap still switches through the one-shot click replay", () => {
 	const booted = bootGestures({ narrow: true });
 	booted.drainFrames();

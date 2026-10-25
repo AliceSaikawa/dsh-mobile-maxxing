@@ -6050,6 +6050,19 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     function onPointerDown(event) {
       if (!phone()) return;
+      // A new primary contact starts a new gesture: drop a stale strip pan,
+      // a pending tab tap replay and an old tab hold. Secondary fingers must
+      // not disturb the first pointer.
+      if (event.isPrimary !== false) {
+        cancelStripPan();
+        clearTimeout(tabReplayTimer);
+        if (tabCandidate !== null) {
+          cancelTabHold();
+          tabCandidate.tab.removeAttribute("data-rdsh-tab-hold");
+          releaseTabStrip(tabCandidate);
+          tabCandidate = null;
+        }
+      }
       // xterm keeps its real input in a visually hidden textarea. Focusing it
       // from the tap/pointerdown gesture is what asks iOS for the keyboard.
       const queuePreviewTarget = event.target.closest && event.target.closest("[data-rdsh-queue-preview]");
@@ -6118,6 +6131,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (tab === null || tab === undefined) {
         const strip = event.pointerType !== "mouse" && event.isPrimary !== false ? stripForPan(event.target) : null;
         if (strip !== null && strip.scrollWidth > strip.clientWidth) {
+          cancelStripPan();
           stripPanCandidate = {
             strip,
             at: Date.now(),
@@ -6254,9 +6268,14 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       }, 260);
     }
 
-    function onPointerCancel() {
+    function onPointerCancel(event) {
       cancelQueuePress();
-      cancelStripPan();
+      if (stripPanCandidate !== null
+        && (event?.pointerId === undefined
+          || stripPanCandidate.pointerId === undefined
+          || event.pointerId === stripPanCandidate.pointerId)) {
+        cancelStripPan();
+      }
       if (tabHoldTimer !== 0) {
         clearTimeout(tabHoldTimer);
         tabHoldTimer = 0;

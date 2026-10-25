@@ -318,6 +318,33 @@ test("the index decides the device mode before the module loader runs", () => {
 	assert.equal(decorateIndex(once, {}), once);
 });
 
+test("a shell that already reads the mode still gets the bootstrap", () => {
+	// How a consumer reads it: `===` / `==` on the global, never an assignment.
+	// Recognising those as "the script is already here" would skip the very
+	// script that defines the value, leaving the reader with undefined.
+	const reader = INDEX.replace("</head>", [
+		'<script type="module">const mobile=globalThis.__RDSH_DEVICE_MODE__==="mobile";'
+			+ 'const loose=globalThis.__RDSH_DEVICE_MODE__=="mobile";'
+			+ "const pick=(value)=>value;"
+			+ "export{mobile,loose,pick};</script>",
+		"</head>",
+	].join(""));
+	const html = decorateIndex(reader, {});
+	const injected = html.match(/<script>\(function\(\)\{var m="desktop"/g) ?? [];
+	assert.equal(injected.length, 1, "the classifier is injected exactly once");
+	const assignmentAt = html.search(/globalThis\.__RDSH_DEVICE_MODE__\s*=(?![=>])/);
+	assert.ok(assignmentAt > 0, "the bootstrap really assigns the global");
+	assert.ok(assignmentAt < html.indexOf("const mobile="),
+		"the assignment precedes the consumer that reads it");
+	assert.ok(html.indexOf("const mobile=") > 0, "the consumer script survives untouched");
+
+	// Idempotent in both directions: the finished document is stable, and a
+	// second tap cannot add a second classifier next to the reader.
+	assert.equal(decorateIndex(html, {}), html);
+	const twice = decorateIndex(decorateIndex(reader, {}), {});
+	assert.equal((twice.match(/<script>\(function\(\)\{var m="desktop"/g) ?? []).length, 1);
+});
+
 test("one shared document answers per browser, so no response varies by user agent", () => {
 	// What the service worker caches and what every client downloads is the
 	// same string; the decision happens in the browser, on that string.

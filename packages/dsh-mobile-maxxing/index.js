@@ -53,8 +53,15 @@ const INDEX_MARKER = "<!--dsh-mobile-maxxing-->";
 const COPY_ASSIGNMENT = /(?:globalThis|self|window)\.__RDSH_PWA_COPY__\s*=/;
 const PROBES_ASSIGNMENT = /(?:globalThis|self|window)\.__RDSH_PWA_PROBES__\s*=/;
 const LANG_ASSIGNMENT = /(?:globalThis|self|window)\.__RDSH_PWA_LANG__\s*=/;
-/** The early device-mode script, recognised so a re-tap never adds a second one. */
-const MODE_ASSIGNMENT = new RegExp(`(?:globalThis|self|window)\\.${MODE_GLOBAL}\\s*=`);
+/**
+ * The early device-mode script, recognised so a re-tap never adds a second one.
+ *
+ * A plain assignment only. `globalThis.__RDSH_DEVICE_MODE__ === "mobile"` is
+ * how a consumer *reads* the mode, and a shell that already reads it still
+ * needs the bootstrap that defines it. The negative lookahead keeps `==`,
+ * `===` and a following `=>` out of the match.
+ */
+const MODE_ASSIGNMENT = new RegExp(`(?:globalThis|self|window)\\.${MODE_GLOBAL}\\s*=(?![=>])`);
 
 /** Manifest and viewport limits we normalize before serving. */
 const DISPLAY_MODES = new Set(["standalone", "minimal-ui", "fullscreen", "browser", "window-controls-overlay"]);

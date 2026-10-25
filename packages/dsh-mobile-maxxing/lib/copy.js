@@ -101,6 +101,7 @@ export const COPY = {
 		"mux.settingsRow": "Settings",
 		"mux.fab.open": "Open session list",
 		"mux.fab.openWithCount": "Open session list ({count} unread or waiting)",
+		"mux.route.back": "Back",
 		"mux.toast.noFileInput": "No file input is available for attachments",
 		"mux.detail.todo": "Todo",
 		"mux.detail.goal": "Goal",
@@ -336,6 +337,7 @@ export const COPY = {
 		"mux.settingsRow": "Settings",
 		"mux.fab.open": "セッション一覧を開く",
 		"mux.fab.openWithCount": "セッション一覧を開く（未読・質問待ち {count}件）",
+		"mux.route.back": "戻る",
 		"mux.toast.noFileInput": "添付できるファイル入力がありません",
 		"mux.detail.todo": "Todo",
 		"mux.detail.goal": "Goal",
@@ -498,6 +500,9 @@ export const PROBES = {
 	accountMenu: ["Account menu", "設定"],
 	/** The Settings row inside that menu. */
 	settingsMenu: ["Settings", "設定"],
+	/** The Automation-tasks detail's close control: the only way back to the list
+	 *  once upstream hides the list on a phone. */
+	closeTaskDetail: ["Close details", "关闭详情"],
 	/** A session row's own "..." trigger. */
 	actions: ["actions", "操作"],
 	/** A button that stops the running turn (must not mark a phone send). */

@@ -5389,7 +5389,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     // ---------------------------------------------------------------------
     // New-session workspace picker: search + a bounded scroll viewport, with
-    // the existing "Add workspace…" footer left outside the scroll area.
+    // the existing "Add workspace…" footer left outside the scroll area. The
+    // trigger and the menu are recognized by structure, never by their
+    // localized labels (#39).
     // ---------------------------------------------------------------------
     let workspacePickerPending = false;
     let workspacePickerState = null;
@@ -5466,14 +5468,74 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       state.viewport.removeAttribute("data-rdsh-workspace-viewport");
     }
 
+    /**
+     * The control a workspace-picker click came from, or null.
+     *
+     * Both picker entries carry the localized `hero.chooseWorkspace` label
+     * ("Choose workspace" / "选择工作区"), so matching that aria-label only
+     * ever recognized an English UI (#39). Their structure does not localize:
+     * the hero WorkspaceChip is the popup control in the same row as the
+     * picker's slot outlet, and the session-less composer is the popup draft
+     * editor (`data-composer-input`). Both mirror the picker's open state in
+     * `aria-expanded`.
+     */
+    function workspaceTriggerControl(target) {
+      if (target.closest === undefined) return null;
+      const control = target.closest('[aria-haspopup="menu"]');
+      if (control === null) return null;
+      if (control.getAttribute("role") === "menuitem") return null;
+      if (!control.hasAttribute("aria-expanded")) return null;
+      if (control.hasAttribute("data-composer-input")) return control;
+      const row = control.parentElement;
+      return row !== null && row.querySelector('[data-slot="conversation.hero.workspace"]') !== null ? control : null;
+    }
+
+    /**
+     * Whether a picker trigger currently reports its menu open.
+     *
+     * `aria-expanded` is the picker's own open state, so the menu can be told
+     * apart from the other icon menus upstream without reading any localized
+     * string. This also covers a picker opened from the keyboard (Enter/Space
+     * on the session-less composer), which never produces the click below.
+     */
+    function workspacePickerOpen() {
+      for (const control of document.querySelectorAll('[aria-haspopup="menu"][aria-expanded="true"]')) {
+        if (workspaceTriggerControl(control) !== null) return true;
+      }
+      return false;
+    }
+
+    /** The rows of every list a menu surface holds, viewport first. */
+    function workspaceMenuLists(menu) {
+      const lists = [];
+      for (const child of menu.children) {
+        const rows = [...child.querySelectorAll('button[role="menuitem"]')];
+        if (rows.length > 0) lists.push(rows);
+      }
+      return lists;
+    }
+
+    /**
+     * The picker's menu surface, recognized by its parts, not its text.
+     *
+     * Upstream's shared Menu renders `[role="menu"]` as a scrolling viewport
+     * plus an optional footer ("Add workspace…", or none without a directory
+     * flow). The picker's rows are folder rows, so every row carries an icon.
+     * The other menus that also have icon rows (open-in-app's app list) are
+     * not open at the same time as the chooser, so the picker's own
+     * `aria-expanded` state separates them without reading a label (#39).
+     * Matching the English footer text left the picker undecorated outside
+     * English: `menu.addWorkspace` is "添加工作区…" in zh.
+     */
     function workspacePickerMenu() {
+      const pickerOpen = workspacePickerOpen() || workspacePickerPending;
       for (const menu of document.querySelectorAll('[role="menu"]')) {
-        if (menu.getAttribute("data-rdsh-workspace-menu") === "" || workspacePickerPending) return menu;
-        const footer = [...menu.children].find((child) => {
-          const text = (child.textContent || "").trim();
-          return /Add\s+workspace/i.test(text) && (text.endsWith("…") || text.endsWith("..."));
-        });
-        if (footer !== undefined) return menu;
+        if (menu.getAttribute("data-rdsh-workspace-menu") === "") return menu;
+        if (!pickerOpen) continue;
+        const lists = workspaceMenuLists(menu);
+        if (lists.length === 0) continue;
+        if (!lists[0].every((row) => row.querySelector("svg") !== null)) continue;
+        return menu;
       }
       return null;
     }
@@ -5805,6 +5867,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      *
      * It lives outside [data-files-body], so scrolling the tree never moves
      * the field, and the no-hit line stays visible while the tree is empty.
+     * That line is a block below the field row, not a third item in it: as a
+     * flex sibling it took width from the input (#43).
      */
     function ensureFilesSearch(root) {
       if (filesSearch !== null && filesSearch.root === root && filesSearch.search.isConnected !== false) return filesSearch;
@@ -5818,6 +5882,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const search = document.createElement("div");
       search.className = "rdsh-mux-files-search";
       search.setAttribute("data-rdsh-files-search", "");
+      const row = document.createElement("div");
+      row.className = "rdsh-mux-files-search-row";
       const input = document.createElement("input");
       input.type = "search";
       input.placeholder = t("files.search.placeholder");
@@ -5836,7 +5902,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       empty.setAttribute("data-rdsh-files-empty", "");
       empty.textContent = t("files.search.noMatches");
       empty.hidden = true;
-      search.append(input, button, empty);
+      row.append(input, button);
+      search.append(row, empty);
       input.addEventListener("keydown", onFilesSearchKeyDown);
       button.addEventListener("click", onFilesSearchSubmit);
       const body = root.querySelector("[data-files-body]");
@@ -7442,16 +7509,17 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // record, so OFF is respected on every later render pass.
       noteReviewWrapClick(event);
 
-      // Workspace picker: remember that the next visible menu is the
-      // new-session workspace chooser, then decorate it with search. The
-      // search row is a mobile affordance, so desktop only opens the stock
-      // menu.
-      if (phone() && target.closest && target.closest('[aria-label="Choose workspace"]') !== null) {
-        const trigger = target.closest('[data-rdsh-workspace-trigger], [aria-label="Choose workspace"]');
+      // Workspace picker: the click that opens the chooser arms the observer
+      // that decorates its portal before the first paint. The trigger is
+      // recognized by its popup wiring, not its localized aria-label (#39).
+      // The search row is a mobile affordance, so desktop only opens the
+      // stock menu.
+      if (phone() && target.closest) {
+        const trigger = workspaceTriggerControl(target);
         if (trigger !== null) trigger.setAttribute("data-rdsh-workspace-trigger", "");
         // The same control closes an open menu; only the opening click starts
         // the observer. aria-expanded still carries the pre-click state here.
-        if (trigger === null || trigger.getAttribute("aria-expanded") !== "true") beginWorkspacePicker();
+        if (trigger !== null && trigger.getAttribute("aria-expanded") !== "true") beginWorkspacePicker();
       }
       // Queued message: tap toggles the full-text preview. The native row still
       // owns its edit/remove/steer buttons; this branch only wraps the preview.
@@ -10256,10 +10324,12 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   }
   [data-rdsh-files-hidden] { display: none !important; }
   .rdsh-mux-files-search {
-    flex: none; box-sizing: border-box; display: flex;
-    align-items: center; gap: 6px; padding: 6px 4px;
-    border-bottom: .5px solid var(--dsw-alias-border-l1, rgba(255,255,255,.1));
+    flex: none; box-sizing: border-box; display: flex; flex-direction: column;
     background: var(--dsw-alias-bg-layer-2, #2c2c2e);
+  }
+  .rdsh-mux-files-search-row {
+    display: flex; align-items: center; gap: 6px; padding: 6px 4px;
+    border-bottom: .5px solid var(--dsw-alias-border-l1, rgba(255,255,255,.1));
   }
   .rdsh-mux-files-search input {
     min-width: 0; flex: 1; box-sizing: border-box; height: 32px;
@@ -10806,6 +10876,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
       workspaceTestHook.workspace = {
         beginWorkspacePicker,
         decorateWorkspacePicker,
+        workspaceTriggerControl,
         clearWorkspacePicker,
         decorateWorkspaceFiles,
         runFilesSearch,

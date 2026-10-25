@@ -1,8 +1,9 @@
 # dsh-mobile-maxxing — `dsh-mobile-maxxing`
 
 DSH（DeepSeek Harness）の Web UI をスマホで使い倒すための統合プラグインです。
-PWA・通知・モバイルUX・CJK表示の修正・セッションIDのコピーを1パッケージにまとめています。
-**素の DSH にそのまま入ります。** 他の `rdsh-*` プラグインも外部 npm パッケージも不要です。
+PWA・通知・モバイルUX・セッションIDのコピーを1パッケージにまとめています。
+CJK表示の修正は、PC 側の描画を変えない方針のため別パッケージ `rdsh-markdown-cjk` に分離しています。
+**素の DSH にそのまま入ります。** コア機能に他の `rdsh-*` プラグインも外部 npm パッケージも不要です。
 
 > English: [Jump to the English section](#english)
 
@@ -22,7 +23,7 @@ dsh plugin --profile web add https://github.com/kuraneko1/dsh-mobile-maxxing
 ```json
 {
   "dependencies": {
-    "dsh-mobile-maxxing": "https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.4.0/dsh-mobile-maxxing-0.4.0.tgz"
+    "dsh-mobile-maxxing": "https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.5.0/dsh-mobile-maxxing-0.5.0.tgz"
   },
   "dsh": {
     "profile": {
@@ -54,7 +55,7 @@ dsh plugin --profile web add link:/path/to/dsh-mobile-maxxing
 | スマホ/タブレットのレイアウト | サイドバーがドロワーに、設定は1タップ、コードは折り返し。幅ではなく端末で判定 |
 | コードレビュー | 折り返しを既定でON。右端の操作は「…」に集約し、PC で開く系は非表示 |
 | テーマ（ライト／ダーク） | 上流のトークンに追従。PC と別に「この端末だけ」の配色を選べる |
-| CJK 表示の修正 | `**https://x**（メモ）` の太字とリンクが壊れない |
+| CJK 表示の修正（任意） | 別パッケージ `rdsh-markdown-cjk` を入れた場合のみ。このパッケージ本体は PC 側を変えないため、Markdown レンダラを書き換えません |
 | セッションIDのコピー | セッションメニューに1行追加 |
 
 ## もっと詳しく
@@ -78,8 +79,10 @@ npm test     # Node.js のテスト + 任意の Chrome CSS fixture 3件
 # English
 
 A single integrated plugin that makes the DSH (DeepSeek Harness) Web UI pleasant on phones and tablets:
-installable PWA, notifications, a phone/tablet layout chosen by device mode, a CJK rendering fix and a session-id copy
-row. **It installs on a stock DSH** — no other `rdsh-*` plugin and no external npm package.
+installable PWA, notifications, a phone/tablet layout chosen by device mode and a session-id copy row.
+The CJK autolink fix stays a separate package (`rdsh-markdown-cjk`) because this package deliberately
+leaves the PC renderer untouched. **It installs on a stock DSH** — the core needs no other `rdsh-*`
+plugin and no external npm package.
 
 ## Install
 
@@ -95,7 +98,7 @@ dsh plugin --profile web add https://github.com/kuraneko1/dsh-mobile-maxxing
 ```json
 {
   "dependencies": {
-    "dsh-mobile-maxxing": "https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.4.0/dsh-mobile-maxxing-0.4.0.tgz"
+    "dsh-mobile-maxxing": "https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.5.0/dsh-mobile-maxxing-0.5.0.tgz"
   },
   "dsh": {
     "profile": {
@@ -127,7 +130,7 @@ dsh plugin --profile web add link:/path/to/dsh-mobile-maxxing
 | Mobile layout | Sidebar becomes a drawer, settings open in one tap, code wraps |
 | Code review | Wrap is on by default; header actions collapse into a "…" menu; native open-in-app buttons are hidden |
 | Light / dark theme | Follows the host tokens; a per-device palette can differ from the PC |
-| CJK rendering | `**https://x**（memo）` keeps its bold and its link |
+| CJK rendering (optional) | Only with the separate `rdsh-markdown-cjk` package; this package leaves the Markdown renderer stock to avoid changing the PC |
 | Session id copy | One row in the session row menu |
 
 ## More detail

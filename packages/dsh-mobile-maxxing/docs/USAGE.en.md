@@ -6,18 +6,20 @@ Everything `dsh-mobile-maxxing` does, in detail. **For installation see the [REA
 
 ## What this package is
 
-Four plugins that used to be separate, merged into one.
+Three plugins that used to be separate, merged into one. The CJK autolink fix remains a
+separate package because it rewrites the PC renderer.
 
 | Was | Now |
 | --- | --- |
-| `dsh-mobile-maxxing` | PWA: installable, offline launch, notification send/receive, notification sounds |
+| `rdsh-pwa` | PWA: installable, offline launch, notification send/receive, notification sounds |
 | `rdsh-mobile-ux` | Phone-width UX: drawer, settings, composer, code view, in-app banners |
-| `rdsh-markdown-cjk` | Fixes broken autolinks around CJK text (host only) |
 | `rdsh-session-id-copy` | Adds a session-id copy row to the session menu |
+| `rdsh-markdown-cjk` (separate) | Fixes broken autolinks around CJK text; not mounted by this package |
 
 **Why not separate packages:** DSH maps one package to one browser module. Splitting them
 would register one module per package and scatter the install, the settings and the
-enablement. The parts are independent, so merging them costs nothing.
+enablement. The parts are independent, so merging them costs nothing. The CJK fix stays
+separate because it changes the PC renderer.
 
 ## What it does
 
@@ -27,7 +29,7 @@ enablement. The parts are independent, so merging them costs nothing.
 | Notifications | In-app banner while the app is on screen, Web Push otherwise |
 | Notification sounds | Five synthesised presets, volume, no audio files |
 | Mobile layout | Sidebar becomes a drawer, settings open in one tap, code wraps |
-| CJK rendering | `**https://x**（memo）` keeps its bold and its link |
+| CJK rendering (optional) | Only with the separate `rdsh-markdown-cjk` package; this package leaves the Markdown renderer stock to avoid changing the PC |
 | Session id copy | One row in the session row menu |
 
 ## Screenshots
@@ -206,7 +208,8 @@ wrap touches nothing else and is removed on dispose).
 
 ## Dependencies
 
-**This package alone is enough.** No other `rdsh-*` plugin, no external npm package.
+**This package alone is enough for the core.** No other `rdsh-*` plugin, no external npm
+package. The CJK fix is the optional separate `rdsh-markdown-cjk` package.
 
 | Dependency | Required | Detail |
 | --- | --- | --- |
@@ -219,15 +222,16 @@ The browser half reads only its own globals (`__RDSH_PWA__`, `__RDSH_PWA_SETTING
 
 ## Migrating from the split plugins
 
-When moving from the old `dsh-mobile-maxxing` + `rdsh-mobile-ux` pair, translate the profile patch
+When moving from the old `rdsh-pwa` + `rdsh-mobile-ux` pair, translate the profile patch
 as follows. **This package never edits the profile.**
 
 - Move `rdsh-mobile-ux`'s `runningAnimation` / `hideLabels` / `showHiddenControls` to
   `dsh-mobile-maxxing.mobileUx.*`
 - Remove the plugins this package replaces from the profile: `rdsh-mobile-ux`,
-  `rdsh-markdown-cjk`, `rdsh-session-id-copy`, `dsh-notify-push`. Also remove
-  `rdsh-mobile-ui` (layout) and `@local/dsh-sound` (sounds) if present, or the layout and
-  the notification sound are controlled twice
+  `rdsh-session-id-copy`, `dsh-notify-push`. Also remove `rdsh-mobile-ui` (layout) and
+  `@local/dsh-sound` (sounds) if present, or the layout and the notification sound are
+  controlled twice
+- The CJK fix is not part of this package. Keep `rdsh-markdown-cjk` only if you want it
 - Keep one `dsh-mobile-maxxing` entry. Put `lang` (default `ja`) and `appleStatusBarStyle` in its
   config
 
@@ -236,16 +240,19 @@ Leaving the duplicates installed duplicates routes, slots and notifications.
 ## Verification
 
 ```sh
-npm test             # 46 unit tests, no browser needed
+npm test                    # Node.js unit tests, no browser needed
+npm run e2e                 # real-browser end-to-end (optional)
+node scripts/pack-all.mjs   # build the release tarballs into dist/
 ```
 
-`npm test` runs without DSH installed; two cases that need the installed DSH frontend
-report a skip. Set `DSH_ORIG_BIN` (as the systemd unit does) and all 46 run.
+`npm test` runs without DSH installed; cases that need the installed DSH frontend report a
+skip. Set `DSH_ORIG_BIN` (as the systemd unit does) to run them.
 
-The browser half is covered by three static checks in
-`tests/client-integrity.test.mjs` (undeclared call targets, listener definitions, dead
-`data-rdsh-*` attributes) and one smoke test in `tests/client-load.test.mjs` that evaluates
-the module against a stub environment.
+The browser half is covered by static checks in
+`packages/dsh-mobile-maxxing/tests/client-integrity.test.mjs` (undeclared call targets,
+listener definitions, dead `data-rdsh-*` attributes) and a smoke test in
+`packages/dsh-mobile-maxxing/tests/client-load.test.mjs` that evaluates the module against a
+stub environment.
 
 ## How it fits together
 
@@ -253,8 +260,8 @@ the module against a stub environment.
   adds the PWA metadata to the served index
 - The browser half is loaded verbatim by the client module loader; it installs the layout,
   registers the service worker and renders the banners
-- Nothing is patched on disk. The one exception is the CJK fix, which serves the frontend
-  chunks through its own route with the fix applied
+- Nothing is patched on disk. The CJK fix is a separate plugin; this package leaves the PC
+  renderer stock
 
 ## Icons
 

@@ -1,8 +1,9 @@
 # dsh-mobile-maxxing
 
 DeepSeek Harness（DSH）の Web UI をスマホで最大限に使い倒すための統合プラグインです。
-PWA・通知・モバイルUX・CJK表示の修正・セッションIDのコピーを1パッケージにまとめています。
-**素の DSH にそのまま入ります** — 他の `rdsh-*` プラグインや外部 npm パッケージは不要です。
+PWA・通知・モバイルUX・セッションIDのコピーを1パッケージにまとめています。
+CJK表示の修正は、PC 側の描画を変えない方針のため別パッケージ `rdsh-markdown-cjk` に分離しています。
+**素の DSH にそのまま入ります** — コア機能に他の `rdsh-*` プラグインや外部 npm パッケージは不要です。
 
 > English: [Jump to the English section](#english)
 
@@ -26,7 +27,7 @@ dsh plugin --profile web add https://github.com/kuraneko1/dsh-mobile-maxxing
 | 通知 | アプリを見ている間はアプリ内バナー、それ以外は Web Push |
 | 通知音 | 合成した5種類。音量も設定可。音声ファイルは同梱しません |
 | スマホ/タブレットのレイアウト | サイドバーがドロワーに、設定は1タップ、コードは折り返し。幅ではなく端末で判定 |
-| CJK 表示の修正 | `**https://x**（メモ）` の太字とリンクが壊れない |
+| CJK 表示の修正（任意） | 別パッケージ `rdsh-markdown-cjk` を入れた場合のみ。このパッケージ本体は PC 側を変えないため、Markdown レンダラを書き換えません |
 | セッションIDのコピー | セッションメニューに1行追加 |
 
 ## もっと詳しく
@@ -73,8 +74,10 @@ README の URL は `node scripts/pack-all.mjs` が `package.json` の版に合�
 # English
 
 One integrated plugin that makes the DSH (DeepSeek Harness) Web UI pleasant on phones and tablets:
-installable PWA, notifications, a phone/tablet layout chosen by device mode, a CJK rendering fix and a session-id copy
-row. **It installs on a stock DSH** — no other `rdsh-*` plugin and no external npm package.
+installable PWA, notifications, a phone/tablet layout chosen by device mode and a session-id copy row.
+The CJK autolink fix stays a separate package (`rdsh-markdown-cjk`) because this package deliberately
+leaves the PC renderer untouched. **It installs on a stock DSH** — the core needs no other `rdsh-*`
+plugin and no external npm package.
 
 ## Install
 
@@ -96,7 +99,7 @@ push library are needed.
 | Notifications | In-app banner while the app is on screen, Web Push otherwise |
 | Notification sounds | Five synthesised presets with a volume control; no audio files ship |
 | Mobile layout | Sidebar becomes a drawer, settings open in one tap, code wraps |
-| CJK rendering | `**https://x**（memo）` keeps its bold and its link |
+| CJK rendering (optional) | Only with the separate `rdsh-markdown-cjk` package; this package leaves the Markdown renderer stock to avoid changing the PC |
 | Session id copy | One row in the session row menu |
 
 ## More detail

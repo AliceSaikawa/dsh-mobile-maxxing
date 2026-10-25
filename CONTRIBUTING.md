@@ -4,7 +4,7 @@
 
 ```
 packages/dsh-mobile-maxxing/    単一のプラグイン（1パッケージ・1インストール）
-  index.js            ホスト側の入口。4つの host half をここから mount する
+  index.js            ホスト側の入口。3つの host half をここから mount する
   client.js           ブラウザ側。3つの機能を1モジュールにまとめてある
   lib/                ホスト側の各機能
   notify/             Web Push（VAPID + aes128gcm の自前実装）
@@ -16,8 +16,9 @@ scripts/pack-all.mjs  配布用 tarball を dist/ にまとめる
 
 DSH のクライアントモジュールシステムは**1パッケージ＝1ブラウザモジュール**です。
 別パッケージに分けると、その分だけ別モジュールとして登録され、インストール・設定・
-有効化がすべて分散します。もともと別々だった3つのプラグイン（`dsh-mobile-maxxing` / `rdsh-mobile-ux` /
-`rdsh-session-id-copy`）と、ホスト専用だった `rdsh-markdown-cjk` は、この理由で1つにまとめました。
+有効化がすべて分散します。もともと別々だった3つのプラグイン（`rdsh-pwa` / `rdsh-mobile-ux` /
+`rdsh-session-id-copy`）を、この理由で1つにまとめました。`rdsh-markdown-cjk` は PC 側の
+描画を書き換えるため、このパッケージには含めず別パッケージのままにしています。
 
 `client.js` は「もとの各プラグインの `factory` 本体をそのまま関数に包んだもの」を
 連結した形です。各部は自分で `{ inject, apply }` を返し、末尾の `apply` が順に呼びます。
@@ -46,7 +47,7 @@ DSH のクライアントモジュールシステムは**1パッケージ＝1ブ
 ## テスト
 
 ```sh
-npm test                                  # 全部（37件）
+npm test                                  # すべて（ブラウザ不要）
 node --test packages/dsh-mobile-maxxing/tests/plugin.test.mjs   # 1ファイルだけ
 ```
 
@@ -56,7 +57,7 @@ node --test packages/dsh-mobile-maxxing/tests/plugin.test.mjs   # 1ファイル�
 
 ```sh
 node scripts/pack-all.mjs
-gh release create v0.2.1 dist/*.tgz
+gh release create vX.Y.Z dist/*.tgz
 ```
 
 ファイル名は `<name>-<version>.tgz` で固定です（README のインストール手順がこの名前を指しています）。
@@ -65,7 +66,7 @@ gh release create v0.2.1 dist/*.tgz
 
 統合前の履歴は以下に残しています。
 
-- `kuraneko1/DSH-PWA` — `dsh-mobile-maxxing` / `rdsh-mobile-ux`
+- `kuraneko1/DSH-PWA`（アーカイブ済み）— `rdsh-pwa` / `rdsh-mobile-ux`
 - `kuraneko1/rdsh-markdown-cjk`
 - ローカルのみだったもの: `rdsh-session-id-copy`
 

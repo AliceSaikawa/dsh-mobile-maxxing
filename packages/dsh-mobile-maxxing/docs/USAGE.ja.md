@@ -7,18 +7,20 @@ English: [USAGE.en.md](USAGE.en.md)
 
 ## このパッケージについて
 
-もともと別々だった4つのプラグインを1つにまとめたものです。
+もともと別々だった3つのプラグインを1つにまとめたものです。CJK 修正だけは、PC 側の描画を
+変えない方針のため別パッケージのままです。
 
 | 元 | いま |
 | --- | --- |
-| `dsh-mobile-maxxing` | PWA（インストール可能化・オフライン起動・通知の送受信・通知音） |
+| `rdsh-pwa` | PWA（インストール可能化・オフライン起動・通知の送受信・通知音） |
 | `rdsh-mobile-ux` | モバイル端末のUX（ドロワー・設定・入力・コード表示・アプリ内バナー） |
-| `rdsh-markdown-cjk` | CJK の自動リンク崩れ修正（ホスト専用） |
 | `rdsh-session-id-copy` | セッションメニューにセッションIDのコピー行を足す |
+| `rdsh-markdown-cjk`（別パッケージ） | CJK の自動リンク崩れ修正。本体にはマウントしません |
 
 **分けていない理由**: DSH のクライアントモジュールシステムは1パッケージ＝1ブラウザモジュールです。
 別パッケージにするとその分だけ別モジュールとして登録され、インストール・設定・有効化が
-分散します。中身は互いに独立しているので、1つにまとめても干渉しません。
+分散します。中身は互いに独立しているので、1つにまとめても干渉しません。CJK 修正だけは
+PC の描画を書き換えるため、このパッケージには含めず任意の別パッケージにしています。
 
 ## できること
 
@@ -27,12 +29,12 @@ English: [USAGE.en.md](USAGE.en.md)
 | インストール | Chrome / Edge / Android で「アプリをインストール」。192/512px + maskable アイコン、`display: standalone`、`launch_handler: focus-existing`（アイコン再タップで既存ウィンドウを前面に） |
 | オフライン起動 | アプリシェルをキャッシュし、圏外でも画面が出る（`/api` は絶対にキャッシュしない）。接続が戻ると自動で通常動作に戻る |
 | ホーム画面 | iOS 用 `apple-touch-icon` / `apple-mobile-web-app-status-bar-style`、`format-detection: telephone=no`。`apple-mobile-web-app-capable` / `apple-mobile-web-app-title` / `application-name` は**付けない**（iOS 26 でレガシーな view frame になり、下にステータスバー分の未描画帯が出るため）。standalone は manifest の `display` で指定 |
-| セーフエリア | スタンドアロン起動時だけ `env(safe-area-inset-*)` を `#root` の padding に反映。ノッチ・ホームインジケータと重ならない |
+| セーフエリア | モバイルモードで `env(safe-area-inset-*)` を `#root` に反映（standalone は4方向、ブラウザ表示は上下）。固定レイヤーの左右は既知の制限（#59） |
 | キーボード | `interactive-widget=resizes-content` で、ソフトキーボード表示時に入力欄が隠れない |
 | インストール導線 | サイドバー下部のアイコン、スマホ用カード（「あとで」で30日スヌーズ）、設定 →「アプリ」 |
 | 更新通知 | 新しいビルドのサービスワーカーが待機したら「新しいバージョンがあります → 再読み込み」。勝手にリロードはしない（実行中のセッションを壊さない） |
 | オフライン表示 | 上部に「オフライン — 再接続を待っています」 |
-| Web Push | `dsh-notify-push` の通知をそのまま維持（下記「通知との共存」） |
+| Web Push | このパッケージ独自実装（`dsh-notify-push` 不要）。前面はアプリ内バナー、背面は OS 通知 |
 
 ## 見た目
 
@@ -193,7 +195,8 @@ Web Push の標準化部分は外部ライブラリを使わず、`node:crypto` 
 
 **このパッケージ1つで完結**します。他の `rdsh-*` プラグイン（rdsh-settings /
 rdsh-mobile-ui / rdsh-answer-guard など）は不要で、素の DSH にそのまま入ります。
-スマホUX・通知・CJK修正・IDコピーはすべてこの中にあります。
+スマホUX・通知・IDコピーはすべてこの中にあります。CJK 修正だけは任意の別パッケージ
+`rdsh-markdown-cjk` です。
 
 クライアント側が必要とするのは DSH 本体が提供する `react` と
 `@deepseek-ai/dsh-client-ui-primitives` だけ、ホスト側は Node 標準モジュールだけです。
@@ -209,14 +212,15 @@ rdsh-mobile-ui / rdsh-answer-guard など）は不要で、素の DSH にその�
 
 ## 旧構成からの移行
 
-以前の `dsh-mobile-maxxing` + `rdsh-mobile-ux` の2プラグイン構成から移る場合の読み替えです。
+以前の `rdsh-pwa` + `rdsh-mobile-ux` の2プラグイン構成から移る場合の読み替えです。
 **このパッケージは profile を書き換えません。**
 
 - `rdsh-mobile-ux` の `runningAnimation` / `hideLabels` / `showHiddenControls` は
   `dsh-mobile-maxxing` の `mobileUx.*` へ移す
-- 統合版と重なる `rdsh-mobile-ux` / `rdsh-markdown-cjk` / `rdsh-session-id-copy` /
-  `dsh-notify-push` を profile から外す。レイアウト用の `rdsh-mobile-ui` と通知音の
-  `@local/dsh-sound` も、残すと二重制御・二重再生になるため外す
+- 統合版と重なる `rdsh-mobile-ux` / `rdsh-session-id-copy` / `dsh-notify-push` を profile から外す。
+  レイアウト用の `rdsh-mobile-ui` と通知音の `@local/dsh-sound` も、残すと二重制御・二重再生に
+  なるため外す
+- CJK 修正はこのパッケージに含まれない。必要なら `rdsh-markdown-cjk` を別途残す
 - `dsh-mobile-maxxing` は1つだけにする。`lang`（既定 `ja`）と `appleStatusBarStyle` は
   `dsh-mobile-maxxing` の config に置く
 
@@ -225,15 +229,15 @@ rdsh-mobile-ui / rdsh-answer-guard など）は不要で、素の DSH にその�
 ## 検証
 
 ```sh
-npm test                          # ホスト側の単体テスト（ブラウザ不要）
-BASE_URL=http://127.0.0.1:3099 node tests/e2e.mjs   # 実ブラウザで end-to-end
-npm pack                          # 配布用 tarball（リリースに添付する）
+npm test                # Node.js の単体テスト（ブラウザ不要）
+npm run e2e             # 実ブラウザで end-to-end（任意）
+node scripts/pack-all.mjs   # dist/ に配布用 tarball を作る
 ```
 
-`dsh-mobile-maxxing-0.1.0.tgz` を GitHub Releases に添付してあります。`npm install <そのURL>` で
-`dsh-mobile-maxxing` と `rdsh-mobile-ux` の両方が入ることを確認済みです。
+`npm test` は DSH 本体が無くても動きます。DSH のフロントエンドを使う一部のケースは skip になり、
+`DSH_ORIG_BIN` を設定すると有効になります。
 
-`tests/e2e.mjs` はヘッドレス Chrome を自前で起動し、マニフェスト・メタ情報・サービスワーカー制御・
+`npm run e2e` はヘッドレス Chrome を自前で起動し、マニフェスト・メタ情報・サービスワーカー制御・
 インストール導線・**オフライン再読み込み**まで確認します。
 
 更新フロー（新しい `sw.js` を配信 → バナー → 再読み込みで新ビルド）は、`sw.js` に 1 行足して
@@ -286,11 +290,10 @@ iOS 26 のホーム画面 PWA は、`apple-mobile-web-app-capable` などの App
 （[WebKit 301994](https://bugs.webkit.org/show_bug.cgi?id=301994)）。この帯は DOM の外なので
 CSS では消せない。この構成（manifest + `mobile-web-app-capable` +
 `appleStatusBarStyle`（既定は `black-translucent`）+ `apple-touch-icon`、Apple の capable/title なし）に合わせて、
-DSH も Apple 専用メタを外している。それでも残る場合の確認用に、PWA マークアップを外した
-以前は確認用に `/launch` というルートを同梱していたが、認証の無い診断用ページを
-出荷物に残さない方針にして削除した。
+DSH も Apple 専用メタを外している。以前は確認用に `/launch` というルートを同梱していたが、
+認証の無い診断用ページを出荷物に残さない方針にして削除した。
 
-`rdsh-mobile-ux` は `navigator.standalone` かつ `screen.height - innerHeight > 8` のとき
+モバイル側の実装は `navigator.standalone` かつ `screen.height - innerHeight > 8` のとき
 `data-rdsh-native-gap` を付け、内側の下セーフエリアを 0 にして余白を最小化する。
 
 **2重スクロール**は別原因だった。iOS 26 の standalone では `100%` がレイアウトビューポート

@@ -10895,6 +10895,18 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
 
         globalThis.__RDSH_MOBILE_UX__ = {
           get state() { return { ...state }; },
+          debug: () => ({
+            entries: (ctx.slots?.entries?.("settings.general.item") ?? []).map((entry) => ({
+              id: entry?.options?.id,
+              keys: Object.keys(entry?.options ?? {}),
+              inject: typeof entry?.options?.inject,
+            })),
+            services: {
+              theme: typeof ctx.get?.("theme"),
+              locale: typeof ctx.locale,
+              localeGet: typeof ctx.get?.("locale"),
+            },
+          }),
           get badgeCount() { return notificationTotal; },
           applyNotificationCount,
           readDeviceTheme,

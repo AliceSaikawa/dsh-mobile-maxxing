@@ -4690,6 +4690,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     let tapCandidate = null;
     /** The right panel tab under the finger, for the same replay as a row. */
     let tabCandidate = null;
+    /** A pan that started on the strip's empty gutter rather than a tab. */
+    let stripPanCandidate = null;
     let tabReplayTimer = 0;
     /**
      * Right-panel tab drag is gated on a long press.
@@ -6010,6 +6012,33 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       candidate.tab.setAttribute("data-rdsh-tab-hold", "");
     }
 
+
+    /**
+     * The tab scroller for a pointerdown on the strip's empty area.
+     *
+     * Only the tab elements are tagged with `data-rdsh-rtab`, so a swipe that
+     * starts on the caret/gutter or the strip fill used to have no gesture
+     * owner at all. Resolve the same scroller from those containers, but never
+     * from buttons or a tab close control.
+     */
+    function stripForPan(target) {
+      if (target === null || target === undefined || typeof target.closest !== "function") return null;
+      if (target.closest("button, a, input, [data-dockkit-tab-close]") !== null) return null;
+      const tabs = target.closest("[data-dockkit-strip-tabs]");
+      if (tabs !== null) return tabs;
+      const fill = target.closest("[data-dockkit-strip-fill]");
+      if (fill === null) return null;
+      return fill.closest("[data-dockkit-strip]")?.querySelector("[data-dockkit-strip-tabs]") ?? null;
+    }
+
+    function releaseStripPan(candidate) {
+      if (candidate === null || candidate === undefined) return;
+      if (candidate.scrollBehavior === undefined) return;
+      if (candidate.scrollBehavior === "") candidate.strip.style.removeProperty("scroll-behavior");
+      else candidate.strip.style.scrollBehavior = candidate.scrollBehavior;
+      candidate.scrollBehavior = undefined;
+    }
+
     function onPointerDown(event) {
       if (!phone()) return;
       // xterm keeps its real input in a visually hidden textarea. Focusing it
@@ -6077,6 +6106,23 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           tabHoldTimer = setTimeout(fireTabHold, TAB_HOLD_MS);
         }
       }
+      if (tab === null || tab === undefined) {
+        const strip = event.pointerType !== "mouse" && event.isPrimary !== false ? stripForPan(event.target) : null;
+        if (strip !== null && strip.scrollWidth > strip.clientWidth) {
+          stripPanCandidate = {
+            strip,
+            at: Date.now(),
+            x: event.clientX,
+            y: event.clientY,
+            lastX: event.clientX,
+            lastY: event.clientY,
+            moved: false,
+            pointerId: event.pointerId,
+            scrollBehavior: strip.style.scrollBehavior,
+          };
+          strip.style.scrollBehavior = "auto";
+        }
+      }
       const row = event.target.closest && event.target.closest('[data-row-key^="session:"]');
       if (row === null || row === undefined) return;
       if (event.pointerType === "mouse") return;
@@ -6090,6 +6136,18 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     /** Movement cancels the long press and leaves the drag to the app. */
     function onPointerMove(event) {
+      const stripPan = stripPanCandidate;
+      if (stripPan !== null && (stripPan.pointerId === undefined || event.pointerId === undefined || event.pointerId === stripPan.pointerId)) {
+        const dx = event.clientX - stripPan.lastX;
+        const dy = event.clientY - stripPan.lastY;
+        stripPan.lastX = event.clientX;
+        stripPan.lastY = event.clientY;
+        if (Math.abs(dx) > Math.abs(dy)) {
+          stripPan.moved = true;
+          stripPan.strip.scrollLeft -= dx;
+        }
+        return;
+      }
       const tabMove = tabCandidate;
       if (tabMove !== null && (tabMove.pointerId === undefined || event.pointerId === undefined || event.pointerId === tabMove.pointerId)) {
         if (!tabMove.held) {
@@ -6128,6 +6186,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     function onPointerUp(event) {
       cancelQueuePress();
       cancelLongPress();
+      if (stripPanCandidate !== null && (stripPanCandidate.pointerId === undefined || event.pointerId === undefined || event.pointerId === stripPanCandidate.pointerId)) {
+        releaseStripPan(stripPanCandidate);
+        stripPanCandidate = null;
+        return;
+      }
       const tabTap = tabCandidate;
       if (tabTap !== null && (tabTap.pointerId === undefined || event.pointerId === undefined || event.pointerId === tabTap.pointerId)) {
         if (tabTap.held) {
@@ -6184,6 +6247,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     function onPointerCancel() {
       cancelQueuePress();
+      if (stripPanCandidate !== null) {
+        releaseStripPan(stripPanCandidate);
+        stripPanCandidate = null;
+      }
       if (tabHoldTimer !== 0) {
         clearTimeout(tabHoldTimer);
         tabHoldTimer = 0;
@@ -9840,6 +9907,7 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
      browser. The hold cancels that pan in the touch handler. */
   [data-sidebar-right-panel] [data-dockkit-strip],
   [data-sidebar-right-panel] [data-dockkit-strip-tabs],
+  [data-sidebar-right-panel] [data-dockkit-strip-fill],
   [data-sidebar-right-panel] [data-dockkit-tab] { touch-action: pan-y; }
   /* A long press must reach the reorder gate, not start a selection/callout. */
   [data-rdsh-rtab] {

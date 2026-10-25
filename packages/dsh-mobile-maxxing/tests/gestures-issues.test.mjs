@@ -609,6 +609,63 @@ test("sideways movement pans the strip and cancels the hold; vertical does not p
 	booted.disposeAll();
 });
 
+test("a touch pan that starts on the strip gutter or fill scrolls without arming a hold", () => {
+	const booted = bootGestures({ narrow: true });
+	booted.drainFrames();
+	const down = booted.handler("pointerdown", "onPointerDown");
+	const move = booted.handler("pointermove", "onPointerMove");
+	const up = booted.handler("pointerup", "onPointerUp");
+
+	const strip = new FakeElement("div");
+	strip.setAttribute("data-dockkit-strip-tabs", "");
+	strip.scrollLeft = 100;
+	strip.clientWidth = 200;
+	strip.scrollWidth = 400;
+	const outer = new FakeElement("div");
+	outer.setAttribute("data-dockkit-strip", "");
+	outer._querySelector = (selector) => (selector === "[data-dockkit-strip-tabs]" ? strip : null);
+	const gutter = new FakeElement("div");
+	gutter._closest = (selector) => (selector.includes("data-dockkit-strip-tabs") ? strip : null);
+	const fill = new FakeElement("div");
+	fill._closest = (selector) => {
+		if (selector.includes("data-dockkit-strip-fill")) return fill;
+		if (selector.includes("data-dockkit-strip-tabs")) return null;
+		if (selector === "[data-dockkit-strip]") return outer;
+		return null;
+	};
+
+	down(pointerEvent(gutter, 300, 50));
+	assert.equal(hasTimer(booted, 450), false, "the gutter does not arm a tab hold");
+	const sideways = pointerEvent(gutter, 280, 52);
+	move(sideways);
+	assert.equal(strip.scrollLeft, 120, "the gutter pan did not move the strip");
+	up(pointerEvent(gutter, 280, 52));
+	assert.equal(hasTimer(booted, 250), false, "the gutter pan was replayed as a tap");
+
+	strip.scrollLeft = 100;
+	down(pointerEvent(fill, 300, 50));
+	move(pointerEvent(fill, 270, 51));
+	assert.equal(strip.scrollLeft, 130, "the strip-fill pan did not move the strip");
+	up(pointerEvent(fill, 270, 51));
+
+	strip.scrollLeft = 100;
+	down(pointerEvent(gutter, 300, 50));
+	move(pointerEvent(gutter, 302, 90));
+	assert.equal(strip.scrollLeft, 100, "a vertical gutter drag panned the strip");
+	up(pointerEvent(gutter, 302, 90));
+	booted.disposeAll();
+
+	const desktop = bootGestures({ mode: "desktop", width: 390, narrow: true });
+	desktop.drainFrames();
+	const desktopDown = desktop.handler("pointerdown", "onPointerDown");
+	const desktopMove = desktop.handler("pointermove", "onPointerMove");
+	strip.scrollLeft = 100;
+	desktopDown(pointerEvent(gutter, 300, 50));
+	desktopMove(pointerEvent(gutter, 270, 50));
+	assert.equal(strip.scrollLeft, 100, "a desktop gutter pan moved the strip");
+	desktop.disposeAll();
+});
+
 test("a plain tap still switches through the one-shot click replay", () => {
 	const booted = bootGestures({ narrow: true });
 	booted.drainFrames();
@@ -879,7 +936,7 @@ test("the phone stylesheet reopens the vertical axis on every dockkit tab layer"
 	// vertical scrolling blocked even when the two strip layers are reopened.
 	assert.match(
 		CLIENT,
-		/\[data-sidebar-right-panel\] \[data-dockkit-strip\],\s*\n\s*\[data-sidebar-right-panel\] \[data-dockkit-strip-tabs\],\s*\n\s*\[data-sidebar-right-panel\] \[data-dockkit-tab\] \{ touch-action: pan-y; \}/,
+		/\[data-sidebar-right-panel\] \[data-dockkit-strip\],\s*\n\s*\[data-sidebar-right-panel\] \[data-dockkit-strip-tabs\],\s*\n\s*\[data-sidebar-right-panel\] \[data-dockkit-strip-fill\],\s*\n\s*\[data-sidebar-right-panel\] \[data-dockkit-tab\] \{ touch-action: pan-y; \}/,
 		"the tab layer is still touch-action: none",
 	);
 });

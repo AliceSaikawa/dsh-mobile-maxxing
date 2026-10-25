@@ -899,28 +899,22 @@ async function hiddenControls(page, report) {
 	report.check("hides the native open-in-app split button (#33)", hidden.openTarget?.display === "none", hidden.openTarget);
 	await shot(page, "hidden-controls");
 
+	// The browser-side custom hide override was removed (user setting 9). A
+	// legacy `hide-disabled` key must be ignored: the standard list stays as
+	// applied, with no restore path behind a browser switch.
+	const signature = (reportValue) => reportValue.items.map((item) => `${item.label}:${item.hiddenAttr}`).join("|");
+	const before = signature(hidden);
 	await page.eval(`localStorage.setItem("rdsh-mobile-ux:hide-disabled", "1"); globalThis.__RDSH_MOBILE_UX__.decorate();`);
 	await sleep(900);
 	const restored = await hideReport(page);
 	report.metrics.restored = restored;
-	report.check("localStorage hide-disabled removes the settings attribute", restored.html === false, restored.html);
-	for (const item of restored.items) {
-		report.check(`hide-disabled restores: ${item.label}`, item.found && !item.hiddenAttr && item.visible, item);
-	}
-	await shot(page, "hidden-controls-restored");
-
-	await page.eval(`localStorage.removeItem("rdsh-mobile-ux:hide-disabled"); globalThis.__RDSH_MOBILE_UX__.decorate();`);
-	await sleep(900);
-	const again = await hideReport(page);
-	report.metrics.hiddenAgain = again;
-	// The set may differ by build (the hide list is policy), so compare against
-	// what this build hid before the toggle instead of demanding every label.
-	const initialHidden = new Set(hidden.items.filter((item) => item.hiddenAttr).map((item) => item.label));
-	report.check(
-		"removing hide-disabled restores the build's initial hidden set",
-		again.items.every((item) => item.hiddenAttr === initialHidden.has(item.label)),
-		again.items,
-	);
+	report.check("a legacy browser hide override is ignored", restored.html === true, restored.html);
+	report.check("the hidden set does not change for a legacy override", signature(restored) === before, {
+		before,
+		after: signature(restored),
+	});
+	await shot(page, "hidden-controls-legacy-key");
+	await page.eval(`localStorage.removeItem("rdsh-mobile-ux:hide-disabled");`);
 }
 
 async function toastSwipe(page, report) {

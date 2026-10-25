@@ -1079,12 +1079,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           id: "pwa-install",
           order: 40,
         }, InstallFooterAction));
-        ctx.slots.inject("settings.section", () => ctx.slots.register({
-          name: "settings.section",
-          id: "pwa",
-          order: 80,
-          label: () => t("tab.pwa"),
-        }, PwaSettingsSection));
       },
     };
     }
@@ -1125,8 +1119,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     // ---------------------------------------------------------------------
     // rdsh-mobile-ux — device-mode UX: drawer, settings, composer, in-app banners.
     // ---------------------------------------------------------------------
-    const HIDE_OVERRIDE_KEY = "rdsh-mobile-ux:hide-disabled";
-    const HIDE_EXTRA_KEY = "rdsh-mobile-ux:hide-extra";
     const NOTIFY_DEVICE_TURNS_KEY = "rdsh-mobile-ux:notify-device-turns";
     const ENTER_TO_SEND_KEY = "rdsh-mobile-ux:enter-to-send";
     const CONFIG = globalThis.__RDSH_MOBILE_UX_CONFIG__ && typeof globalThis.__RDSH_MOBILE_UX_CONFIG__ === "object"
@@ -1218,8 +1210,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       mode: DEVICE_MODE,
       phone: phone(),
       drawerOpen: false,
-      hidden: [],
-      hideDisabled: false,
       notifications: { supported: false, permission: "default", subscribed: false, ready: false },
       notice: "",
       bootError: "",
@@ -1658,107 +1648,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       root.style.setProperty("--rdsh-native-gap-px", `${nativeGap ? Math.max(0, Math.round(screenHeight - window.innerHeight)) : 0}px`);
     }
 
-    function readHideExtra() {
-      try {
-        const value = JSON.parse(localStorage.getItem(HIDE_EXTRA_KEY) || "[]");
-        return Array.isArray(value) ? value.filter((item) => typeof item === "string" && item.trim() !== "") : [];
-      } catch {
-        return [];
-      }
-    }
-
+    /** The host can still turn the standard hide list off; the browser cannot. */
     function hideDisabled() {
-      if (CONFIG.showHiddenControls === true) return true;
-      try {
-        return localStorage.getItem(HIDE_OVERRIDE_KEY) === "1";
-      } catch {
-        return false;
-      }
-    }
-
-    // ---------------------------------------------------------------------
-    // Scroll diagnostics (devtools): which element actually moves?
-    //
-    // Restored with the Settings cards. Nothing here hard-codes a device or a
-    // host: every value is read from the live DOM / window at call time.
-    // ---------------------------------------------------------------------
-    const lastScrolls = [];
-
-    function recordScroll(event) {
-      const target = event.target;
-      if (!(target instanceof Element)) return;
-      const style = getComputedStyle(target);
-      lastScrolls.push({
-        at: Date.now(),
-        tag: target.tagName,
-        cls: String(target.className).slice(0, 120),
-        id: target.id,
-        scrollTop: Math.round(target.scrollTop),
-        scrollHeight: target.scrollHeight,
-        clientHeight: target.clientHeight,
-        overflowY: style.overflowY,
-      });
-      if (lastScrolls.length > 12) lastScrolls.shift();
-    }
-
-    function scrollables() {
-      const list = [];
-      for (const element of document.querySelectorAll("*")) {
-        if (element.scrollHeight <= element.clientHeight + 2) continue;
-        const style = getComputedStyle(element);
-        if (style.overflowY !== "auto" && style.overflowY !== "scroll") continue;
-        list.push({
-          tag: element.tagName,
-          cls: String(element.className).slice(0, 120),
-          id: element.id,
-          scrollTop: Math.round(element.scrollTop),
-          scrollHeight: element.scrollHeight,
-          clientHeight: element.clientHeight,
-          overflowY: style.overflowY,
-          position: style.position,
-        });
-      }
-      return list;
-    }
-
-    function scrollChain() {
-      const list = [];
-      let node = document.querySelector("[data-composer-input]") || document.querySelector('[class*="scrollBody"]');
-      while (node !== null && node !== document.documentElement) {
-        const style = getComputedStyle(node);
-        if (node.scrollHeight > node.clientHeight + 2 || style.overflowY === "auto" || style.overflowY === "scroll") {
-          list.push({
-            tag: node.tagName,
-            cls: String(node.className).slice(0, 120),
-            scrollTop: Math.round(node.scrollTop),
-            scrollHeight: node.scrollHeight,
-            clientHeight: node.clientHeight,
-            overflowY: style.overflowY,
-          });
-        }
-        node = node.parentElement;
-      }
-      return list;
-    }
-
-    /** Numbers that distinguish the iOS native gap from the safe-area chin. */
-    function readViewportMetrics() {
-      const viewport = window.visualViewport;
-      const screenHeight = window.screen && Number.isFinite(window.screen.height) ? Math.round(window.screen.height) : 0;
-      const innerHeight = Math.round(window.innerHeight);
-      const rootStyle = getComputedStyle(document.documentElement);
-      return {
-        screenHeight,
-        innerHeight,
-        clientHeight: document.documentElement.clientHeight,
-        visualHeight: viewport ? Math.round(viewport.height) : 0,
-        visualOffset: viewport ? Math.round(viewport.offsetTop) : 0,
-        gap: screenHeight > 0 ? screenHeight - innerHeight : null,
-        standalone: window.navigator.standalone === true || window.matchMedia("(display-mode: standalone)").matches,
-        nativeGap: document.documentElement.hasAttribute("data-rdsh-native-gap"),
-        safeTop: rootStyle.getPropertyValue("--rdsh-safe-top").trim() || "0px",
-        safeBottom: rootStyle.getPropertyValue("--rdsh-safe-bottom").trim() || "0px",
-      };
+      return CONFIG.showHiddenControls === true;
     }
 
     // ---------------------------------------------------------------------
@@ -1783,7 +1675,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     function hideLabels() {
-      return [...HIDE_DEFAULT, ...(Array.isArray(CONFIG.hideLabels) ? CONFIG.hideLabels : []), ...readHideExtra()];
+      return [...HIDE_DEFAULT, ...(Array.isArray(CONFIG.hideLabels) ? CONFIG.hideLabels : [])];
     }
 
     function shouldHide(label, labels) {
@@ -1796,7 +1688,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     function applyHideList(disabled) {
       const labels = hideLabels();
-      const hidden = new Set();
       // Hide the controls that dead-end on a mobile device. Desktop mode
       // keeps every control, whatever the window width.
       const hideOnThisDevice = !disabled && phone();
@@ -1805,27 +1696,13 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         if (label === "" || label.length > 48) continue;
         if (hideOnThisDevice && shouldHide(label, labels)) {
           element.setAttribute("data-rdsh-hidden", "");
-          hidden.add(label);
         } else {
           element.removeAttribute("data-rdsh-hidden");
         }
       }
+      // Only one Mobile tab is registered, so there is no stock PWA/Input tab
+      // left to hide.
       const modal = document.querySelector('[data-shortcut-modal="settings"]');
-      // The tab merge belongs to mobile mode: `MobileSection` inlines the PWA
-      // and Input sections there, so the separate tabs vanish with them.
-      if (modal !== null && phone()) {
-        for (const button of modal.querySelectorAll("nav button")) {
-          const label = (button.textContent || "").trim();
-          const merged = label === t("tab.pwa") || label === t("tab.input");
-          const hideTab = merged || (hideOnThisDevice && shouldHide(label, labels));
-          button.toggleAttribute("data-rdsh-settings-tab-hidden", hideTab);
-          if (hideTab) hidden.add(label);
-        }
-      } else if (modal !== null) {
-        for (const button of modal.querySelectorAll("[data-rdsh-settings-tab-hidden]")) {
-          button.removeAttribute("data-rdsh-settings-tab-hidden");
-        }
-      }
       // PC-only settings rows and action buttons. Matched by their label, not
       // by an upstream class: the row container is found through structure,
       // and a bare action button ("Open configuration file") is hidden as the
@@ -1844,7 +1721,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
             if (isRow || isButton) {
               row.setAttribute("data-rdsh-setting-hidden", "");
               rowHidden.add(row);
-              hidden.add(text);
               break;
             }
             row = row.parentElement;
@@ -1867,11 +1743,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         const stock = items.find((item) => /^Copy Session ID$/i.test(labelOf(item)));
         if (localised !== undefined && stock !== undefined) {
           stock.setAttribute("data-rdsh-hidden", "");
-          hidden.add("Copy Session ID");
         }
       }
-      const list = [...hidden].sort();
-      if (list.join("|") !== state.hidden.join("|")) emit({ hidden: list });
     }
 
     function unringSessionTitle(title) {
@@ -8258,46 +8131,18 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     // ---------------------------------------------------------------------
     // UI: Settings section
     // ---------------------------------------------------------------------
-    function PermissionLabel(status) {
-      if (!status.supported) return t("notify.permission.unsupported");
-      if (status.permission === "granted") return status.subscribed ? t("notify.permission.granted") : t("notify.permission.allowed");
-      if (status.permission === "denied") return t("notify.permission.blocked");
-      return t("notify.permission.default");
-    }
-
     function MobileSection() {
       const s = useStore();
-      // #15: the mobile-only rows and the "hidden controls" card are decided
-      // by the device, not the window width, so a desktop never reads "this is
-      // what we hide from you" about controls that are all visible.
+      // The rows this section keeps are decided by the device, not the window
+      // width, so a desktop never reads mobile-only copy.
       const onPhone = s.phone === true;
       const [message, setMessage] = useState("");
       const [busy, setBusy] = useState(false);
-      const [disabled, setDisabled] = useState(hideDisabled());
-      const [extra, setExtra] = useState(readHideExtra().join("\n"));
       const [sound, setSound] = useState(readSoundPreset);
       const [volume, setVolume] = useState(readSoundVolume);
-      const [metrics, setMetrics] = useState(readViewportMetrics);
-      const [scrollTick, setScrollTick] = useState(0);
 
       useEffect(() => {
         void refreshNotificationStatus();
-      }, []);
-
-      useEffect(() => {
-        const refresh = () => setMetrics(readViewportMetrics());
-        const viewport = window.visualViewport;
-        viewport?.addEventListener("resize", refresh);
-        viewport?.addEventListener("scroll", refresh);
-        window.addEventListener("resize", refresh);
-        window.addEventListener("orientationchange", refresh);
-        refresh();
-        return () => {
-          viewport?.removeEventListener("resize", refresh);
-          viewport?.removeEventListener("scroll", refresh);
-          window.removeEventListener("resize", refresh);
-          window.removeEventListener("orientationchange", refresh);
-        };
       }, []);
 
       const run = async (action, success) => {
@@ -8312,28 +8157,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           setBusy(false);
           scheduleDecorate();
         }
-      };
-
-      const saveExtra = () => {
-        const labels = extra.split("\n").map((line) => line.trim()).filter((line) => line !== "");
-        try {
-          localStorage.setItem(HIDE_EXTRA_KEY, JSON.stringify(labels));
-        } catch {
-          /* private mode: the list only lives for this page */
-        }
-        scheduleDecorate();
-        setMessage(t("notify.hideListSaved"));
-      };
-
-      const toggleDisabled = (value) => {
-        setDisabled(value);
-        try {
-          if (value) localStorage.setItem(HIDE_OVERRIDE_KEY, "1");
-          else localStorage.removeItem(HIDE_OVERRIDE_KEY);
-        } catch {
-          /* ignore */
-        }
-        scheduleDecorate();
       };
 
       return h(
@@ -8375,24 +8198,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           // notification controls below stay: they are useful everywhere.
           h("p", { className: "rdsh-mux-desc" }, onPhone ? t("mux.section.desc") : t("mux.section.desc.desktop")),
           onPhone ? h("p", { className: "rdsh-mux-note" }, t("mux.section.plusNote")) : null,
-          h(
-            "dl",
-            { className: "rdsh-mux-rows" },
-            onPhone
-              ? h(
-                React.Fragment,
-                null,
-                h("dt", null, t("mux.row.layout")),
-                h("dd", null, s.narrow ? t("mux.row.layout.narrow") : t("mux.row.layout.wide")),
-              )
-              : null,
-            h("dt", null, t("mux.row.sessions")),
-            h("dd", null, s.drawerOpen ? t("mux.row.sessions.open") : t("mux.row.sessions.closed")),
-            h("dt", null, t("mux.row.notifications")),
-            h("dd", null, PermissionLabel(s.notifications)),
-            h("dt", null, t("mux.row.build")),
-            h("dd", null, BUILD),
-          ),
           h(
             "div",
             { className: "rdsh-mux-actions" },
@@ -8488,123 +8293,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           h("p", { className: "rdsh-mux-note" }, t("mux.note.notifyScope")),
           message !== "" ? h("p", { className: "rdsh-mux-note" }, message) : null,
         ),
-        h(
-          "div",
-          { className: "rdsh-mux-card" },
-          h("h3", { className: "rdsh-mux-title" }, t("mux.diag.height.title")),
-          h("p", { className: "rdsh-mux-desc" }, t("mux.diag.height.desc")),
-          h(
-            "dl",
-            { className: "rdsh-mux-rows" },
-            h("dt", null, t("mux.diag.screenHeight")),
-            h("dd", null, String(metrics.screenHeight)),
-            h("dt", null, t("mux.diag.innerHeight")),
-            h("dd", null, String(metrics.innerHeight)),
-            h("dt", null, t("mux.diag.clientHeight")),
-            h("dd", null, String(metrics.clientHeight)),
-            h("dt", null, t("mux.diag.visualViewport")),
-            h("dd", null, t("mux.diag.visualValue", { height: metrics.visualHeight, offset: metrics.visualOffset })),
-            h("dt", null, t("mux.diag.gap")),
-            h("dd", null, metrics.gap === null ? "—" : `${metrics.gap}px`),
-            h("dt", null, t("mux.diag.standalone")),
-            h("dd", null, metrics.standalone ? t("mux.diag.yes") : t("mux.diag.no")),
-            h("dt", null, t("mux.diag.safeArea")),
-            h("dd", null, t("mux.diag.safeValue", { top: metrics.safeTop, bottom: metrics.safeBottom })),
-            h("dt", null, t("mux.diag.nativeGap")),
-            h("dd", null, metrics.nativeGap ? t("mux.diag.nativeGap.yes") : t("mux.diag.nativeGap.no")),
-          ),
-          h("p", { className: "rdsh-mux-note" }, t("mux.diag.height.note")),
-          h(
-            "div",
-            { className: "rdsh-mux-actions" },
-            h("button", { type: "button", onClick: () => setMetrics(readViewportMetrics()) }, t("mux.diag.reMeasure")),
-          ),
-        ),
-        h(
-          "div",
-          { className: "rdsh-mux-card", "data-scroll-tick": scrollTick },
-          h("h3", { className: "rdsh-mux-title" }, t("mux.diag.scroll.title")),
-          h("p", { className: "rdsh-mux-desc" }, t("mux.diag.scroll.desc")),
-          h(
-            "div",
-            { className: "rdsh-mux-actions" },
-            h("button", {
-              type: "button",
-              onClick: () => {
-                lastScrolls.length = 0;
-                setScrollTick((value) => value + 1);
-              },
-            }, t("mux.diag.scroll.clear")),
-            h("button", { type: "button", onClick: () => setScrollTick((value) => value + 1) }, t("mux.diag.scroll.refresh")),
-          ),
-          h("p", { className: "rdsh-mux-label" }, t("mux.diag.scroll.last")),
-          lastScrolls.length === 0
-            ? h("p", { className: "rdsh-mux-note" }, t("mux.diag.scroll.empty"))
-            : h("ul", { className: "rdsh-mux-scroll-list" },
-              lastScrolls.slice(-6).reverse().map((entry, index) => h(
-                "li",
-                { key: `${entry.at}:${index}` },
-                t("mux.diag.scroll.lastItem", {
-                  tag: entry.tag,
-                  cls: entry.cls || t("mux.diag.noClass"),
-                  top: entry.scrollTop,
-                  overflow: entry.overflowY,
-                }),
-              )),
-            ),
-          h("p", { className: "rdsh-mux-label" }, t("mux.diag.scroll.scrollable")),
-          h("ul", { className: "rdsh-mux-scroll-list" },
-            scrollables().slice(0, 8).map((entry, index) => h(
-              "li",
-              { key: `${entry.cls}:${index}` },
-              t("mux.diag.scroll.scrollableItem", {
-                tag: entry.tag,
-                cls: entry.cls || t("mux.diag.noClass"),
-                top: entry.scrollTop,
-                height: entry.scrollHeight,
-                overflow: entry.overflowY,
-              }),
-            )),
-          ),
-        ),
-        onPhone
-          ? h(
-            "div",
-            { className: "rdsh-mux-card" },
-            h("h3", { className: "rdsh-mux-title" }, t("mux.hidden.title")),
-            h("p", { className: "rdsh-mux-desc" }, t("mux.hidden.desc")),
-            h(
-              "div",
-              { className: "rdsh-mux-chips" },
-              s.hidden.length === 0
-                ? h("span", { className: "rdsh-mux-chip" }, t("mux.hidden.none"))
-                : s.hidden.map((label) => h("span", { className: "rdsh-mux-chip", key: label }, label)),
-            ),
-            h(
-              "label",
-              { className: "rdsh-mux-check" },
-              h("input", { type: "checkbox", checked: disabled, onChange: (event) => toggleDisabled(event.target.checked) }),
-              t("mux.hidden.disable"),
-            ),
-            h("div", null,
-              h("div", { className: "rdsh-mux-label" }, t("mux.hidden.extra")),
-              h("textarea", {
-                value: extra,
-                rows: 3,
-                spellCheck: false,
-                onChange: (event) => setExtra(event.target.value),
-                className: "rdsh-mux-textarea",
-              }),
-            ),
-            h("div", { className: "rdsh-mux-actions" },
-              h("button", { type: "button", onClick: saveExtra }, t("mux.hidden.save")),
-            ),
-          )
-          : null,
-        // #15: the PWA and Input sections are registered as their own tabs.
-        // Inlining them into "Mobile" as well duplicated every heading on a
-        // desktop, where none of the three tabs are merged. Both halves of the
-        // merge must agree: `applyHideList` hides those tabs under `phone()`.
+        // One Mobile tab carries both sections inline; the separate tabs are
+        // no longer registered.
         onPhone ? h(InputSection) : null,
         onPhone && typeof globalThis.__RDSH_PWA_SETTINGS_SECTION__ === "function"
           ? h(globalThis.__RDSH_PWA_SETTINGS_SECTION__)
@@ -8727,9 +8417,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 }
 .rdsh-mux-title { margin: 0; font-size: 16px; font-weight: 500; }
 .rdsh-mux-desc { margin: 0; font-size: 13px; line-height: 1.6; color: var(--dsw-alias-label-tertiary, #adb2b8); }
-.rdsh-mux-rows { display: grid; grid-template-columns: max-content minmax(0,1fr); gap: 6px 14px; margin: 0; font-size: 13px; }
-.rdsh-mux-rows dt { color: var(--dsw-alias-label-secondary, #cfd3d6); }
-.rdsh-mux-rows dd { margin: 0; overflow-wrap: anywhere; }
 .rdsh-mux-secondary {
   flex: 0 0 auto; padding: 8px 12px; border-radius: 9px;
   font: inherit; font-size: 13px; cursor: pointer;
@@ -8774,24 +8461,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 }
 .rdsh-mux-actions button:disabled { opacity: .45; cursor: default; }
 .rdsh-mux-note { margin: 0; font-size: 12px; line-height: 1.6; color: var(--dsw-alias-label-tertiary, #adb2b8); }
-.rdsh-mux-chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.rdsh-mux-chip { font-size: 12px; padding: 3px 9px; border-radius: 999px; background: var(--dsw-alias-bg-module-platform, #353638); color: var(--dsw-alias-label-secondary, #cfd3d6); }
 .rdsh-mux-check { display: flex; align-items: center; gap: 8px; font-size: 13px; }
-.rdsh-mux-label { font-size: 12px; font-weight: 600; margin-bottom: 4px; color: var(--dsw-alias-label-secondary, #cfd3d6); }
-.rdsh-mux-scroll-list {
-  margin: 0; padding-left: 16px;
-  display: flex; flex-direction: column; gap: 3px;
-  font-size: 12px; line-height: 1.5;
-  color: var(--dsw-alias-label-secondary, #cfd3d6);
-}
-.rdsh-mux-scroll-list li { overflow-wrap: anywhere; }
-.rdsh-mux-textarea {
-  box-sizing: border-box; width: 100%; font: inherit; font-size: 13px; padding: 6px 8px;
-  border-radius: 8px; resize: vertical;
-  background: var(--dsw-alias-bg-module-platform, #353638);
-  color: var(--dsw-alias-label-primary, #f9fafb);
-  border: .5px solid var(--dsw-alias-border-l3, rgba(255,255,255,.16));
-}
 
 `;
 
@@ -10156,7 +9826,6 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         if (bootSession !== "") requestSession(bootSession);
         document.addEventListener("touchstart", onTouchStart, { capture: true, passive: true });
         document.addEventListener("touchmove", onTouchMove, { capture: true, passive: false });
-        document.addEventListener("scroll", recordScroll, true);
         measureSafeArea();
         // A rotation changes both the query and the geometry, and iOS reports
         // the new safe-area insets a frame or two after the event. Re-measure
@@ -10255,10 +9924,6 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           applyDeviceTheme,
           build: BUILD,
           lang: currentLang(),
-          get lastScrolls() { return [...lastScrolls]; },
-          scrollables,
-          scrollChain,
-          readViewportMetrics,
           autoSettings: true,
           decorate: scheduleDecorate,
           // Re-reads the window width for the Settings readout and re-measures
@@ -10294,7 +9959,6 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             window.removeEventListener("keydown", onKeyDownCapture, true);
             document.removeEventListener("touchstart", onTouchStart, true);
             document.removeEventListener("touchmove", onTouchMove, true);
-            document.removeEventListener("scroll", recordScroll, true);
             window.removeEventListener("resize", onResize);
             window.removeEventListener("orientationchange", onOrientation);
             window.visualViewport?.removeEventListener("resize", onLayoutResize);
@@ -10413,12 +10077,6 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           order: 81,
           label: () => t("tab.mobile"),
         }, MobileSection));
-        ctx.slots.inject("settings.section", () => ctx.slots.register({
-          name: "settings.section",
-          id: "mobile-ux-input",
-          order: 82,
-          label: () => t("tab.input"),
-        }, InputSection));
       },
     };
     }

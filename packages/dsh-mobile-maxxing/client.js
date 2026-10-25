@@ -6204,34 +6204,18 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     function onPointerMove(event) {
       const stripPan = stripPanCandidate;
       if (stripPan !== null && (stripPan.pointerId === undefined || event.pointerId === undefined || event.pointerId === stripPan.pointerId)) {
-        const dx = event.clientX - stripPan.lastX;
-        const dy = event.clientY - stripPan.lastY;
-        stripPan.lastX = event.clientX;
-        stripPan.lastY = event.clientY;
-        if (Math.abs(dx) > Math.abs(dy)) {
-          stripPan.moved = true;
-          stripPan.strip.scrollLeft -= dx;
-        }
+        // Native overflow scrolling owns the finger and its momentum.
         return;
       }
       const tabMove = tabCandidate;
       if (tabMove !== null && (tabMove.pointerId === undefined || event.pointerId === undefined || event.pointerId === tabMove.pointerId)) {
         if (!tabMove.held) {
           const distance = Math.abs(event.clientX - tabMove.x) + Math.abs(event.clientY - tabMove.y);
-          const dx = event.clientX - tabMove.lastX;
-          const dy = event.clientY - tabMove.lastY;
-          tabMove.lastX = event.clientX;
-          tabMove.lastY = event.clientY;
           if (distance > TAB_HOLD_SLOP_PX && !tabMove.cancelled) {
             tabMove.cancelled = true;
             cancelTabHold();
           }
-          // A clearly sideways finger pans the strip; a vertical one belongs
-          // to the panel content and is left to the browser (the stylesheet
-          // re-enables only the vertical axis on the strip).
-          if (tabMove.cancelled && tabMove.strip !== null && Math.abs(dx) > Math.abs(dy)) {
-            tabMove.strip.scrollLeft -= dx;
-          }
+          // Do not write scrollLeft here: the browser owns normal swipes.
         }
         if (tabMove.blocking) {
           // Reaches dockkit's window-level pointermove before it can start the
@@ -6831,13 +6815,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
             tabMove.cancelled = true;
             cancelTabHold();
           }
-          // The hold owns the gesture now: stop the browser from scrolling
-          // the panel under a reorder. Before the hold, the strip is
-          // `touch-action: pan-y`, so a vertical drag still scrolls content.
+          // Only a held tab blocks native scrolling for reordering.
           if (tabMove.held && event.cancelable) event.preventDefault();
         }
         return;
       }
+      if (stripForPan(event.target) !== null) return;
       if (touchStart === null || event.touches.length !== 1) return;
       const touch = event.touches[0];
       const dy = touch.clientY - touchStart.y;
@@ -9970,13 +9953,12 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
      dockkit sets touch-action: none on the tab, the strip and the scroller
      because a finger drag is its reorder gesture. touch-action is the
      intersection along every ancestor up to the scroll container, so all
-     three layers must be reopened; the plugin owns the horizontal pan
-     (pointermove -> scrollLeft) and leaves only the vertical axis to the
-     browser. The hold cancels that pan in the touch handler. */
+     layers must allow native panning. The browser owns scrolling and inertia;
+     only a held tab cancels touchmove for reordering. */
   [data-sidebar-right-panel] [data-dockkit-strip],
   [data-sidebar-right-panel] [data-dockkit-strip-tabs],
   [data-sidebar-right-panel] [data-dockkit-strip-fill],
-  [data-sidebar-right-panel] [data-dockkit-tab] { touch-action: pan-y; }
+  [data-sidebar-right-panel] [data-dockkit-tab] { touch-action: pan-x pan-y; }
   /* A long press must reach the reorder gate, not start a selection/callout. */
   [data-rdsh-rtab] {
     -webkit-touch-callout: none;

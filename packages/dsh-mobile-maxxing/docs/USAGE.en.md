@@ -47,6 +47,25 @@ extra hide-label editing, basic UI status, screen-size diagnostics, and scroll d
 have been removed. Standard mobile-only control hiding remains; old saved hide overrides
 are no longer read. No browser data is deleted. PCs receive no settings from this package.
 
+### Display and permission for this device only
+
+Mobile also holds settings that affect this browser alone. Each one lives in `localStorage`;
+none writes the shared DSH profile.
+
+| Setting | Effect |
+| --- | --- |
+| Font sizes (text / code / terminal) | Changes this device's rendering only |
+| Display language | Changes this device's UI language; only registered locales are offered |
+| Default permission | Applies to new sessions started on this device only |
+
+The permission choice is recorded as the session's own `/permission` right after it opens; the
+Host `defaultPreset` is untouched. A prompt sent in that same instant could run once under the
+shared default.
+
+Work-details verbosity, collapse timing, busy-send behavior and performance detail are not in
+this build: upstream exposes no device-local setter for them, and they cannot be separated
+without writing the shared configuration.
+
 ### Theme (light / dark)
 
 Every colour comes from the host's theme tokens (`--dsw-*`). The earlier version baked in

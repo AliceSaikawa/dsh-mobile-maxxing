@@ -2389,6 +2389,12 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       }
       const { list, modal } = found;
       if (settingsArrows.list !== list) {
+        // The previous modal/list is gone: its observer and listeners must go
+        // with it, not stay attached to a detached node.
+        settingsArrows.observer?.disconnect();
+        settingsArrows.observer = null;
+        settingsArrows.scrollHandler = null;
+        settingsArrows.tabHandler = null;
         settingsArrows.list = list;
         settingsArrows.modal = modal;
       }

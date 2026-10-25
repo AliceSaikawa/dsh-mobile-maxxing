@@ -385,6 +385,29 @@ function clip(value, limit) {
 	return `${text.slice(0, limit - 1)}…`;
 }
 
+/**
+ * Whether two recorded app origins name the same deployment.
+ *
+ * A legacy entry may carry a trailing slash or an explicit default port while
+ * the request's origin is the normalized `URL.origin`. Compare through `URL`
+ * so that app can still retire its own subscription; unparsable values fall
+ * back to an exact string comparison.
+ *
+ * @param {string} left - stored origin.
+ * @param {string} right - requesting origin.
+ * @returns {boolean} true when both name the same origin.
+ */
+function sameOrigin(left, right) {
+	const a = typeof left === "string" ? left.trim() : "";
+	const b = typeof right === "string" ? right.trim() : "";
+	if (a === "" || b === "") return false;
+	try {
+		return new URL(a).origin === new URL(b).origin;
+	} catch {
+		return a === b;
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Store + fan-out
 // ---------------------------------------------------------------------------
@@ -512,11 +535,14 @@ export class PushStore {
 	 *
 	 * @param {string} endpoint - the endpoint to forget.
 	 * @param {string} [origin] - the requesting app's origin. When it is known
-	 *   and the stored entry names a different origin, the entry is kept:
-	 *   profiles share this file, and one app's Settings must not be able to
-	 *   retire the other app's notifications. A missing/legacy origin stays
-	 *   removable so an upgrade can clean up (and 404/410 pruning passes no
-	 *   origin at all).
+	 *   and the stored entry belongs to another origin, the entry is kept:
+	 *   profiles share this file, and one app's Settings should not retire the
+	 *   other app's live subscription. This is an ownership-consistency check,
+	 *   not an authentication boundary (the endpoint is not a secret). A
+	 *   missing/legacy origin stays removable so an upgrade can clean up (and
+	 *   404/410 pruning passes no origin at all). Origins are compared through
+	 *   `URL`, so a trailing slash or an explicit default port in an older
+	 *   entry does not stop its own app from removing it.
 	 * @returns {boolean} whether anything was removed.
 	 */
 	remove(endpoint, origin = "") {
@@ -526,7 +552,7 @@ export class PushStore {
 			if (item.endpoint !== endpoint) return true;
 			const requester = typeof origin === "string" ? origin : "";
 			const owner = typeof item.origin === "string" ? item.origin : "";
-			return requester !== "" && owner !== "" && owner !== requester;
+			return requester !== "" && owner !== "" && !sameOrigin(owner, requester);
 		});
 		if (this.state.subscriptions.length !== before) this.save();
 		return this.state.subscriptions.length !== before;
@@ -821,13 +847,18 @@ export function applyNotify(ctx, config) {
 					const body = await readJsonBody(req);
 					noteOrigin(req, body);
 					try {
-						// A client that predates `body.origin` would otherwise be
-						// stored as a legacy entry. Exact-origin routing (the app
-						// that started the turn) would never select it, so that
-						// app would get no notification at all. The request's
-						// Origin/Referer is the same page origin the newer
-						// clients send explicitly, so use it as the fallback.
-						const count = store.add(body.subscription, { label: body.label, origin: requestOrigin(req, body) });
+						// Keep the page's explicit origin: behind a proxy the
+						// request's Origin/Referer can be the inner http origin
+						// while the browser still reports the public origin in
+						// the body, and overwriting it would misroute the push.
+						// Only when the body omits the origin (a caller outside
+						// the current client, or a hand-rolled request) fall
+						// back to the request headers. This is defensive: every
+						// known client sends `body.origin` today.
+						const origin = typeof body.origin === "string" && body.origin !== ""
+							? body.origin
+							: requestOrigin(req, body);
+						const count = store.add(body.subscription, { label: body.label, origin });
 						json(res, 200, { ok: true, count, subject: store.subject(copy.subject) });
 					} catch (error) {
 						json(res, 400, { ok: false, error: String(error?.message ?? error) });

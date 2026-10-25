@@ -265,16 +265,17 @@ test("sequential writes from independent stores preserve existing subscriptions"
 	assert.equal(home, process.env.DSH_HOME, "the test ran against its throwaway home");
 }));
 
-test("a subscribe without body.origin inherits the request origin", withHome(async (home, file) => {
+test("a subscribe without body.origin falls back to the request origin", withHome(async (home, file) => {
 	mkdirSync(dirname(file), { recursive: true });
 	const newApp = makeInstance();
 	const oldApp = makeInstance();
 	const phone = subscription("https://web.push.apple.com/phone");
 	const old = subscription("https://web.push.apple.com/old");
 
-	// An older client only sends { subscription, label }; the host still sees
-	// the browser's Origin header. Storing that origin is what keeps the
-	// subscription addressable by the origin-scoped fan-out below.
+	// Defensive fallback, not a known client regression: every current and
+	// known legacy client sends `body.origin`. A hand-rolled request or a
+	// future client that omits it still has the browser's Origin header, so
+	// the entry stays addressable by origin-scoped routing.
 	assert.equal(
 		(await request(newApp, "/api/rdsh-pwa/push/subscribe", { body: { subscription: phone, label: "phone" }, origin: NEW_ORIGIN })).status,
 		200,
@@ -312,6 +313,39 @@ test("a subscribe without body.origin inherits the request origin", withHome(asy
 		assert.equal((await request(coldApp, "/api/rdsh-pwa/push/test", { body: {} })).status, 200);
 		await settle();
 		assert.deepEqual(fetchRecorder.calls.sort(), [phone.endpoint, old.endpoint].sort(), "the unknown-origin fallback was silently suppressed");
+	} finally {
+		fetchRecorder.restore();
+	}
+	assert.equal(home, process.env.DSH_HOME);
+}));
+
+test("an explicit body.origin wins over a proxy's inner request origin", withHome(async (home, file) => {
+	mkdirSync(dirname(file), { recursive: true });
+	const app = makeInstance();
+	const phone = subscription("https://web.push.apple.com/phone");
+
+	// A reverse proxy (or the host's own --public-url setup) can present the
+	// inner http origin in Origin/Referer while the page still reports the
+	// public https origin in the body. Overwriting the body with the header
+	// would store the wrong owner and misroute later pushes.
+	const registered = await request(app, "/api/rdsh-pwa/push/subscribe", {
+		body: { subscription: phone, label: "proxy", origin: NEW_ORIGIN },
+		origin: INTERNAL_ORIGIN,
+	});
+	assert.equal(registered.status, 200);
+
+	const stored = new PushStore(file).subscriptions();
+	assert.deepEqual(
+		stored.map((item) => [item.endpoint, item.origin]),
+		[[phone.endpoint, NEW_ORIGIN]],
+		"the inner proxy origin overwrote the page's public origin",
+	);
+
+	const fetchRecorder = withFetch(() => ({ status: 201, ok: true }));
+	try {
+		assert.equal((await request(app, "/api/rdsh-pwa/push/test", { body: {}, origin: NEW_ORIGIN })).status, 200);
+		await settle();
+		assert.deepEqual(fetchRecorder.calls, [phone.endpoint], "the public-origin test push could not find the subscription");
 	} finally {
 		fetchRecorder.restore();
 	}
@@ -508,6 +542,35 @@ test("unsubscribe drops only that endpoint; 404/410 prune retired ones", withHom
 		});
 		assert.equal(cleaned.json.removed, true, "a legacy origin-less subscription can no longer be removed");
 		assert.equal(new PushStore(file).subscriptions().some((item) => item.endpoint === legacy.endpoint), false);
+
+		// Older entries may carry a trailing slash or an explicit default port.
+		// Their own app must still be able to remove them; normalization must
+		// not make a same-origin comparison fail.
+		const slash = subscription("https://web.push.apple.com/slash");
+		new PushStore(file).add(slash, { origin: `${NEW_ORIGIN}/` });
+		const slashRemoved = await request(newApp, "/api/rdsh-pwa/push/unsubscribe", {
+			body: { endpoint: slash.endpoint },
+			origin: NEW_ORIGIN,
+		});
+		assert.equal(slashRemoved.json.removed, true, "a trailing-slash origin cannot remove its own subscription");
+
+		const defaultPort = subscription("https://web.push.apple.com/default-port");
+		new PushStore(file).add(defaultPort, { origin: "https://app.example:443" });
+		const portRemoved = await request(newApp, "/api/rdsh-pwa/push/unsubscribe", {
+			body: { endpoint: defaultPort.endpoint },
+			origin: "https://app.example",
+		});
+		assert.equal(portRemoved.json.removed, true, "an explicit default port cannot remove its own subscription");
+
+		// Normalization must not blur two different origins.
+		const otherSlash = subscription("https://web.push.apple.com/other-slash");
+		new PushStore(file).add(otherSlash, { origin: `${OLD_ORIGIN}/` });
+		const crossSlash = await request(newApp, "/api/rdsh-pwa/push/unsubscribe", {
+			body: { endpoint: otherSlash.endpoint },
+			origin: NEW_ORIGIN,
+		});
+		assert.equal(crossSlash.json.removed, false, "normalizing a trailing slash crossed the origin boundary");
+		assert.equal(new PushStore(file).subscriptions().some((item) => item.endpoint === otherSlash.endpoint), true);
 	} finally {
 		fetchRecorder.restore();
 	}

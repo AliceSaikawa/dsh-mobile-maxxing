@@ -508,7 +508,7 @@ export const PROBES = {
 	context: ["context", "コンテキスト"],
 	/** A running activity chip: "3 background jobs running" / "3 subagents running".
 	 *  DSH 0.2.1 ships en and zh only; a ja shell adds its word here. */
-	activityRunning: ["running", "运行中"],
+	activityRunning: ["running", "运行中", "正在运行"],
 	/** Count-chip nouns in the two upstream locales; a ja pack adds its own. */
 	activityChip: ["subagent", "subagents", "background job", "background jobs", "shell command", "shell commands", "个子智能体", "个后台任务"],
 	/** The subagent noun inside a count chip, for choosing its glyph. */

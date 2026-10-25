@@ -405,6 +405,7 @@ function boot({
 	services = createServices().services,
 	getOverride = null,
 	configureDocument = () => {},
+	console: consoleImpl = console,
 } = {}) {
 	let definition;
 	const disposers = [];
@@ -472,7 +473,7 @@ function boot({
 			disconnect() {}
 		},
 		getComputedStyle: () => stub(),
-		console,
+		console: consoleImpl,
 		URL,
 		URLSearchParams,
 		Intl,
@@ -928,6 +929,79 @@ test("#40 a disappeared jobs service releases its old subscription too", () => {
 	decorateChips(booted, [shell]);
 	assert.equal(harness.jobState.listenerCount, 0, "a null source releases the previous one");
 	assert.equal(shell.getAttribute("data-rdsh-activity-state"), "running", "the label remains the fallback");
+});
+
+test("#40 a decorate pass completes when two services disappear mid-pass", () => {
+	const harness = createServices();
+	harness.jobsIn("s1", [{ id: "job-1", status: "running" }]);
+	harness.projection("s1", { subagentCatalog: [{ id: "child-a", mode: "one-shot" }] });
+	harness.statusOf("child-a", true);
+	const shell = chip("1 background job running");
+	const subagent = chip("1 subagent running");
+	const errors = [];
+	const booted = boot({
+		services: harness.services,
+		console: { ...console, error: (...args) => errors.push(args) },
+		configureDocument(doc) {
+			doc.headerButtons = [shell, subagent];
+		},
+	});
+	showSession(booted, "s1");
+	decorateChips(booted, [shell, subagent]);
+	assert.equal(shell.getAttribute("data-rdsh-activity-state"), "running");
+	assert.equal(subagent.getAttribute("data-rdsh-activity-state"), "running");
+
+	// Both optional services vanish at once and the labels go idle. The pass
+	// must reach the second chip instead of aborting on a null source.
+	shell.setAttribute("aria-label", "1 background job");
+	subagent.setAttribute("aria-label", "1 subagent");
+	delete booted.services.jobs;
+	delete booted.services.uiSession;
+	decorateChips(booted, [shell, subagent]);
+	assert.deepEqual(errors, [], "releasing a null source must not throw");
+	assert.equal(shell.getAttribute("data-rdsh-activity-state"), "idle");
+	assert.equal(subagent.getAttribute("data-rdsh-activity-state"), "idle", "the later chip was still processed");
+});
+
+test("#40 a replaced sessions service releases the old list subscription", () => {
+	const harness = createServices();
+	harness.jobsIn("s1", [{ id: "job-1", status: "running" }]);
+	const shell = chip("1 background job running");
+	const booted = boot({
+		services: harness.services,
+		configureDocument(doc) {
+			doc.headerButtons = [shell];
+		},
+	});
+	showSession(booted, "s1");
+	decorateChips(booted, [shell]);
+	assert.equal(harness.list.listenerCount, 1);
+
+	// A reconnect replaces the whole sessions facade (the old one used to be
+	// cached forever, so its list subscription leaked).
+	const replacement = createServices();
+	replacement.jobsIn("s1", [{ id: "job-1", status: "running" }]);
+	booted.services.sessions = replacement.services.sessions;
+	booted.services.jobs = replacement.services.jobs;
+	decorateChips(booted, [shell]);
+	assert.equal(harness.list.listenerCount, 0, "the old sessions generation is released");
+	assert.equal(replacement.list.listenerCount, 1, "the new sessions generation is followed");
+	assert.equal(harness.jobState.listenerCount, 0, "the old jobs generation is released as well");
+	assert.equal(replacement.jobState.listenerCount, 1);
+	assert.equal(shell.getAttribute("data-rdsh-activity-state"), "running");
+
+	delete booted.services.sessions;
+	decorateChips(booted, [shell]);
+	assert.equal(replacement.list.listenerCount, 0, "a removed sessions service releases its subscription");
+});
+
+test("#40 the actual zh subagent running label is recognised", () => {
+	const booted = boot({ services: {} });
+	const running = chip("3 个子智能体，正在运行");
+	const idle = chip("3 个子智能体");
+	decorateChips(booted, [running, idle]);
+	assert.equal(running.getAttribute("data-rdsh-activity-state"), "running", "正在运行 is a running word too");
+	assert.equal(idle.getAttribute("data-rdsh-activity-state"), "idle");
 });
 
 test("#40 only count chips are decorated; the child breadcrumb switcher keeps stock paint", () => {

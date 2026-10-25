@@ -2268,9 +2268,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     /** The plugin context, kept so the session projection can be looked up. */
     let hostCtx = null;
-    let sessionsApi;
-    let sessionsApiResolved = false;
-
     /** An optional service, without cordis' absent-service property throw. */
     function optionalService(name) {
       if (hostCtx === null || typeof hostCtx.get !== "function") return null;
@@ -2281,21 +2278,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       }
     }
 
-    /** `sessions` is an optional service: resolving it lazily means a late
-     *  provider still works, and an absent one only costs the used/max text. */
+    /** `sessions` is optional: resolving it per call keeps a late provider and
+     *  a replaced client generation working, and an absent one only costs the
+     *  used/max text. */
     function sessionsService() {
-      if (!sessionsApiResolved && hostCtx !== null) {
-        try {
-          const service = typeof hostCtx.get === "function" ? hostCtx.get("sessions") : undefined;
-          if (service !== undefined && service !== null) {
-            sessionsApi = service;
-            sessionsApiResolved = true;
-          }
-        } catch (error) {
-          // Not provided in this profile: keep showing the percentage alone.
-        }
-      }
-      return sessionsApi;
+      return optionalService("sessions");
     }
 
     /** Mirrors the upstream `formatTokens` so the dock and the panel agree. */
@@ -3277,6 +3264,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           /* the old generation is already gone */
         }
       }
+      if (source === null || source === undefined) return;
       if (typeof source.subscribe !== "function") return;
       try {
         const stop = source.subscribe(() => scheduleDecorate());

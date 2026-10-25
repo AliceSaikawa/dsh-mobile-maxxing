@@ -1217,6 +1217,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       notifyDeviceTurns: readNotifyDeviceTurns(),
       deviceTheme: readDeviceTheme(),
       deviceThemeNote: "",
+      localPermission: readLocalPermission(),
+      permissionOptions: [],
+      permissionSharedDefault: "",
+      permissionError: "",
     };
     const subscribers = new Set();
     function emit(patch) {
@@ -1310,6 +1314,127 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     /** The live value of the #15 opt-in (the store copy only drives the UI). */
     function notifyDeviceTurns() {
       return readNotifyDeviceTurns();
+    }
+
+    // ---------------------------------------------------------------------
+    // Per-device default permission preset
+    //
+    // The shared General row writes the Host's `defaultPreset`, which seeds
+    // every device's new sessions. A phone that wants another default must not
+    // write that value, so the choice lives in localStorage and is applied to
+    // the blank session this device is about to open, with the same
+    // `/permission <preset>` command the in-session switcher sends. The
+    // session's own log records it; nothing outside this browser changes.
+    // ---------------------------------------------------------------------
+    const LOCAL_PERMISSION_KEY = "rdsh-mobile-ux:local-permission";
+    const PERMISSION_VALUE_LABELS = {
+      "read-only": "localPermission.readOnly",
+      "workspace-write": "localPermission.workspaceWrite",
+      "danger-full-access": "localPermission.fullAccess",
+      auto: "localPermission.auto",
+    };
+    // The upstream row's English labels, so a host-renamed preset keeps its
+    // own name while a built-in one uses our copy.
+    const PERMISSION_ENGLISH_NAMES = {
+      "read-only": "Read Only",
+      "workspace-write": "Workspace Write",
+      "danger-full-access": "Full access",
+      auto: "Auto review",
+    };
+
+    function readLocalPermission() {
+      try {
+        const value = localStorage.getItem(LOCAL_PERMISSION_KEY);
+        return typeof value === "string" && value !== "" ? value : null;
+      } catch {
+        return null;
+      }
+    }
+
+    function writeLocalPermission(value) {
+      const next = typeof value === "string" && value !== "" ? value : null;
+      try {
+        if (next === null) localStorage.removeItem(LOCAL_PERMISSION_KEY);
+        else localStorage.setItem(LOCAL_PERMISSION_KEY, next);
+      } catch {
+        /* private mode: the choice lasts for this page */
+      }
+      emit({ localPermission: next });
+    }
+
+    /** One preset's label, preferring this package's copy for built-in keys. */
+    function permissionOptionLabel(option) {
+      const key = PERMISSION_VALUE_LABELS[option.value];
+      if (key !== undefined && (option.name === option.value || option.name === PERMISSION_ENGLISH_NAMES[option.value])) return t(key);
+      return option.name;
+    }
+
+    /** Read the permission catalog once for the Mobile card. */
+    async function loadPermissionCatalog() {
+      const remote = hostCtx?.remote;
+      if (remote === undefined || remote === null || remote.permissionPresets === undefined) {
+        emit({ permissionError: t("localPermission.unavailable") });
+        return;
+      }
+      try {
+        const result = await remote.permissionPresets.catalog();
+        if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`);
+        const catalog = result.value;
+        emit({
+          permissionOptions: catalog.options.map((option) => ({
+            value: option.value,
+            name: option.name,
+            description: typeof option.description === "string" ? option.description : "",
+          })),
+          permissionSharedDefault: catalog.defaultPreset,
+          permissionError: "",
+        });
+      } catch (error) {
+        emit({ permissionError: t("localPermission.unavailableDetail", { error: String((error && error.message) || error) }) });
+      }
+    }
+
+    /** Apply this browser's preset to one freshly opened blank session. */
+    async function applyLocalPermissionToSession(sessionId) {
+      const preset = readLocalPermission();
+      if (preset === null || typeof sessionId !== "string" || sessionId === "") return;
+      const sessions = hostCtx?.sessions;
+      if (sessions === undefined || sessions === null) return;
+      try {
+        await sessions.using(sessionId, { source: "mobilePermissionDefault" }, async (reference) => {
+          const live = reference.binding.session;
+          const result = await live.command(`/permission ${preset}`);
+          if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`);
+          if (!result.value.matched) throw new Error(t("localPermission.unsupported"));
+        });
+      } catch (error) {
+        console.warn("[rdsh-mobile-ux] local default permission failed", error);
+        emit({ permissionError: t("localPermission.applyFailed", { error: String((error && error.message) || error) }) });
+      }
+    }
+
+    /**
+     * Wrap the one navigation entry point every new-session flow uses
+     * (`startSession` and `openWorkspace` both reach it through `this`), so the
+     * preset lands on the blank session before it is shown. The wrapper is an
+     * instance property restored on disposal; the shared service and the Host
+     * see no change.
+     */
+    function installLocalPermissionDefault(scope, workspace) {
+      if (workspace === undefined || workspace === null) return;
+      const original = workspace.openWorkspaceSession;
+      if (typeof original !== "function" || Object.hasOwn(workspace, "openWorkspaceSession")) return;
+      const wrapper = function (workspaceId, beforeOpen, reuse) {
+        const open = typeof beforeOpen === "function" ? beforeOpen : null;
+        return original.call(this, workspaceId, (sessionId) => {
+          if (open !== null) open(sessionId);
+          void applyLocalPermissionToSession(sessionId);
+        }, reuse);
+      };
+      workspace.openWorkspaceSession = wrapper;
+      scope.effect(() => () => {
+        if (workspace.openWorkspaceSession === wrapper) delete workspace.openWorkspaceSession;
+      });
     }
 
     // ---------------------------------------------------------------------
@@ -8149,6 +8274,51 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     // ---------------------------------------------------------------------
     // UI: Settings section
     // ---------------------------------------------------------------------
+    function LocalPermissionSection() {
+      const s = useStore();
+      const [message, setMessage] = useState("");
+      const options = Array.isArray(s.permissionOptions) ? s.permissionOptions : [];
+      const chosen = typeof s.localPermission === "string" && s.localPermission !== "" ? s.localPermission : "";
+      const shared = typeof s.permissionSharedDefault === "string" ? s.permissionSharedDefault : "";
+      const sharedOption = options.find((option) => option.value === shared);
+      const sharedLabel = sharedOption === undefined ? shared : permissionOptionLabel(sharedOption);
+
+      useEffect(() => {
+        void loadPermissionCatalog();
+      }, []);
+
+      return h(
+        "div",
+        { className: "rdsh-mux-card" },
+        h("h3", { className: "rdsh-mux-title" }, t("localPermission.title")),
+        h("p", { className: "rdsh-mux-desc" }, t("localPermission.desc")),
+        h(
+          "label",
+          { className: "rdsh-mux-slider" },
+          h("span", null, t("localPermission.label")),
+          h(
+            "select",
+            {
+              className: "rdsh-mux-select",
+              value: chosen,
+              onChange: (event) => {
+                writeLocalPermission(event.target.value);
+                setMessage(t("localPermission.saved"));
+              },
+            },
+            h("option", { value: "" }, t("localPermission.follow")),
+            options.map((option) => h("option", { key: option.value, value: option.value }, permissionOptionLabel(option))),
+          ),
+        ),
+        shared === ""
+          ? null
+          : h("p", { className: "rdsh-mux-note" }, t("localPermission.shared", { preset: sharedLabel })),
+        h("p", { className: "rdsh-mux-note" }, t("localPermission.hostNote")),
+        s.permissionError === "" ? null : h("p", { className: "rdsh-mux-note" }, s.permissionError),
+        message === "" ? null : h("p", { className: "rdsh-mux-note" }, message),
+      );
+    }
+
     function MobileSection() {
       const s = useStore();
       // The rows this section keeps are decided by the device, not the window
@@ -8207,6 +8377,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
             ? h("p", { className: "rdsh-mux-note" }, t("mux.deviceTheme.unsupported"))
             : null,
         ),
+        onPhone ? h(LocalPermissionSection) : null,
         h(
           "div",
           { className: "rdsh-mux-card" },
@@ -9811,6 +9982,9 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         if (phone()) {
           installDrawer();
           document.documentElement.setAttribute("data-rdsh-anim", ANIMATION);
+          // The catalog only feeds the Mobile card; a failed read is reported
+          // there instead of blocking the surface.
+          void loadPermissionCatalog();
         } else {
           clearPhoneHooks();
         }
@@ -10065,7 +10239,10 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         };
         // Session selection needs the workspace service, which arrives on its
         // own schedule; without it a notification tap can only raise a banner.
-        ctx.inject(["uiWorkspace"], (scope) => attachSessionOpener(scope));
+        ctx.inject(["uiWorkspace"], (scope) => {
+          attachSessionOpener(scope);
+          if (phone()) installLocalPermissionDefault(scope, scope.uiWorkspace ?? scope.get("uiWorkspace"));
+        });
         try {
           attachDeviceTheme(ctx);
         } catch (error) {

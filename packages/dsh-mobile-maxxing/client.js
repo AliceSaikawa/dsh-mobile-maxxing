@@ -1686,6 +1686,25 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       });
     }
 
+    let readGeneralSettingsLabel = () => "General";
+
+    function decorateMobileSettingsTabs(modal) {
+      if (!phone() || modal === null) return;
+      const generalLabel = readGeneralSettingsLabel();
+      const tabs = [...modal.querySelectorAll("nav button")];
+      const mobile = tabs.find((button) => labelOf(button) === t("tab.mobile"));
+      let generalActive = false;
+      for (const button of tabs) {
+        const general = labelOf(button) === generalLabel;
+        button.toggleAttribute("data-rdsh-settings-tab-hidden", general);
+        if (general && button.getAttribute("aria-current") === "true") generalActive = true;
+      }
+      if (generalActive && mobile !== undefined) {
+        mobile.click();
+        mobile.focus();
+      }
+    }
+
     function applyHideList(disabled) {
       const labels = hideLabels();
       // Hide the controls that dead-end on a mobile device. Desktop mode
@@ -1700,9 +1719,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           element.removeAttribute("data-rdsh-hidden");
         }
       }
-      // Only one Mobile tab is registered, so there is no stock PWA/Input tab
-      // left to hide.
       const modal = document.querySelector('[data-shortcut-modal="settings"]');
+      decorateMobileSettingsTabs(modal);
       // PC-only settings rows and action buttons. Matched by their label, not
       // by an upstream class: the row container is found through structure,
       // and a bare action button ("Open configuration file") is hidden as the
@@ -10041,6 +10059,10 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
     return {
       inject: ["slots"],
       apply(ctx) {
+        readGeneralSettingsLabel = () => {
+          const label = ctx.slots.entries?.("settings.section")?.find((entry) => entry.options.id === "general")?.options.label;
+          return (typeof label === "function" ? label() : label) ?? "General";
+        };
         // Session selection needs the workspace service, which arrives on its
         // own schedule; without it a notification tap can only raise a banner.
         ctx.inject(["uiWorkspace"], (scope) => attachSessionOpener(scope));
@@ -10074,7 +10096,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         ctx.slots.inject("settings.section", () => ctx.slots.register({
           name: "settings.section",
           id: "mobile-ux",
-          order: 81,
+          order: -1,
           label: () => t("tab.mobile"),
         }, MobileSection));
       },

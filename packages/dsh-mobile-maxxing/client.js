@@ -7182,18 +7182,114 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     // plugin may do; the upstream `xterm.resize` keeps the viewport where the
     // terminal itself decides.
     //
+    // #67: that internal position is still readable. The vertical scrollbar
+    // xterm renders is a DOM slider, and `style.top + style.height` against the
+    // track's height is where the terminal is looking
+    // (client.terminal.js `AbstractScrollbar.render`). Output that arrives
+    // while the slider is at the end is followed by xterm itself; while it is
+    // anywhere else, the fit is held back, because refitting drops the rows
+    // above the viewport and would pull a reader down. The slider is only
+    // observed (never written, and no scroll is synthesised), and the held fit
+    // runs again when the slider returns to the end.
+    //
     // `fitScreen` is gated on the screen being writable, so a read-only
     // terminal keeps its Host grid and does not refit.
     // ---------------------------------------------------------------------
     let terminalFitFrame = 0;
     let terminalFitHeight = 0;
     let terminalFitMount = null;
+    /** The scrollbar a held fit is waiting on, and the terminal that owns it. */
+    let terminalScrollWatch = null;
+    let terminalScrollTarget = null;
+    let terminalScrollTerminal = null;
+    let terminalScrollFrame = 0;
+
+    /** The vertical scrollbar xterm renders inside `terminal`, or null. */
+    function terminalScrollbar(terminal) {
+      const scroller = terminal.querySelector(XTERM_SCROLLER);
+      if (scroller === null) return null;
+      return scroller.querySelector(".scrollbar.vertical") ?? null;
+    }
+
+    /**
+     * Whether the terminal is showing the bottom of its scrollback.
+     *
+     * A missing slider or an unmeasured track means "nothing to scroll", which
+     * is the bottom for this purpose; the caller then keeps the plain fit.
+     */
+    function terminalAtBottom(terminal) {
+      const bar = terminalScrollbar(terminal);
+      const slider = bar === null ? null : bar.querySelector(".slider");
+      if (slider === null) return true;
+      const track = bar.getBoundingClientRect().height;
+      const top = Number.parseFloat(slider.style.top);
+      const size = Number.parseFloat(slider.style.height);
+      if (!(track > 0) || !Number.isFinite(top) || !Number.isFinite(size)) return true;
+      return top + size >= track - 1;
+    }
+
+    function stopTerminalScrollWatch() {
+      if (terminalScrollFrame !== 0) {
+        cancelAnimationFrame(terminalScrollFrame);
+        terminalScrollFrame = 0;
+      }
+      if (terminalScrollWatch !== null) {
+        terminalScrollWatch.disconnect();
+        terminalScrollWatch = null;
+      }
+      terminalScrollTarget = null;
+      terminalScrollTerminal = null;
+    }
+
+    /**
+     * Wait for a scrolled-up reader to come back to the end of the scrollback.
+     *
+     * Returns false when there is nothing to observe (no scrollbar, no
+     * MutationObserver), so the caller falls back to fitting as before.
+     */
+    function watchTerminalScroll(terminal) {
+      if (!phone() || typeof MutationObserver !== "function") return false;
+      const bar = terminalScrollbar(terminal);
+      if (bar === null) return false;
+      if (terminalScrollWatch !== null && terminalScrollTarget === bar) {
+        terminalScrollTerminal = terminal;
+        return true;
+      }
+      stopTerminalScrollWatch();
+      terminalScrollTarget = bar;
+      terminalScrollTerminal = terminal;
+      terminalScrollWatch = new MutationObserver(() => {
+        if (terminalScrollFrame !== 0) return;
+        if (typeof requestAnimationFrame !== "function") return;
+        terminalScrollFrame = requestAnimationFrame(() => {
+          terminalScrollFrame = 0;
+          const current = terminalScrollTerminal;
+          if (current === null || current.isConnected === false) {
+            stopTerminalScrollWatch();
+            return;
+          }
+          // Still up the scrollback: leave the reader where they are.
+          if (!terminalAtBottom(current)) return;
+          stopTerminalScrollWatch();
+          scheduleTerminalFit();
+        });
+      });
+      // Output moves `style.top`/`style.height`; a scroll moves `style.top`;
+      // the visibility class changes when the scrollback fills or empties.
+      terminalScrollWatch.observe(bar, {
+        attributes: true,
+        attributeFilter: ["style", "class"],
+        subtree: true,
+      });
+      return true;
+    }
 
     function clearTerminalFit() {
       if (terminalFitFrame !== 0) {
         cancelAnimationFrame(terminalFitFrame);
         terminalFitFrame = 0;
       }
+      stopTerminalScrollWatch();
       terminalFitHeight = 0;
       terminalFitMount = null;
       for (const mount of document.querySelectorAll("[data-rdsh-terminal-fit]")) {
@@ -7229,6 +7325,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         return;
       }
       let mount = null;
+      let terminal = null;
       for (const section of document.querySelectorAll("[data-sidebar-terminal]")) {
         if (section.closest("[hidden]") !== null) continue;
         const xterm = section.querySelector(".xterm");
@@ -7236,6 +7333,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         const rect = xterm.parentElement.getBoundingClientRect();
         if (!(rect.width > 0) || !(rect.height > 0)) continue;
         mount = xterm.parentElement;
+        terminal = xterm;
         break;
       }
       if (mount === null) {
@@ -7249,6 +7347,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         clearTerminalFit();
         return;
       }
+      // #67: a reader up the scrollback owns the view. The refit drops the rows
+      // above the viewport, so writing this height would jump them; hold the
+      // fit until the slider is back at the end (watchTerminalScroll).
+      if (!terminalAtBottom(terminal) && watchTerminalScroll(terminal)) return;
+      stopTerminalScrollWatch();
       if (terminalFitMount !== null && terminalFitMount !== mount) {
         terminalFitMount.style.removeProperty("height");
         terminalFitMount.style.removeProperty("flex");

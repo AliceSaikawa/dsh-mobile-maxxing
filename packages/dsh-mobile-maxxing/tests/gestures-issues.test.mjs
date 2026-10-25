@@ -220,6 +220,7 @@ function bootGestures({ narrow = true, mode = narrow ? "mobile" : "desktop", wid
 	const documentHandlers = [];
 	const windowHandlers = [];
 	const vvHandlers = [];
+	const observers = [];
 	const schedule = (callback, delay) => {
 		const id = nextTimer++;
 		timers.set(id, { callback, delay });
@@ -307,8 +308,20 @@ function bootGestures({ narrow = true, mode = narrow ? "mobile" : "desktop", wid
 		requestAnimationFrame: requestFrame,
 		cancelAnimationFrame: cancelFrame,
 		MutationObserver: class {
-			observe() {}
-			disconnect() {}
+			constructor(callback) {
+				this.callback = callback;
+				this.target = null;
+				observers.push(this);
+			}
+			observe(target) {
+				this.target = target;
+			}
+			disconnect() {
+				this.target = null;
+			}
+			takeRecords() {
+				return [];
+			}
 		},
 		IntersectionObserver: class {
 			observe() {}
@@ -415,6 +428,7 @@ function bootGestures({ narrow = true, mode = narrow ? "mobile" : "desktop", wid
 		frames,
 		vvHandlers,
 		windowHandlers,
+		observers,
 		drainFrames,
 		runTimers,
 		handler,
@@ -854,6 +868,9 @@ test("a long press on a tab does not open the text callout menu", () => {
 /* ---------------------------------------------------------------------- */
 /* #38: terminal fit follows the visual viewport                          */
 /* ---------------------------------------------------------------------- */
+/** Height of the fixture's scrollbar track, in pixels. */
+const TERMINAL_SCROLL_TRACK = 200;
+
 function terminalFixture(doc, collapseFixture) {
 	const section = new FakeElement("section");
 	section.setAttribute("data-sidebar-terminal", "");
@@ -863,6 +880,16 @@ function terminalFixture(doc, collapseFixture) {
 	xterm.parentElement = screen;
 	const scroller = new FakeElement("div");
 	scroller.setAttribute("class", "xterm-scrollable-element");
+	// The vertical scrollbar is where xterm's JS-owned scroll position becomes
+	// observable: the slider carries `style.top`/`style.height` inside the
+	// track (client.terminal.js `AbstractScrollbar.render`).
+	const bar = new FakeElement("div");
+	bar.setAttribute("class", "invisible scrollbar vertical");
+	bar._rect = () => ({ x: 384, y: 44, top: 44, left: 384, right: 390, bottom: 244, width: 6, height: TERMINAL_SCROLL_TRACK });
+	const slider = new FakeElement("div");
+	slider.setAttribute("class", "slider");
+	slider.style.top = "0px";
+	slider.style.height = `${TERMINAL_SCROLL_TRACK}px`;
 	section._querySelector = (selector) => (selector === ".xterm" ? xterm : null);
 	screen.parentElement = section;
 	screen._querySelector = (selector) => {
@@ -870,6 +897,9 @@ function terminalFixture(doc, collapseFixture) {
 		if (selector === ".xterm-screen") return null;
 		return null;
 	};
+	xterm._querySelector = (selector) => (selector === ".xterm-scrollable-element" ? scroller : null);
+	scroller._querySelector = (selector) => (selector === ".scrollbar.vertical" ? bar : null);
+	bar._querySelector = (selector) => (selector === ".slider" ? slider : null);
 	doc.querySelectorAll = (selector) => {
 		if (selector === "[data-sidebar-terminal]") return [section];
 		if (selector === "[data-rdsh-terminal-fit]") return screen.hasAttribute("data-rdsh-terminal-fit") ? [screen] : [];
@@ -877,7 +907,13 @@ function terminalFixture(doc, collapseFixture) {
 		if (selector === "[data-rdsh-rightpanel]") return [];
 		return [];
 	};
-	return { section, screen, xterm, scroller };
+	return { section, screen, xterm, scroller, bar, slider };
+}
+
+/** Move the fixture's terminal scrollbar, as xterm does when output arrives. */
+function scrollTerminalTo(terminal, top, size = TERMINAL_SCROLL_TRACK - top) {
+	terminal.slider.style.top = `${top}px`;
+	terminal.slider.style.height = `${size}px`;
 }
 
 function visualViewportHandler(booted, type = "resize") {
@@ -1017,6 +1053,85 @@ test("a closed panel or a desktop width clears the terminal fit", () => {
 	tablet.disposeAll();
 });
 
+test("the terminal fit follows the bottom while the reader is at the end", () => {
+	const booted = bootGestures({ narrow: true });
+	const collapseFixture = panelFixture(booted.doc);
+	const terminal = terminalFixture(booted.doc, collapseFixture);
+	booted.drainFrames();
+	const resize = visualViewportHandler(booted);
+
+	booted.visualViewport.height = 544;
+	resize();
+	booted.drainFrames();
+	assert.equal(terminal.screen.style.height, "500px", "the fit did not apply at the bottom");
+
+	// Output lands: the slider shrinks but still ends at the track's bottom.
+	scrollTerminalTo(terminal, 60);
+	assert.equal(terminal.slider.style.height, "140px");
+	// The keyboard inset changes while the reader is still at the bottom, so
+	// the fit must follow it and keep the last row in the band.
+	booted.visualViewport.height = 400;
+	resize();
+	booted.drainFrames();
+	assert.equal(terminal.screen.style.height, "356px", "the fit did not follow the bottom");
+	assert.equal(terminal.screen.hasAttribute("data-rdsh-terminal-fit"), true, "the fit hook was dropped");
+	assert.equal(terminal.scroller.dispatched.length, 0, "the follow synthesised a terminal event");
+	assert.equal(booted.observers.some((observer) => observer.target === terminal.bar), false, "an at-bottom terminal was put on hold");
+	booted.disposeAll();
+});
+
+test("a scrolled-up reader is not pulled to the bottom by the terminal fit", () => {
+	const booted = bootGestures({ narrow: true });
+	const collapseFixture = panelFixture(booted.doc);
+	const terminal = terminalFixture(booted.doc, collapseFixture);
+	booted.drainFrames();
+	const resize = visualViewportHandler(booted);
+
+	booted.visualViewport.height = 544;
+	resize();
+	booted.drainFrames();
+	assert.equal(terminal.screen.style.height, "500px");
+
+	// The reader scrolls up: the slider no longer reaches the track's bottom.
+	scrollTerminalTo(terminal, 20, 60);
+	const framesBefore = [...booted.frames.values()].filter((callback) => callback.name === "applyTerminalFit").length;
+
+	booted.visualViewport.height = 400;
+	resize();
+	booted.drainFrames();
+	assert.equal(terminal.screen.style.height, "500px", "the fit moved a scrolled-up reader");
+	assert.equal(terminal.screen.hasAttribute("data-rdsh-terminal-fit"), true, "the existing fit was dropped");
+	assert.equal(framesBefore, 0, "a fit was already queued before the inset changed");
+
+	const watcher = booted.observers.find((observer) => observer.target === terminal.bar);
+	assert.ok(watcher, "the held fit is not waiting on the scrollbar");
+	assert.equal([...booted.frames.values()].filter((callback) => callback.name === "applyTerminalFit").length, 0, "a fit was queued while the reader was up");
+	assert.equal(terminal.scroller.dispatched.length, 0, "the hold synthesised a terminal event");
+
+	// Back at the end: the observer releases the held fit, which follows the
+	// inset that was measured while the reader was away.
+	scrollTerminalTo(terminal, 100, 100);
+	watcher.callback();
+	booted.drainFrames();
+	assert.equal(terminal.screen.style.height, "356px", "the held fit did not run at the end");
+	assert.equal(terminal.scroller.dispatched.length, 0, "releasing the fit synthesised a terminal event");
+	booted.disposeAll();
+});
+
+test("a desktop never observes or fits the terminal scrollbar", () => {
+	const desktop = bootGestures({ mode: "desktop", width: 390 });
+	const collapseFixture = panelFixture(desktop.doc);
+	const terminal = terminalFixture(desktop.doc, collapseFixture);
+	desktop.drainFrames();
+	scrollTerminalTo(terminal, 20, 60);
+	desktop.drainFrames();
+	assert.equal(visualViewportHandler(desktop), undefined, "a desktop installed a visual-viewport handler");
+	assert.equal(desktop.observers.some((observer) => observer.target === terminal.bar), false, "a desktop watched the terminal scrollbar");
+	assert.equal(terminal.screen.hasAttribute("data-rdsh-terminal-fit"), false, "a desktop wrote the fit hook");
+	assert.equal(terminal.screen.style.height, undefined, "a desktop wrote a fitted height");
+	desktop.disposeAll();
+});
+
 test("every dockkit tab layer lets the browser pan natively", () => {
 	// touch-action is the intersection of the hit tab, its strip and the
 	// scroller up to the scroll container. The horizontal pan now belongs to
@@ -1039,5 +1154,7 @@ test("the terminal fit never synthesises a wheel or other terminal event", () =>
 	const block = CLIENT.slice(start, end);
 	assert.doesNotMatch(block, /dispatchEvent/, "the fit dispatches an event");
 	assert.doesNotMatch(block, /new Event\("wheel"\)/, "the fit creates a wheel");
+	assert.doesNotMatch(block, /scrollTop\s*=/, "the follow writes a DOM scroll position");
+	assert.doesNotMatch(block, /\.scrollTo(?:Top|Bottom|Line|Page)?\(/, "the follow scrolls a DOM node");
 	assert.doesNotMatch(CLIENT, /deltaY = 1e7/, "the huge wheel fallback is back");
 });

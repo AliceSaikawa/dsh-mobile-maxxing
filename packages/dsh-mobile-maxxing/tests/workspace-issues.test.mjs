@@ -524,8 +524,12 @@ function buttonWithName(document, name, attributes = {}) {
 	return button;
 }
 
-/** The upstream picker portal: [role=menu] > viewport + footer. */
-function workspaceMenu(document, names) {
+/**
+ * The upstream picker portal: [role=menu] > viewport + footer. The footer
+ * label is a parameter so a test can use the translated one: the picker is
+ * recognized without reading it (#39).
+ */
+function workspaceMenu(document, names, addLabel = "Add workspace…") {
 	const menu = element(document, "div", { role: "menu" });
 	const viewport = element(document, "div", { role: "presentation" });
 	for (const name of names) {
@@ -535,7 +539,7 @@ function workspaceMenu(document, names) {
 	}
 	const footer = element(document, "div", { role: "presentation" });
 	const footerWrap = element(document, "div");
-	footerWrap.append(buttonWithName(document, "Add workspace…", { role: "menuitem" }));
+	footerWrap.append(buttonWithName(document, addLabel, { role: "menuitem" }));
 	footer.append(footerWrap);
 	menu.append(viewport, footer);
 	return { menu, viewport, footer };
@@ -640,6 +644,148 @@ test("#39 picker filter, no-match row, Escape and removal", () => {
 	assert.equal(menu.hasAttribute("data-rdsh-workspace-menu"), false, "the menu hook survived cleanup");
 	assert.equal(viewport.hasAttribute("data-rdsh-workspace-viewport"), false, "the viewport hook survived cleanup");
 	assert.deepEqual(run.tools.filesSearch(), null);
+});
+
+test("#39 the picker is recognized without an English footer label", () => {
+	const run = boot();
+	run.reset();
+	// zh: hero.chooseWorkspace is "选择工作区" and menu.addWorkspace is
+	// "添加工作区…". The old English readers left this whole panel undecorated.
+	const row = element(run.document, "div");
+	const chip = element(run.document, "button", {
+		"aria-label": "选择工作区",
+		"aria-haspopup": "menu",
+		"aria-expanded": "true",
+	});
+	chip.append(element(run.document, "svg"), element(run.document, "span"), element(run.document, "svg"));
+	row.append(chip, element(run.document, "div", { "data-slot": "conversation.hero.workspace" }));
+	run.document.body.append(row);
+	const { menu, viewport } = workspaceMenu(run.document, ["Alpha", "Beta"], "添加工作区…");
+	run.document.body.append(menu);
+	run.tools.decorateWorkspacePicker();
+	const search = menu.querySelector("[data-rdsh-workspace-search]");
+	assert.ok(search, "the localized picker menu was not recognized");
+	assert.equal(search.parentElement, menu, "the search row is not inside the menu");
+	assert.equal(menu.getAttribute("data-rdsh-workspace-menu"), "", "the menu hook was not applied");
+	assert.equal(viewport.getAttribute("data-rdsh-workspace-viewport"), "", "the list viewport hook was not applied");
+});
+
+test("#39 the picker triggers are recognized without an English aria-label", () => {
+	const run = boot();
+	run.reset();
+	// zh: hero.chooseWorkspace is "选择工作区". The old aria-label selector only
+	// matched the English controls, so a zh UI never armed the picker.
+	const row = element(run.document, "div");
+	const chip = element(run.document, "button", {
+		"aria-label": "选择工作区",
+		"aria-haspopup": "menu",
+		"aria-expanded": "false",
+	});
+	chip.append(element(run.document, "svg"), element(run.document, "span"), element(run.document, "svg"));
+	// The picker's own slot outlet is the chip's sibling in the hero row.
+	row.append(chip, element(run.document, "div", { "data-slot": "conversation.hero.workspace" }));
+	run.document.body.append(row);
+	assert.equal(run.tools.workspaceTriggerControl(chip), chip, "the localized hero chip was not recognized");
+
+	// The session-less composer is the other entry: the draft editor inside the
+	// composer card.
+	const card = element(run.document, "div", { "data-composer-card": "" });
+	const editor = element(run.document, "div", { "aria-label": "选择工作区", "aria-haspopup": "menu", "aria-expanded": "false", "data-composer-input": "" });
+	card.append(editor);
+	run.document.body.append(card);
+	assert.equal(run.tools.workspaceTriggerControl(editor), editor, "the localized composer trigger was not recognized");
+
+	// A submenu row or a popup without the picker's open state is not a trigger.
+	const submenu = element(run.document, "button", { role: "menuitem", "aria-haspopup": "menu", "aria-expanded": "false" });
+	const plain = element(run.document, "button", { "aria-haspopup": "menu" });
+	run.document.body.append(submenu, plain);
+	assert.equal(run.tools.workspaceTriggerControl(submenu), null, "a submenu row was treated as the picker trigger");
+	assert.equal(run.tools.workspaceTriggerControl(plain), null, "a popup without aria-expanded was treated as the picker trigger");
+
+	// The recognized trigger still arms the pre-paint decoration in a zh UI.
+	run.tools.beginWorkspacePicker();
+	const { menu } = workspaceMenu(run.document, ["Alpha"], "添加工作区…");
+	run.document.body.append(menu);
+	run.flushObservers();
+	assert.ok(menu.querySelector("[data-rdsh-workspace-search]"), "a zh-UI picker was not decorated");
+});
+
+test("#39 a label-only footer menu is not mistaken for the picker", () => {
+	const run = boot();
+	run.reset();
+	// The plugin market's menus also use a footer; their rows carry no icon.
+	const menu = element(run.document, "div", { role: "menu" });
+	const viewport = element(run.document, "div", { role: "presentation" });
+	for (const name of ["Index A", "Index B"]) {
+		const wrap = element(run.document, "div");
+		const button = element(run.document, "button", { role: "menuitem" });
+		const label = element(run.document, "span");
+		label.append(run.document.createTextNode(name));
+		button.append(label);
+		wrap.append(button);
+		viewport.append(wrap);
+	}
+	const footer = element(run.document, "div", { role: "presentation" });
+	const footerWrap = element(run.document, "div");
+	footerWrap.append(buttonWithName(run.document, "Manage sources", { role: "menuitem" }));
+	footer.append(footerWrap);
+	menu.append(viewport, footer);
+	run.document.body.append(menu);
+
+	run.tools.beginWorkspacePicker();
+	run.flushObservers();
+	assert.equal(menu.querySelector("[data-rdsh-workspace-search]"), null, "an unrelated footer menu received the workspace search row");
+	assert.equal(menu.hasAttribute("data-rdsh-workspace-menu"), false, "an unrelated footer menu was tagged as the picker");
+});
+
+test("#39 a footer-less picker is recognized from its open trigger", () => {
+	const run = boot();
+	run.reset();
+	// Without the directory-flow entry point upstream renders no footer, only
+	// the workspace rows.
+	const row = element(run.document, "div");
+	const chip = element(run.document, "button", {
+		"aria-label": "选择工作区",
+		"aria-haspopup": "menu",
+		"aria-expanded": "false",
+	});
+	row.append(chip, element(run.document, "div", { "data-slot": "conversation.hero.workspace" }));
+	run.document.body.append(row);
+	const menu = element(run.document, "div", { role: "menu" });
+	const viewport = element(run.document, "div", { role: "presentation" });
+	const wrap = element(run.document, "div");
+	wrap.append(buttonWithName(run.document, "Alpha", { role: "menuitem" }));
+	viewport.append(wrap);
+	menu.append(viewport);
+	run.document.body.append(menu);
+
+	run.tools.decorateWorkspacePicker();
+	assert.equal(menu.querySelector("[data-rdsh-workspace-search]"), null, "the picker was decorated while its trigger reported it closed");
+
+	chip.setAttribute("aria-expanded", "true");
+	run.tools.decorateWorkspacePicker();
+	assert.ok(menu.querySelector("[data-rdsh-workspace-search]"), "the open picker without a footer was not decorated");
+});
+
+test("#39 another icon menu is not decorated while the picker is closed", () => {
+	const run = boot();
+	run.reset();
+	// open-in-app renders icon rows plus an icon footer row too; with no
+	// picker trigger reporting it open, that menu must stay untouched.
+	const row = element(run.document, "div");
+	const chip = element(run.document, "button", {
+		"aria-label": "选择工作区",
+		"aria-haspopup": "menu",
+		"aria-expanded": "false",
+	});
+	row.append(chip, element(run.document, "div", { "data-slot": "conversation.hero.workspace" }));
+	run.document.body.append(row);
+	const { menu } = workspaceMenu(run.document, ["App A", "App B"], "Reveal in folder");
+	run.document.body.append(menu);
+
+	run.tools.decorateWorkspacePicker();
+	assert.equal(menu.querySelector("[data-rdsh-workspace-search]"), null, "an unrelated icon menu received the workspace search row");
+	assert.equal(menu.hasAttribute("data-rdsh-workspace-menu"), false, "an unrelated icon menu was tagged as the picker");
 });
 
 // ---------------------------------------------------------------------------
@@ -917,6 +1063,29 @@ test("#43 zero hits shows one localized row and search never rewrites the tree t
 	assert.equal(search.querySelector("[data-rdsh-files-empty]").textContent, COPY.en["files.search.noMatches"]);
 	assert.equal(tree.readme.textContent, before, "searching rewrote the upstream text");
 	assert.equal(tree.readme.querySelectorAll("mark").length, 0, "searching injected markup into the tree");
+});
+
+test("#43 the zero-hit line is a block below the field row, not a flex item in it", () => {
+	const run = boot();
+	run.reset();
+	const tree = filesTree(run.document);
+	run.tools.decorateWorkspaceFiles();
+	const search = tree.root.querySelector("[data-rdsh-files-search]");
+	const row = search.querySelector(".rdsh-mux-files-search-row");
+	const input = search.querySelector("input");
+	const submit = search.querySelector("button");
+	const empty = search.querySelector("[data-rdsh-files-empty]");
+	assert.ok(row, "the field row was not created");
+	assert.equal(input.parentElement, row, "the input is not inside the field row");
+	assert.equal(submit.parentElement, row, "the submit button is not inside the field row");
+	assert.equal(empty.parentElement, search, "the no-hit line left the search block");
+	assert.notEqual(empty.parentElement, row, "the no-hit line is still a flex item beside the input");
+	assert.equal(search.children.length, 2, "the search block gained extra children");
+	assert.equal(search.children[0], row, "the field row is not first");
+	assert.equal(search.children[1], empty, "the no-hit line is not the block after the field row");
+	assert.match(CLIENT, /\.rdsh-mux-files-search \{[^}]*flex-direction: column;/, "the search block does not stack its row and the no-hit line");
+	assert.match(CLIENT, /\.rdsh-mux-files-search-row \{[^}]*display: flex;/, "the field row is not a row");
+	assert.equal(tree.root.children.indexOf(search) + 1, tree.root.children.indexOf(tree.body), "the search block is not between header and body");
 });
 
 test("#43 the highlight uses ranges, not DOM edits", () => {

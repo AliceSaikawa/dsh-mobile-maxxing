@@ -800,7 +800,12 @@ test("the queue joins only at its lower corners and leaves the composer unchange
 	const joinEnd = CLIENT.indexOf("\n\n    function decorateQueueDock()", joinStart);
 	assert.ok(joinStart >= 0 && joinEnd > joinStart, "queue join helper is missing");
 	const joinSource = CLIENT.slice(joinStart, joinEnd);
+	assert.match(joinSource, /if \(!phone\(\)/, "the queue join is not mode-gated");
+	assert.match(joinSource, /dock\.append\(bridge\)/, "the bridge is never attached");
 	assert.doesNotMatch(joinSource, /card\.style\.|card\.setAttribute\(/, "the composer must not be mutated");
+	const clearStart = CLIENT.indexOf("function clearQueueDockHooks()");
+	const clearEnd = CLIENT.indexOf("\n\n", clearStart);
+	assert.match(CLIENT.slice(clearStart, clearEnd), /data-rdsh-queue-join/, "teardown keeps the bridge");
 	// The composer's own top corners stay untouched; #37's corner-zeroing rule
 	// contradicted the PR47 contract and was removed in the integration.
 	assert.doesNotMatch(CLIENT, /\[data-rdsh-queue-dock\]:has\(li\)[^{]*\{[^}]*border-top-left-radius:\s*0/, "the composer radius is still zeroed");

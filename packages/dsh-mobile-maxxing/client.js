@@ -438,19 +438,6 @@ window.__ModuleLoader__.load({
         resetLocalChat,
         publishLocalChat,
         status: () => localChatStatus,
-        entries: () => {
-          const list = hostCtx?.slots?.entries?.("settings.general.item") ?? [];
-          return list.map((entry) => ({
-            id: entry?.options?.id,
-            keys: Object.keys(entry?.options ?? {}),
-            inject: typeof entry?.options?.inject,
-          }));
-        },
-        services: () => ({
-          theme: typeof hostCtx?.get?.("theme"),
-          locale: typeof hostCtx?.locale,
-          localeGet: typeof hostCtx?.get?.("locale"),
-        }),
         specs: LOCAL_CHAT_SPECS,
         key: LOCAL_CHAT_KEY,
         subscribe: subscribeLocalChatStatus,

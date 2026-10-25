@@ -57,8 +57,11 @@ export function classifyDevice(nav) {
 	// desktop-site toggle or an Android tablet reports mobile:false without
 	// being a desktop.
 	if (hints.mobile === true) return "mobile";
-	// iPhone and iPod; also the iPad UA that "Request Mobile Website" sends.
-	if (/iPhone|iPod|iPad/i.test(ua)) return "mobile";
+	// iPhone and iPod; also the iPad UA that "Request Mobile Website" sends, and
+	// a device that asked for a desktop site and kept the Apple platform string
+	// ("iPhone"/"iPad") while the UA turned into a Macintosh one. Platform is a
+	// positive device signal on its own, so it does not need touch points.
+	if (/iPhone|iPod|iPad/i.test(ua) || /iPhone|iPod|iPad/i.test(platform)) return "mobile";
 	// iPadOS asks for the desktop site by default and sends a Macintosh UA.
 	// Touch points are then the only same-document signal left, and no Mac has
 	// them. This also covers an iPad that overrode "Request Desktop Site".

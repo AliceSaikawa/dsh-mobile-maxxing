@@ -33,17 +33,28 @@ const CASES = [
 	["android tablet", nav({ userAgent: ANDROID_TABLET, platform: "Linux armv8l", maxTouchPoints: 5 }), "mobile"],
 	["android phone in landscape", nav({ userAgent: ANDROID_PHONE, platform: "Linux armv8l", maxTouchPoints: 5 }), "mobile"],
 	["iphone", nav({ userAgent: IPHONE, platform: "iPhone", maxTouchPoints: 5 }), "mobile"],
+	["ipod", nav({ userAgent: "Mozilla/5.0 (iPod touch; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1", platform: "iPod", maxTouchPoints: 5 }), "mobile"],
 	["ipad legacy ua", nav({ userAgent: IPAD_LEGACY, platform: "iPad", maxTouchPoints: 5 }), "mobile"],
 	["ipad desktop ua + touch", nav({ userAgent: IPAD_DESKTOP, platform: "MacIntel", maxTouchPoints: 5 }), "mobile"],
 	["ipad desktop ua without touch", nav({ userAgent: IPAD_DESKTOP, platform: "MacIntel", maxTouchPoints: 0 }), "desktop"],
+	// A desktop-site UA on an Apple device still carries the platform string
+	// sometimes; that is a positive device signal on its own.
+	["iphone desktop-site ua", nav({ userAgent: MAC, platform: "iPhone", maxTouchPoints: 0 }), "mobile"],
+	["ipad desktop-site ua", nav({ userAgent: MAC, platform: "iPad", maxTouchPoints: 0 }), "mobile"],
 	["mac", nav({ userAgent: MAC, platform: "MacIntel", maxTouchPoints: 0 }), "desktop"],
 	["windows touch laptop", nav({ userAgent: WINDOWS, platform: "Win32", maxTouchPoints: 10 }), "desktop"],
 	["windows mouse", nav({ userAgent: WINDOWS, platform: "Win32", maxTouchPoints: 0 }), "desktop"],
 	["linux touch laptop", nav({ userAgent: LINUX, platform: "Linux x86_64", maxTouchPoints: 10 }), "desktop"],
+	// The touch-only guess is deliberately not taken: with no Android token and
+	// no Android hint, a touch Linux machine is still a PC.
+	["linux touch without any android signal", nav({ userAgent: LINUX, platform: "Linux x86_64", maxTouchPoints: 10, userAgentData: { mobile: false, platform: "Linux" } }), "desktop"],
 	["chromeos", nav({ userAgent: CROS, platform: "Linux x86_64", maxTouchPoints: 0 }), "desktop"],
-	["ua-ch mobile", nav({ userAgent: "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36", platform: "Linux armv8l", userAgentData: { mobile: true, platform: "Android" } }), "mobile"],
-	["ua-ch mobile on a generic ua", nav({ userAgent: "Mozilla/5.0", userAgentData: { mobile: true, platform: "Android" } }), "mobile"],
-	["ua-ch android platform hint only", nav({ userAgent: "Mozilla/5.0 (Linux; Android 10; K)", platform: "", userAgentData: { mobile: false, platform: "Android" } }), "mobile"],
+	// Each client hint branch is exercised alone, on a UA that would otherwise
+	// be a desktop, so removing one branch cannot be masked by the other.
+	["ua-ch mobile flag only", nav({ userAgent: LINUX, platform: "", userAgentData: { mobile: true, platform: "Linux" } }), "mobile"],
+	["ua-ch android platform hint only", nav({ userAgent: LINUX, platform: "", userAgentData: { mobile: false, platform: "Android" } }), "mobile"],
+	["ua-ch both hints", nav({ userAgent: LINUX, platform: "", userAgentData: { mobile: true, platform: "Android" } }), "mobile"],
+	["ua-ch android reduced ua", nav({ userAgent: "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36", platform: "Linux armv8l", userAgentData: { mobile: true, platform: "Android" } }), "mobile"],
 	["ua-ch mobile:false is not a desktop signal", nav({ userAgent: ANDROID_TABLET, userAgentData: { mobile: false, platform: "Android" } }), "mobile"],
 	["ua-ch windows stays desktop", nav({ userAgent: WINDOWS, platform: "Win32", maxTouchPoints: 10, userAgentData: { mobile: false, platform: "Windows" } }), "desktop"],
 	["unknown agent", nav({ userAgent: "curl/8.5.0", platform: "" }), "desktop"],
@@ -56,7 +67,11 @@ test("the classifier table covers phones, tablets, PCs and the mac-like ipad", (
 	}
 });
 
-test("missing, null or hostile navigator fields never throw and fail closed", () => {
+test("missing, null or coerced navigator fields fail closed", () => {
+	// A throwing getter is not covered here on purpose: this function is called
+	// by the inline script, whose catch turns that into "desktop" (pinned in
+	// "the inline script fails closed when the document or the globals
+	// misbehave"). Wrapping every read would only hide a broken navigator.
 	for (const value of [undefined, null, 42, "navigator", [], {}]) {
 		assert.equal(classifyDevice(value), "desktop", `classifyDevice(${String(value)})`);
 	}

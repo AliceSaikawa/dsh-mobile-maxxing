@@ -6,6 +6,8 @@
  * Every test drives the real route handlers and the real `PushStore`; only
  * `fetch` is stubbed, so the assertions are about routing and pruning, not
  * about the Web Push wire format (that lives in notify.test.mjs).
+ * The writes are sequential: a concurrent read-modify-write race between two
+ * processes is a documented risk and is not asserted to be safe here.
  *
  * The last block loads `sw.js` in a `node:vm` sandbox with a fake CacheStorage
  * to pin the assumptions behind "the two apps' caches cannot interfere":
@@ -19,9 +21,9 @@
 
 import assert from "node:assert/strict";
 import { createECDH, randomBytes } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { test } from "node:test";
 import vm from "node:vm";
@@ -36,7 +38,29 @@ const WAIT_MS = 40;
 // Fixtures
 // ---------------------------------------------------------------------------
 
-/** A throwaway home with an empty push store, and the env restored after. */
+/**
+ * Remove only a throwaway directory this test file created with `mkdtemp`.
+ *
+ * `rmSync` is recursive, so verify the target twice before touching it: the
+ * resolved directory must sit directly under the OS tmpdir and keep the
+ * `rdsh-issues-notify-` prefix `mkdtemp` generated. Anything else (a user
+ * directory, a symlinked path, a vanished temp dir) is left alone.
+ */
+function removeTemporaryHome(home) {
+	try {
+		if (typeof home !== "string" || home === "") return;
+		const root = realpathSync(tmpdir());
+		const target = realpathSync(home);
+		if (dirname(target) !== root) return;
+		if (!basename(target).startsWith("rdsh-issues-notify-")) return;
+		if (!lstatSync(target).isDirectory()) return;
+		rmSync(target, { recursive: true, force: true });
+	} catch {
+		/* already removed, or never created: nothing to clean */
+	}
+}
+
+/** A throwaway home with an empty push store; the env and directory go after. */
 function withHome(run) {
 	return async () => {
 		const home = mkdtempSync(join(tmpdir(), "rdsh-issues-notify-"));
@@ -47,6 +71,7 @@ function withHome(run) {
 		} finally {
 			if (previous === undefined) delete process.env.DSH_HOME;
 			else process.env.DSH_HOME = previous;
+			removeTemporaryHome(home);
 		}
 	};
 }
@@ -196,10 +221,15 @@ function withFetch(handler) {
 }
 
 // ---------------------------------------------------------------------------
-// #28: two processes, one DSH_HOME
+// #28: two stores, one DSH_HOME
 // ---------------------------------------------------------------------------
 
-test("two processes sharing push.json never lose each other's subscriptions", withHome(async (home, file) => {
+test("sequential writes from independent stores preserve existing subscriptions", withHome(async (home, file) => {
+	// Two store instances alternate writes over the same file. This covers the
+	// sequential interleaving that reload-before-save handles; it does NOT
+	// claim two processes writing concurrently are safe. The read-modify-write
+	// window between another process's reload and save is a documented risk,
+	// not something this test can rule out.
 	mkdirSync(dirname(file), { recursive: true });
 	const first = new PushStore(file);
 	const second = new PushStore(file);
@@ -210,27 +240,27 @@ test("two processes sharing push.json never lose each other's subscriptions", wi
 
 	first.add(phone, { origin: NEW_ORIGIN });
 	second.add(old, { origin: OLD_ORIGIN });
-	// Re-reading before the third write is what keeps the second process's
+	// Re-reading before the third write is what keeps the second store's
 	// entry: a blind save would drop it.
 	first.add(desktop, { origin: NEW_ORIGIN });
 
 	assert.deepEqual(
 		second.subscriptions().map((item) => item.endpoint).sort(),
 		[phone.endpoint, old.endpoint, desktop.endpoint].sort(),
-		"a later write erased a subscription another process had stored",
+		"a later write erased a subscription the other store had written",
 	);
 	assert.equal(
 		first.keys().publicKey,
 		second.keys().publicKey,
-		"the shared store must present one VAPID key to every process",
+		"the shared store must present one VAPID key to every instance",
 	);
 
-	// Removing through one process is visible to the other without a restart.
+	// Removing through one store is visible to the other without a restart.
 	second.remove(old.endpoint);
 	assert.deepEqual(
 		first.subscriptions().map((item) => item.endpoint).sort(),
 		[phone.endpoint, desktop.endpoint].sort(),
-		"a removal made by the other process was not picked up",
+		"a removal made by the other store was not picked up",
 	);
 	assert.equal(home, process.env.DSH_HOME, "the test ran against its throwaway home");
 }));

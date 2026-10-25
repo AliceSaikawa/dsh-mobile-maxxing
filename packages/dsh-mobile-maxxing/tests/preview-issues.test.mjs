@@ -81,9 +81,36 @@ function matchesSimple(element, part) {
 	return true;
 }
 
+/** Split a selector on whitespace, keeping spaces inside quoted values. */
+function selectorParts(group) {
+	const parts = [];
+	let buffer = "";
+	let quote = null;
+	for (const character of group.trim()) {
+		if (quote !== null) {
+			buffer += character;
+			if (character === quote) quote = null;
+			continue;
+		}
+		if (character === '"' || character === "'") {
+			quote = character;
+			buffer += character;
+			continue;
+		}
+		if (/\s/.test(character)) {
+			if (buffer !== "") parts.push(buffer);
+			buffer = "";
+			continue;
+		}
+		buffer += character;
+	}
+	if (buffer !== "") parts.push(buffer);
+	return parts;
+}
+
 function matches(element, selector) {
 	for (const group of selector.split(",")) {
-		const parts = group.trim().split(/\s+/).filter((part) => part !== "");
+		const parts = selectorParts(group);
 		if (parts.length === 0) continue;
 		if (!matchesSimple(element, parts[parts.length - 1])) continue;
 		let at = parts.length - 2;
@@ -558,20 +585,36 @@ function makePreview(env, { secondary = ["Reload", "Save"], hidden = true } = {}
 	}
 
 	panel.append(header);
-	document.body.append(panel);
+	// Foundation #44 re-discovers the right panel from a laid-out collapse
+	// button. The fake DOM gives it the same minimal geometry a real docked
+	// panel has, so a phone -> desktop -> phone fixture can be tagged again
+	// instead of staying an inert div.
+	panel.getBoundingClientRect = () => ({ x: 0, y: 0, top: 0, left: 0, right: 390, bottom: 844, width: 390, height: 844 });
+	const collapse = document.createElement("button");
+	collapse.setAttribute("aria-label", "Collapse right sidebar");
+	collapse.getBoundingClientRect = () => ({ x: 0, y: 0, top: 0, left: 0, right: 30, bottom: 30, width: 30, height: 30 });
+	panel.append(collapse);
+	const boundary = document.createElement("div");
+	boundary.setAttribute("data-sidebar-right-panel", "");
+	boundary.getBoundingClientRect = () => ({ x: 0, y: 0, top: 0, left: 0, right: 390, bottom: 844, width: 390, height: 844 });
+	boundary.append(panel);
+	document.body.append(boundary);
 	return { panel, header, path, viewer, wrap, openTarget, openButton, actions };
 }
 
 /** A review surface inside a dockkit pane. */
 function makeReview(env, { pressed = false, tab = "tab-a", replace = false } = {}) {
 	const { document } = env;
-	const panel = document.querySelector("[data-rdsh-rightpanel]") ?? (() => {
+	const existingPane = document.querySelector("[data-dockkit-pane]");
+	// Reuse the pane's own panel even after a desktop pass removed the
+	// phone-only marker: decorateRightPanel re-tags it at phone width.
+	const panel = existingPane?.parentElement ?? document.querySelector("[data-rdsh-rightpanel]") ?? (() => {
 		const created = document.createElement("div");
 		created.setAttribute("data-rdsh-rightpanel", "");
 		document.body.append(created);
 		return created;
 	})();
-	let pane = document.querySelector("[data-dockkit-pane]");
+	let pane = existingPane;
 	if (pane === null) {
 		pane = document.createElement("div");
 		pane.setAttribute("data-dockkit-pane", "pane-1");

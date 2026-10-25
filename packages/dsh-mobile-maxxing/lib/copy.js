@@ -506,6 +506,13 @@ export const PROBES = {
 	cacheHit: ["cache hit", "キャッシュ"],
 	/** The context chip: "40% context". */
 	context: ["context", "コンテキスト"],
+	/** A running activity chip: "3 background jobs running" / "3 subagents running".
+	 *  DSH 0.2.1 ships en and zh only; a ja shell adds its word here. */
+	activityRunning: ["running", "运行中"],
+	/** Count-chip nouns in the two upstream locales; a ja pack adds its own. */
+	activityChip: ["subagent", "subagents", "background job", "background jobs", "shell command", "shell commands", "个子智能体", "个后台任务"],
+	/** The subagent noun inside a count chip, for choosing its glyph. */
+	activitySubagentChip: ["subagents", "subagent", "子智能体"],
 	/** Any aria-label that identifies the stats dock. */
 	stats: ["tok", "turns", "context", "ターン", "コンテキスト"],
 	/** A control that starts a new session (sidebar button, brand row, workspace "+"). */

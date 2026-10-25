@@ -188,16 +188,22 @@ function helperBody(name) {
 	return CLIENT.slice(start, close === -1 ? undefined : close);
 }
 
-test("the context meter reads the projection instead of opening the popover", () => {
+test("the context meter reads the public Session list snapshot", () => {
 	// #13: a real click opened the popover for about 80ms on every update, and
 	// the rule that hid it only lived inside the phone media query, so a
 	// settings modal flickered on desktop too.
 	assert.equal(/data-rdsh-context-probe/.test(CLIENT), false, "the probe attribute and its rule are gone");
+	assert.equal(/sessions\.projectionValues/.test(CLIENT), false, "projectionValues() is a private manager method");
 	const meter = helperBody("contextUsageText");
 	assert.equal(/\.click\(/.test(meter), false, "reading the meter must not click the button");
-	assert.match(meter, /projectionValues\(/, "the figures come from the Session projection");
-	assert.match(meter, /contextPressure/);
-	assert.match(meter, /pressureTokens/, "the same numerator the upstream panel uses");
+	assert.match(meter, /contextPressureOf\(sessions, sessionId\)/, "the meter goes through the projection reader");
+	assert.match(meter, /projectedTokens \?\? pressure\.pressureTokens/, "the same numerator the upstream panel uses");
+	// #36: `ClientSessions` exposes finished projections on its list snapshot,
+	// not a projectionValues() method.
+	const read = helperBody("contextPressureOf");
+	assert.match(read, /sessions\.list\.getSnapshot\(\)/, "the figures come from the public list snapshot");
+	assert.match(read, /byId\?\.\[sessionId\]\?\.projectionValues\?\.contextPressure/);
+	assert.match(read, /projectionsBySession\?\.[^;]*values\?\.contextPressure/, "unhinted rows read the same value face");
 });
 
 test("the transcript keeps its column tag and the reference 349px measure", () => {

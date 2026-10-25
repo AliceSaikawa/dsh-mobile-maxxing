@@ -2271,6 +2271,16 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     let sessionsApi;
     let sessionsApiResolved = false;
 
+    /** An optional service, without cordis' absent-service property throw. */
+    function optionalService(name) {
+      if (hostCtx === null || typeof hostCtx.get !== "function") return null;
+      try {
+        return hostCtx.get(name) ?? null;
+      } catch (error) {
+        return null;
+      }
+    }
+
     /** `sessions` is an optional service: resolving it lazily means a late
      *  provider still works, and an absent one only costs the used/max text. */
     function sessionsService() {
@@ -2297,6 +2307,43 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     /**
+     * The `contextPressure` projection, from the public Session list snapshot.
+     *
+     * `ClientSessions.projectionValues()` is a private manager method: calling
+     * it on the service threw a TypeError, so the dock never had figures. The
+     * list snapshot carries the same finished values the upstream
+     * `useProjection("contextPressure")` seat reads — `byId[id].projectionValues`
+     * is the documented row face, and `projectionsBySession[id].values` is the
+     * same value for a row whose summary hint has not landed yet.
+     */
+    function contextPressureOf(sessions, sessionId) {
+      try {
+        const snapshot = typeof sessions.list?.getSnapshot === "function" ? sessions.list.getSnapshot() : null;
+        if (snapshot === null || typeof snapshot !== "object") return null;
+        const hint = snapshot.byId?.[sessionId]?.projectionValues?.contextPressure;
+        if (hint !== null && hint !== undefined && typeof hint === "object") return hint;
+        const values = snapshot.projectionsBySession?.[sessionId]?.values?.contextPressure;
+        return values !== null && values !== undefined && typeof values === "object" ? values : null;
+      } catch (error) {
+        return null;
+      }
+    }
+
+    /** Ask the host once per Session for a projection the list has not carried. */
+    let contextRefreshFor = null;
+    function requestContextRefresh(sessions, sessionId) {
+      if (contextRefreshFor === sessionId) return;
+      contextRefreshFor = sessionId;
+      if (typeof sessions.refreshProjections !== "function") return;
+      try {
+        const pending = sessions.refreshProjections(sessionId);
+        if (pending !== null && typeof pending?.catch === "function") pending.catch(() => {});
+      } catch (error) {
+        /* older client: the percentage alone is still correct */
+      }
+    }
+
+    /**
      * "12.3K/1M" for the context meter, read from the Session projection.
      *
      * The panel that shows these figures is only mounted while it is open, so
@@ -2305,21 +2352,23 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * `*_panel` CSS, any other dialog) on every update. The projection carries
      * the same numbers without touching the DOM; when it is missing the dock
      * falls back to the percentage that the button's aria-label already has.
+     *
+     * The numerator is the same pair upstream's `contextOccupancy` uses: the
+     * provider-anchored `pressureTokens` plus the heuristic reprice of what the
+     * surface gained since that sample. `contextWindow` is the route capacity.
      */
-    function contextUsageText() {
+    function contextUsageText(sessionId = decoratedSessionId()) {
       const sessions = sessionsService();
-      const sessionId = currentSessionId;
-      if (sessions === null || sessions === undefined || sessionId === null) return "";
-      try {
-        const pressure = sessions.projectionValues(sessionId)?.contextPressure;
-        if (pressure === null || typeof pressure !== "object") return "";
-        const used = pressure.projectedTokens ?? pressure.pressureTokens;
-        const window = pressure.contextWindow;
-        if (typeof used !== "number" || typeof window !== "number" || !(window > 0)) return "";
-        return `${formatTokenCount(used)}/${formatTokenCount(window)}`;
-      } catch (error) {
+      if (sessions === null || sessions === undefined || sessionId === null || sessionId === undefined) return "";
+      const pressure = contextPressureOf(sessions, sessionId);
+      if (pressure === null) {
+        requestContextRefresh(sessions, sessionId);
         return "";
       }
+      const used = pressure.projectedTokens ?? pressure.pressureTokens;
+      const window = pressure.contextWindow;
+      if (typeof used !== "number" || typeof window !== "number" || !(window > 0)) return "";
+      return `${formatTokenCount(used)}/${formatTokenCount(window)}`;
     }
 
     let settingsArrows = null;
@@ -2478,6 +2527,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         clearOwnedAttribute("data-rdsh-stat-text");
         return;
       }
+      // A projection frame has to repaint the dock even when the upstream
+      // aria-label (the percentage) did not change.
+      watchActivitySources();
       const dock = document.querySelector("[data-rdsh-composer-dock]");
       if (dock === null) return;
       const buttons = [...dock.querySelectorAll("button")].filter((button) => button.getAttribute("aria-label") !== null);
@@ -3177,56 +3229,272 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     };
 
     /**
-     * Remove only the nodes this decoration created. A native spinner that was
-     * tagged keeps existing; its attribute is dropped, so the stock button is
-     * exactly what it was before the phone pass.
+     * Remove the chips, the owned ring and the icon this module injected.
+     *
+     * A native spinner tagged by an older build keeps its identity: only the
+     * generic marker is dropped. Generated nodes and the self-drawn ring are
+     * ours, so they go together with the chip state and subscriptions.
      */
     function clearActivityChips() {
-      for (const node of document.querySelectorAll("[data-rdsh-activity-generated], [data-rdsh-activity-icon]")) node.remove();
-      for (const attribute of ["data-rdsh-activity-spinner", "data-rdsh-activity-icon", "data-rdsh-activity-chip"]) {
+      for (const tagged of document.querySelectorAll("[data-rdsh-activity-spinner]")) {
+        if (isOwnedActivityRing(tagged)) tagged.remove();
+        else tagged.removeAttribute("data-rdsh-activity-spinner");
+      }
+      for (const generated of document.querySelectorAll("[data-rdsh-activity-generated]")) generated.remove();
+      for (const icon of document.querySelectorAll("[data-rdsh-activity-icon]")) icon.remove();
+      for (const attribute of ["data-rdsh-activity-chip", "data-rdsh-activity-state", "data-rdsh-activity-running"]) {
         for (const element of document.querySelectorAll(`[${attribute}]`)) element.removeAttribute(attribute);
+      }
+      unwatchActivitySources();
+    }
+
+    /** Upstream marks a live chip "N subagents running" / "N background jobs
+     *  running". The word is the last-resort state source when the client
+     *  services are not in this profile; it is not the state itself. */
+    const ACTIVITY_RUNNING_PROBE = probeRegex("activityRunning", "i", "running");
+
+    /** Re-read while a ring turns, so completion lands well inside one second. */
+    const ACTIVITY_POLL_MS = 500;
+    /** One live subscription per source kind; replaced with the service instance. */
+    const activityWatches = { list: null, jobs: null, status: null };
+    const activityStops = { list: null, jobs: null, status: null };
+    let activityPoll = 0;
+
+    /**
+     * Follow one public source. The unsubscriber belongs to the exact instance
+     * that minted it: a replaced service (reconnect, profile reload) drops the
+     * old one instead of leaving a stale subscription behind.
+     */
+    function watchActivitySource(kind, source) {
+      if (activityWatches[kind] === source) return;
+      const previous = activityStops[kind];
+      activityStops[kind] = null;
+      activityWatches[kind] = null;
+      if (typeof previous === "function") {
+        try {
+          previous();
+        } catch (error) {
+          /* the old generation is already gone */
+        }
+      }
+      if (typeof source.subscribe !== "function") return;
+      try {
+        const stop = source.subscribe(() => scheduleDecorate());
+        activityWatches[kind] = source;
+        if (typeof stop === "function") activityStops[kind] = stop;
+      } catch (error) {
+        /* an unavailable source only costs live freshness */
       }
     }
 
+    /** Follow the projections the header chips mirror: Session list, jobs, status. */
+    function watchActivitySources() {
+      if (!narrow()) return;
+      const sessions = sessionsService();
+      watchActivitySource("list", sessions?.list ?? null);
+      const jobs = optionalService("jobs");
+      watchActivitySource("jobs", jobs?.state ?? null);
+      const uiSession = optionalService("uiSession");
+      watchActivitySource("status", uiSession?.sessionStatus ?? null);
+    }
+
+    function stopActivityPoll() {
+      if (activityPoll === 0) return;
+      clearInterval(activityPoll);
+      activityPoll = 0;
+    }
+
+    function unwatchActivitySources() {
+      for (const kind of Object.keys(activityWatches)) {
+        const stop = activityStops[kind];
+        activityStops[kind] = null;
+        activityWatches[kind] = null;
+        if (typeof stop !== "function") continue;
+        try {
+          stop();
+        } catch (error) {
+          /* already disposed with its service */
+        }
+      }
+      stopActivityPoll();
+    }
+
+    /** Poll only while something is running; idle chips own no timer. */
+    function syncActivityPoll(running) {
+      if (!running) {
+        stopActivityPoll();
+        return;
+      }
+      if (activityPoll !== 0) return;
+      activityPoll = setInterval(() => {
+        if (!narrow()) {
+          stopActivityPoll();
+          return;
+        }
+        scheduleDecorate();
+      }, ACTIVITY_POLL_MS);
+    }
+
+    /** Running (or stopping) shell jobs of one Session, from the jobs service. */
+    function runningShellJobs(sessionId) {
+      if (sessionId === null || sessionId === undefined) return null;
+      const jobs = optionalService("jobs");
+      if (jobs === null) return null;
+      try {
+        const rows = jobs.state?.getSnapshot?.()?.rows?.[sessionId];
+        if (!Array.isArray(rows)) return null;
+        return rows.filter((job) => job?.status === "running" || job?.status === "stopping").length;
+      } catch (error) {
+        return null;
+      }
+    }
+
+    /**
+     * Running direct children of one root Session: the Session's own
+     * `subagentCatalog` filtered by the public `sessionStatus` map. Counting
+     * the whole client would spin this chip for another Session's child (#40).
+     */
+    function runningSubagents(sessionId) {
+      if (sessionId === null || sessionId === undefined) return null;
+      const uiSession = optionalService("uiSession");
+      const sessions = sessionsService();
+      let statuses;
+      let snapshot;
+      try {
+        statuses = uiSession?.sessionStatus?.getSnapshot?.();
+        snapshot = sessions?.list?.getSnapshot?.();
+      } catch (error) {
+        return null;
+      }
+      const catalog = snapshot?.projectionsBySession?.[sessionId]?.values?.subagentCatalog;
+      if (statuses === null || statuses === undefined || typeof statuses.get !== "function" || !Array.isArray(catalog)) return null;
+      let count = 0;
+      for (const entry of catalog) {
+        if (entry === null || entry === undefined) continue;
+        const running = statuses.get(entry.id)?.running ?? snapshot?.byId?.[entry.id]?.running;
+        if (running === true) count += 1;
+      }
+      return count;
+    }
+
+    /**
+     * The Session the decorators follow: the slot's own id when it has run,
+     * otherwise upstream's `[data-conversation-session]` (the same DOM fact
+     * `shownSessionId()` reads for notification routing).
+     */
+    function decoratedSessionId() {
+      if (currentSessionId !== null) return currentSessionId;
+      const shown = shownSessionId();
+      return shown === "" ? null : shown;
+    }
+
+    /** The two real running facts behind the chips; `null` means "unknown". */
+    function activityState(sessionId = decoratedSessionId()) {
+      return { shell: runningShellJobs(sessionId), subagent: runningSubagents(sessionId) };
+    }
+
+    /**
+     * Upstream count chips start with their number ("3 subagents running",
+     * "3 个子智能体"). The label vocabulary is a probe table because the shell
+     * translates it; the running word inside it is probed separately.
+     */
+    const ACTIVITY_CHIP_LABEL = (() => {
+      const labels = probeValues("activityChip", [
+        "subagent", "subagents",
+        "background job", "background jobs",
+        "shell command", "shell commands",
+      ]);
+      if (labels.length === 0) return null;
+      return new RegExp(`^\\d[\\d,.]*\\s+(?:${labels.join("|")})`, "i");
+    })();
+
+    /** The subagent nouns, so a non-English label still picks the right glyph. */
+    const ACTIVITY_SUBAGENT_PROBE = probeRegex("activitySubagentChip", "i", "subagent");
+
+    function headerActivityChips() {
+      if (ACTIVITY_CHIP_LABEL === null) return [];
+      return [...document.querySelectorAll("header button[aria-label]")]
+        .filter((button) => ACTIVITY_CHIP_LABEL.test((button.getAttribute("aria-label") || "").trim()));
+    }
+
+    function activityChipOf(target) {
+      if (target === null || target === undefined || typeof target.closest !== "function") return null;
+      return target.closest("[data-rdsh-activity-chip]") ?? null;
+    }
+
+    /**
+     * A second tap on the chip of an open panel closes it (#41).
+     *
+     * Both upstream triggers carry `aria-expanded`; the jobs chip toggles on
+     * its own click, the subagent catalog only opens. Their roots already
+     * close on Escape, which restores focus to the trigger, so the tap
+     * synthesizes that key rather than depending on a hash-named close button.
+     * A click on another chip, or inside the open panel, is left to upstream.
+     */
+    function handleActivityChipClick(chip, event) {
+      if (!narrow() || chip === null || chip === undefined) return false;
+      if (chip.getAttribute("aria-expanded") !== "true") return false;
+      if (event !== null && event !== undefined) {
+        if (typeof event.preventDefault === "function") event.preventDefault();
+        if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+        else if (typeof event.stopPropagation === "function") event.stopPropagation();
+      }
+      try {
+        chip.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+      } catch (error) {
+        /* a detached trigger has nothing to close */
+      }
+      return true;
+    }
+
+    /** The ring is ours; never adopt or clone an upstream spinner. */
+    function ensureActivityRing(button) {
+      let ring = button.querySelector("[data-rdsh-activity-spinner]");
+      if (ring !== null && ring !== undefined && ring.tagName !== "SPAN") {
+        // An older build adopted the upstream SVG spinner; the ring is a span.
+        ring.remove();
+        ring = null;
+      }
+      if (ring !== null && ring !== undefined) {
+        if (!String(ring.className || "").split(/\s+/).includes("rdsh-activity-ring")) {
+          ring.className = "rdsh-activity-ring";
+          ring.innerHTML = "";
+        }
+        return ring;
+      }
+      ring = document.createElement("span");
+      ring.className = "rdsh-activity-ring";
+      ring.setAttribute("data-rdsh-activity-spinner", "");
+      ring.setAttribute("aria-hidden", "true");
+      button.prepend(ring);
+      return ring;
+    }
+
     /** Header shell/subagent chips become icon-only live indicators. */
-    function decorateHeaderActivityChips() {
+    function decorateHeaderActivityChips(buttons = headerActivityChips()) {
       if (!phone()) {
         clearActivityChips();
         return;
       }
-      const buttons = [...document.querySelectorAll("header button[aria-label]")]
-        .filter((button) => /subagents?|background jobs?|shell command/i.test(button.getAttribute("aria-label") || ""));
-      if (buttons.length === 0) return;
-      const runningSubagents = Number(document.documentElement.getAttribute("data-rdsh-running-subagents") || "0") || 0;
-      const sourceSpinner = [...document.querySelectorAll("header [class*='_spinner_']")]
-        .find((spinner) => !spinner.hasAttribute("data-rdsh-activity-generated")) ?? null;
+      if (buttons.length === 0) {
+        stopActivityPoll();
+        return;
+      }
+      watchActivitySources();
+      const state = activityState();
+      let runningAny = false;
       for (const button of buttons) {
         const label = button.getAttribute("aria-label") || "";
-        const kind = /subagent/i.test(label) ? "subagent" : "shell";
+        const kind = ACTIVITY_SUBAGENT_PROBE !== null && ACTIVITY_SUBAGENT_PROBE.test(label) ? "subagent" : "shell";
         button.setAttribute("data-rdsh-activity-chip", kind);
-        const ownNative = [...button.querySelectorAll("svg[class*='_spinner_']")]
-          .find((spinner) => !spinner.hasAttribute("data-rdsh-activity-generated")) ?? null;
-        const active = kind === "subagent" ? runningSubagents > 0 : ownNative !== null;
-        let spinner = button.querySelector("[data-rdsh-activity-spinner]");
-        if (!active) {
-          if (spinner !== null && spinner.hasAttribute("data-rdsh-activity-generated")) spinner.remove();
-          spinner = null;
-        }
-        if (active && spinner === null) {
-          if (ownNative !== null) {
-            spinner = ownNative;
-          } else if (sourceSpinner !== null && !button.contains(sourceSpinner)) {
-            spinner = sourceSpinner.cloneNode(true);
-            spinner.classList.remove("QsffPG_triggerDot");
-            spinner.setAttribute("data-rdsh-activity-generated", "");
-          } else {
-            spinner = document.createElement("span");
-            spinner.className = "rdsh-activity-ring";
-            spinner.setAttribute("data-rdsh-activity-generated", "");
-          }
-          spinner.setAttribute("data-rdsh-activity-spinner", "");
-          button.prepend(spinner);
-        }
+        const projected = kind === "subagent" ? state.subagent : state.shell;
+        const running = projected === null
+          ? ACTIVITY_RUNNING_PROBE !== null && ACTIVITY_RUNNING_PROBE.test(label)
+          : projected > 0;
+        runningAny = runningAny || running;
+        button.setAttribute("data-rdsh-activity-state", running ? "running" : "idle");
+        button.toggleAttribute("data-rdsh-activity-running", running);
+        ensureActivityRing(button);
         if (button.querySelector("[data-rdsh-activity-icon]") === null) {
           const icon = document.createElement("span");
           icon.setAttribute("data-rdsh-activity-icon", "");
@@ -3235,18 +3503,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           button.append(icon);
         }
       }
-      // The first chip can be decorated before the other chip has rendered its
-      // native spinner. Upgrade our fallback once the native one exists.
-      const native = document.querySelector("header svg[class*='_spinner_']:not([data-rdsh-activity-generated])");
-      if (native !== null) {
-        for (const fallback of document.querySelectorAll("header [data-rdsh-activity-spinner].rdsh-activity-ring")) {
-          const replacement = native.cloneNode(true);
-          replacement.classList.remove("QsffPG_triggerDot");
-          replacement.setAttribute("data-rdsh-activity-spinner", "");
-          replacement.setAttribute("data-rdsh-activity-generated", "");
-          fallback.replaceWith(replacement);
-        }
-      }
+      syncActivityPoll(runningAny);
     }
 
     /** Add a Settings row to the sidebar panel list, matching Plugins. */
@@ -3733,9 +3990,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         const total = countSessionStatuses(statuses, null);
         const main = countSessionStatuses(statuses, mainIds);
         applyNotificationCount(main);
-        // How many subagent sessions are actually running right now. The header
-        // subagent chip also exists for finished subagents, so its icon must
-        // not spin unless this is above zero.
+        // Cross-Session running-subagent diagnostic. The header chips read the
+        // scoped jobs/sessionStatus projections instead, so a running child of
+        // another Session cannot spin this Session's chip (#40).
         let runningSubagents = 0;
         const runningIds = new Set();
         if (byId !== null && byId !== undefined && typeof byId === "object" && statuses !== null && statuses !== undefined && typeof statuses.get === "function") {
@@ -4855,6 +5112,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     function onClickCapture(event) {
       const target = event.target;
       if (target === null || target.closest === undefined) return;
+
+      // A header activity chip whose own panel is open closes it on the second
+      // tap; any other chip click (including the first one) stays upstream so
+      // the old panel's outside-pointer close switches panels naturally.
+      const activityChip = activityChipOf(target);
+      if (activityChip !== null && handleActivityChipClick(activityChip, event)) return;
 
       // The app delivered the tab click itself; the replay must stay cancelled.
       if (tabCandidate !== null && target.closest("[data-rdsh-rtab]") === tabCandidate.tab) tabCandidate.fired = true;
@@ -7358,12 +7621,22 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   }
   [data-rdsh-activity-chip] [data-rdsh-activity-icon] svg { width: 13px; height: 13px; }
   .rdsh-activity-ring {
-    display: block; border: 1.6px solid var(--dsw-alias-border-l3, rgba(0,0,0,.12));
-    border-top-color: var(--dsw-alias-state-success-primary, #22c55e);
+    display: block; border: 1.6px solid var(--dsw-alias-state-success-primary, #22c55e);
     border-radius: 50%;
+    animation: none;
+  }
+  /* Only a running projection turns. A completed chip keeps the same ring,
+     static and fully green, so it never looks busy again (#40). */
+  [data-rdsh-activity-chip][data-rdsh-activity-running] .rdsh-activity-ring {
+    border-color: var(--dsw-alias-border-l3, rgba(0,0,0,.12));
+    border-top-color: var(--dsw-alias-state-success-primary, #22c55e);
     animation: rdsh-activity-spin 1s linear infinite;
   }
   @keyframes rdsh-activity-spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) {
+    /* The running ring already differs by its hollow track; no motion needed. */
+    [data-rdsh-activity-chip][data-rdsh-activity-running] .rdsh-activity-ring { animation: none; }
+  }
 
   /* Settings: full screen, stacked navigation, nothing narrowed. */
   /* Close lives on the top row with the Settings title, as a round button. */
@@ -7944,6 +8217,8 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         return () => {
           try {
             observer.disconnect();
+            unwatchActivitySources();
+            contextRefreshFor = null;
             document.removeEventListener("pointerdown", onPointerDown, true);
             document.removeEventListener("pointerup", onPointerUp, true);
             document.removeEventListener("pointercancel", cancelQueuePress, true);

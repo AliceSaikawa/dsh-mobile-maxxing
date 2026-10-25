@@ -9851,15 +9851,17 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   }
   [data-rdsh-activity-chip] [data-rdsh-activity-icon] svg { width: 13px; height: 13px; }
   .rdsh-activity-ring {
-    display: block; border: 1.6px solid var(--dsw-alias-state-success-primary, #22c55e);
+    display: block; border: 1.6px solid var(--dsw-alias-link, #7aaaff);
     border-radius: 50%;
     animation: none;
   }
   /* Only a running projection turns. A completed chip keeps the same ring,
-     static and fully green, so it never looks busy again (#40). */
+     static and fully link, so it never looks busy again (#40, #57). The
+     chip's own icon stays secondary: the ring carries the activity, not the
+     idle label. */
   [data-rdsh-activity-chip][data-rdsh-activity-running] .rdsh-activity-ring {
     border-color: var(--dsw-alias-border-l3, rgba(0,0,0,.12));
-    border-top-color: var(--dsw-alias-state-success-primary, #22c55e);
+    border-top-color: var(--dsw-alias-link, #7aaaff);
     animation: rdsh-activity-spin 1s linear infinite;
   }
   @keyframes rdsh-activity-spin { to { transform: rotate(360deg); } }

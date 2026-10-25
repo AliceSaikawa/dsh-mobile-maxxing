@@ -10710,7 +10710,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           attachSessionOpener(scope);
           if (phone()) installLocalPermissionDefault(scope, scope.uiWorkspace, scope.sessions);
         });
-        ctx.inject(["remote.permissionPresets"], (scope) => {
+        ctx.inject(["remote", "remote.permissionPresets"], (scope) => {
           if (phone()) void loadPermissionCatalog(scope.remote);
         });
         try {

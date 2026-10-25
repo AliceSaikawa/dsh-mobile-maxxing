@@ -2339,9 +2339,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     function reviewWrapIsOff(root) {
-      if (reviewWrapUserOff.has(root)) return true;
+      // Keyed surfaces must decide by the pane/tab key only. React reuses the
+      // root when the pane switches tabs; a root-level OFF from tab A would
+      // otherwise block tab B's default. Keyless surfaces fall back to root.
       const key = reviewSurfaceKey(root);
-      return key !== "" && reviewWrapUserOffKeys.has(key);
+      if (key !== "") return reviewWrapUserOffKeys.has(key);
+      return reviewWrapUserOff.has(root);
     }
 
     function reviewWrapAutoDone(root) {
@@ -2350,10 +2353,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // tabs (new key must get its own default), and a remount creates a new
       // root (a new surface with no user choice gets the default again).
       if (reviewWrapAutoRootKeys.has(root)) return reviewWrapAutoRootKeys.get(root) === key;
-      if (key === "") {
-        return root.getAttribute("data-rdsh-review-auto") === "1"
-          || root.parentElement?.getAttribute?.("data-rdsh-review-auto") === "1";
-      }
+      if (key === "") return root.getAttribute("data-rdsh-review-auto") === "1";
       return false;
     }
 
@@ -2368,7 +2368,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // in desktop mode (the 390px desktop must stay untouched).
       if (!phone()) return;
       root.setAttribute("data-rdsh-review-auto", "1");
-      root.parentElement?.setAttribute?.("data-rdsh-review-auto", "1");
     }
 
     function suppressReviewWrap(root) {
@@ -2416,6 +2415,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           root.setAttribute("data-rdsh-review-off", "");
           continue;
         }
+        // A reused root can still carry the previous tab's OFF attribute; the
+        // key decides, so drop the stale hook before applying tab B's default.
+        root.removeAttribute("data-rdsh-review-off");
         if (pressed) {
           if (!reviewWrapAutoDone(root)) markReviewWrapAuto(root);
           continue;

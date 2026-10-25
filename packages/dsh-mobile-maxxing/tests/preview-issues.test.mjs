@@ -985,6 +985,68 @@ test("#34 desktop mode remembers an OFF without phone hooks; width never switche
 	env.dispose();
 });
 
+test("#34 an OFF on tab A does not hide tab B when React reuses the root", async () => {
+	const env = boot({ mode: "mobile", width: 390 });
+	makePreview(env);
+	const review = makeReview(env, { tab: "tab-a" });
+	env.api.decorateNow();
+	assert.equal(review.wrap.getAttribute("aria-pressed"), "true");
+	review.wrap.dispatchEvent(fakeEvent("click", { target: review.wrap, isTrusted: true }));
+	assert.equal(review.wrap.getAttribute("aria-pressed"), "false");
+	await new Promise((resolve) => setTimeout(resolve, 10));
+	env.api.decorateNow();
+	assert.equal(review.state.clicks, 2);
+
+	// The same root element is reused for tab B. A's root-level OFF must not
+	// suppress B's default ON.
+	switchReviewTab(env, "tab-b");
+	env.api.decorateNow();
+	assert.equal(review.state.clicks, 3, "tab B did not get its default after tab A's OFF");
+	assert.equal(review.wrap.getAttribute("aria-pressed"), "true");
+	assert.equal(review.root.hasAttribute("data-rdsh-review-off"), false, "tab A's OFF leaked onto tab B");
+
+	// Returning to tab A restores its explicit OFF without another click.
+	switchReviewTab(env, "tab-a");
+	review.wrap.setAttribute("aria-pressed", "false");
+	env.api.decorateNow();
+	assert.equal(review.state.clicks, 3, "tab A was clicked again after its explicit OFF");
+	assert.equal(review.root.hasAttribute("data-rdsh-review-off"), true);
+	env.dispose();
+});
+
+test("#34 a keyless surface remount gets the default again without a parent marker", () => {
+	const env = boot({ mode: "mobile", width: 390 });
+	const { panel } = makePreview(env);
+	const build = () => {
+		const root = env.document.createElement("div");
+		root.setAttribute("data-changes-review", "");
+		const wrap = env.document.createElement("button");
+		wrap.setAttribute("data-review-tool", "wrap");
+		wrap.setAttribute("aria-pressed", "false");
+		const state = { clicks: 0 };
+		wrap.addEventListener("click", () => {
+			state.clicks += 1;
+			wrap.setAttribute("aria-pressed", wrap.getAttribute("aria-pressed") === "true" ? "false" : "true");
+		});
+		root.append(wrap);
+		panel.append(root);
+		return { root, wrap, state };
+	};
+
+	const first = build();
+	env.api.decorateNow();
+	assert.equal(first.state.clicks, 1, "the keyless surface did not get the default");
+	assert.equal(first.wrap.getAttribute("aria-pressed"), "true");
+
+	first.root.remove();
+	const second = build();
+	env.api.decorateNow();
+	assert.equal(second.state.clicks, 1, "the remounted keyless surface did not get the default again");
+	assert.equal(second.wrap.getAttribute("aria-pressed"), "true");
+	assert.equal(panel.hasAttribute("data-rdsh-review-auto"), false, "the parent marker survived and can suppress a remount");
+	env.dispose();
+});
+
 test("#34 long-token CSS is scoped to the upstream wrap state, not forced globally", () => {
 	const start = CLIENT.indexOf("[data-rdsh-rightpanel] [data-changes-review] [data-review-wrap] [data-diff-line]");
 	assert.notEqual(start, -1, "the diff long-token rule is missing");

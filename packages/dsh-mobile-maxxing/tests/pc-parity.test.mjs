@@ -203,12 +203,18 @@ test("preview feature rules live in the mobile stylesheet, never the device shee
 	const wrapRules = phoneRules.filter(isDiffWrap);
 	assert.ok(openRules.length > 0, "the native open-target hide rule is missing from CSS_PHONE");
 	assert.ok(wrapRules.length > 0, "the guarded diff wrap rule is missing from CSS_PHONE");
-	assert.equal(cssRules(device).rules.filter((rule) => rule.close !== null).some((rule) => isOpenTarget(rule) || isDiffWrap(rule)), false, "a mobile feature rule leaked into CSS_DEVICE");
 
-	// Negative control: moving the real rule to the device sheet must fail the
-	// same placement check. A substring check that ignores the block would pass.
-	const movedDevice = device + "\n" + parsedPhone.css.slice(openRules[0].start, openRules[0].close + 1);
-	assert.equal(cssRules(movedDevice).rules.some(isOpenTarget), true, "the negative control did not move the rule");
+	// The exact leak predicate used by the positive assertion. The negative
+	// control must trip this, not merely prove that the moved text parses.
+	const leaks = (css) => cssRules(css).rules
+		.filter((rule) => rule.close !== null)
+		.some((rule) => isOpenTarget(rule) || isDiffWrap(rule));
+	assert.equal(leaks(device), false, "a mobile feature rule leaked into CSS_DEVICE");
+
+	const openRuleText = parsedPhone.css.slice(openRules[0].start, openRules[0].close + 1);
+	const wrapRuleText = parsedPhone.css.slice(wrapRules[0].start, wrapRules[0].close + 1);
+	assert.equal(leaks(`${device}\n${openRuleText}`), true, "the negative control did not trip the leak predicate for open-target");
+	assert.equal(leaks(`${device}\n${wrapRuleText}`), true, "the negative control did not trip the leak predicate for diff-wrap");
 });
 
 test("preview hides native open targets structurally and keeps the hide list conservative", () => {

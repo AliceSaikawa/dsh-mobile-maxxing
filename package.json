@@ -1,34 +1,34 @@
 {
   "name": "dsh-mobile-maxxing",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "type": "module",
   "license": "MIT",
   "description": "DSH Web GUI をインストール可能なアプリにし、スマホ幅のUX・通知・小物をまとめて改善する統合プラグイン",
   "exports": {
-    ".": "./packages/rdsh-pwa/index.js",
-    "./client": "./packages/rdsh-pwa/client.js",
-    "./locale/*.json": "./packages/rdsh-pwa/locale/*.json",
-    "./icon": "./packages/rdsh-pwa/assets/icon-192.png"
+    ".": "./packages/dsh-mobile-maxxing/index.js",
+    "./client": "./packages/dsh-mobile-maxxing/client.js",
+    "./locale/*.json": "./packages/dsh-mobile-maxxing/locale/*.json",
+    "./icon": "./packages/dsh-mobile-maxxing/assets/icon-192.png"
   },
   "files": [
-    "packages/rdsh-pwa/index.js",
-    "packages/rdsh-pwa/client.js",
-    "packages/rdsh-pwa/sw.js",
-    "packages/rdsh-pwa/notify",
-    "packages/rdsh-pwa/lib",
-    "packages/rdsh-pwa/locale/*.json",
-    "packages/rdsh-pwa/assets/*.png",
-    "packages/rdsh-pwa/assets/*.svg",
-    "packages/rdsh-pwa/docs/*.png",
-    "packages/rdsh-pwa/docs/*.md",
-    "packages/rdsh-pwa/README.md",
+    "packages/dsh-mobile-maxxing/index.js",
+    "packages/dsh-mobile-maxxing/client.js",
+    "packages/dsh-mobile-maxxing/sw.js",
+    "packages/dsh-mobile-maxxing/notify",
+    "packages/dsh-mobile-maxxing/lib",
+    "packages/dsh-mobile-maxxing/locale/*.json",
+    "packages/dsh-mobile-maxxing/assets/*.png",
+    "packages/dsh-mobile-maxxing/assets/*.svg",
+    "packages/dsh-mobile-maxxing/docs/*.png",
+    "packages/dsh-mobile-maxxing/docs/*.md",
+    "packages/dsh-mobile-maxxing/README.md",
     "cordis.patch.yml",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "test": "node --test packages/rdsh-pwa/tests/*.test.mjs",
-    "e2e": "node packages/rdsh-pwa/tests/e2e.mjs",
+    "test": "node --test packages/dsh-mobile-maxxing/tests/*.test.mjs",
+    "e2e": "node packages/dsh-mobile-maxxing/tests/e2e.mjs",
     "pack:all": "node scripts/pack-all.mjs"
   },
   "dsh": {

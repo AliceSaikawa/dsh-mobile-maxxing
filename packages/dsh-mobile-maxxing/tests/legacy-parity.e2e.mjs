@@ -3,7 +3,7 @@
  * Baseline/legacy parity harness for the phone UI.
  *
  * Loads the *real* DSH Web app twice — once with the legacy split packages
- * (`rdsh-pwa` + `rdsh-mobile-ux` + `rdsh-mobile-ui`) and once with this
+ * (`dsh-mobile-maxxing` + `rdsh-mobile-ux` + `rdsh-mobile-ui`) and once with this
  * package — in an isolated headless Chrome browser context, then drives the
  * same touch gestures against the same throwaway DOM and compares the state,
  * attributes and geometry.
@@ -17,7 +17,7 @@
  *   BASE_URL_BASELINE=http://127.0.0.1:3197/?token=... \
  *   BASE_URL_UNIFIED=http://127.0.0.1:3196/?token=... \
  *   QA_OUT=/tmp/dsh-ui-parity-20261024/qa \
- *   node packages/rdsh-pwa/tests/legacy-parity.e2e.mjs
+ *   node packages/dsh-mobile-maxxing/tests/legacy-parity.e2e.mjs
  *
  * Optional: CHROME=google-chrome CDP_PORT=9466 HEADLESS=--headless=new
  *
@@ -361,7 +361,7 @@ async function state(page) {
 			narrow: matchMedia("(max-width: 767px)").matches,
 			coarse: matchMedia("(pointer: coarse)").matches,
 			anyCoarse: matchMedia("(any-pointer: coarse)").matches,
-			standalone: html.getAttribute("data-rdsh-pwa"),
+			standalone: html.getAttribute("data-dsh-mobile-maxxing"),
 			phone: diagnostics && typeof diagnostics.phone === "function" ? diagnostics.phone() : null,
 			diagnosticsState: diagnostics ? { ...diagnostics.state } : null,
 			drawer: html.getAttribute("data-rdsh-drawer"),
@@ -1273,7 +1273,7 @@ async function pushDelivery(page, report) {
 		const channel = new MessageChannel();
 		channel.port2.onmessage = () => { globalThis.__qaPushAck = true; };
 		navigator.serviceWorker.dispatchEvent(new MessageEvent("message", {
-			data: { type: "rdsh-pwa:notify", title: "QA direct", body: "page half", sessionId: "", kind: "test" },
+			data: { type: "dsh-mobile-maxxing:notify", title: "QA direct", body: "page half", sessionId: "", kind: "test" },
 			ports: [channel.port1],
 		}));
 		return true;
@@ -1321,7 +1321,7 @@ async function pushDelivery(page, report) {
 	// host node. Look for its text anywhere in the page.
 	const directText = await page.eval(`(document.body.innerText || "").includes("QA direct")`);
 	report.check("push: the banner text reached the page", directText === true, direct);
-	await page.eval(`document.querySelector("[data-rdsh-notice-host]")?.remove(); [...document.querySelectorAll('[role="status"]')].forEach((node) => { if (node.textContent === "" && node.className === "rdsh-pwa-toasts") node.remove(); }); true`);
+	await page.eval(`document.querySelector("[data-rdsh-notice-host]")?.remove(); [...document.querySelectorAll('[role="status"]')].forEach((node) => { if (node.textContent === "" && node.className === "dsh-mobile-maxxing-toasts") node.remove(); }); true`);
 
 	const registration = { registrationId };
 	const notifyPayload = JSON.stringify({

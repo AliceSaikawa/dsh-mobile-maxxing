@@ -1,7 +1,7 @@
 window.__ModuleLoader__.load({
   id: "dsh-mobile-maxxing",
   factory(require) {
-    // rdsh-pwa — browser half.
+    // dsh-mobile-maxxing — browser half.
     //
     // One module carries three behaviours that used to be separate plugins:
     // the PWA shell, the phone-width layout, and the session-id copy row.
@@ -102,11 +102,11 @@ window.__ModuleLoader__.load({
     }
 
     // ---------------------------------------------------------------------
-    // rdsh-pwa — PWA shell: manifest, service worker, install prompt, notification transport.
+    // dsh-mobile-maxxing — PWA shell: manifest, service worker, install prompt, notification transport.
     // ---------------------------------------------------------------------
     function pwaPart() {
 
-    // rdsh-pwa — browser half.
+    // dsh-mobile-maxxing — browser half.
     //
     // Makes the DSH Web GUI behave like an app: registers the app-shell service
     // worker (offline launch + static-asset caching), surfaces the install
@@ -126,8 +126,8 @@ window.__ModuleLoader__.load({
     const SW_URL = new URL("sw.js", SCOPE).href;
     /** Script URL of the notification plugin's worker (see unifyWorker below). */
     const PUSH_WORKER_PATH = "/push/sw.js";
-    const STYLE_ATTR = "data-rdsh-pwa-style";
-    const ROOT_ATTR = "data-rdsh-pwa";
+    const STYLE_ATTR = "data-dsh-mobile-maxxing-style";
+    const ROOT_ATTR = "data-dsh-mobile-maxxing";
     const UPDATE_POLL_MS = 30 * 60 * 1000;
     const UPDATE_MIN_GAP_MS = 5 * 60 * 1000;
     // Phone layout, in one place for both halves of this file.
@@ -137,7 +137,7 @@ window.__ModuleLoader__.load({
     // wider than that stays in the desktop layout, exactly as the reference
     // build does.
     const NARROW_QUERY = "(max-width: 767px)";
-    const INSTALL_PROMPT_KEY = "rdsh-pwa:install-prompt-dismissed";
+    const INSTALL_PROMPT_KEY = "dsh-mobile-maxxing:install-prompt-dismissed";
     const INSTALL_PROMPT_SNOOZE_MS = 30 * 24 * 60 * 60 * 1000;
 
     const STANDALONE_QUERY = "(display-mode: standalone)";
@@ -160,32 +160,32 @@ window.__ModuleLoader__.load({
     }
 
     const CSS = `
-html[data-rdsh-pwa="standalone"] #root {
+html[data-dsh-mobile-maxxing="standalone"] #root {
   box-sizing: border-box;
   padding-top: env(safe-area-inset-top, 0px);
   padding-right: env(safe-area-inset-right, 0px);
   padding-bottom: env(safe-area-inset-bottom, 0px);
   padding-left: env(safe-area-inset-left, 0px);
 }
-html[data-rdsh-pwa="standalone"] { overscroll-behavior-y: none; }
-html[data-rdsh-pwa="standalone"] body { overscroll-behavior-y: contain; }
-html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inset-top, 0px) + 10px); }
+html[data-dsh-mobile-maxxing="standalone"] { overscroll-behavior-y: none; }
+html[data-dsh-mobile-maxxing="standalone"] body { overscroll-behavior-y: contain; }
+html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: calc(env(safe-area-inset-top, 0px) + 10px); }
 
 /* Phones: keep the toast column clear of the 64px sidebar header, and hang the
    install card on the right so the logo (session list) stays tappable. */
 @media ${NARROW_QUERY} {
-  .rdsh-pwa-toasts { top: calc(env(safe-area-inset-top, 0px) + 8px); padding-top: 56px; }
-  .rdsh-pwa-install { align-self: flex-end; max-width: min(330px, calc(100vw - 24px)); flex-wrap: wrap; row-gap: 8px; }
-  .rdsh-pwa-install .rdsh-pwa-card-text { flex: 1 1 100%; }
-  .rdsh-pwa-install-actions { display: flex; gap: 8px; margin-left: auto; align-items: center; }
+  .dsh-mobile-maxxing-toasts { top: calc(env(safe-area-inset-top, 0px) + 8px); padding-top: 56px; }
+  .dsh-mobile-maxxing-install { align-self: flex-end; max-width: min(330px, calc(100vw - 24px)); flex-wrap: wrap; row-gap: 8px; }
+  .dsh-mobile-maxxing-install .dsh-mobile-maxxing-card-text { flex: 1 1 100%; }
+  .dsh-mobile-maxxing-install-actions { display: flex; gap: 8px; margin-left: auto; align-items: center; }
 }
 
-.rdsh-pwa-toasts {
+.dsh-mobile-maxxing-toasts {
   position: fixed; top: 10px; left: 50%; transform: translateX(-50%);
   z-index: 960; display: flex; flex-direction: column; align-items: center;
   gap: 8px; width: min(420px, calc(100vw - 24px)); pointer-events: none;
 }
-.rdsh-pwa-pill {
+.dsh-mobile-maxxing-pill {
   pointer-events: none; padding: 6px 14px; border-radius: 999px;
   background: var(--dsw-alias-bg-module-platform, #2a2a2e);
   color: var(--dsw-alias-label-secondary, #cfd3d6);
@@ -193,7 +193,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
   box-shadow: var(--dsw-elevation-prominent, 0 8px 24px rgba(0,0,0,.35));
   font-size: 12px; line-height: 18px; white-space: nowrap;
 }
-.rdsh-pwa-card {
+.dsh-mobile-maxxing-card {
   pointer-events: auto; display: flex; align-items: center; gap: 10px;
   width: 100%; box-sizing: border-box; padding: 10px 12px; border-radius: 14px;
   background: var(--dsw-alias-bg-module-platform, #2a2a2e);
@@ -202,57 +202,57 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
   box-shadow: var(--dsw-elevation-prominent, 0 8px 24px rgba(0,0,0,.35));
   font-size: 13px; line-height: 1.5;
 }
-.rdsh-pwa-card-text { flex: 1; min-width: 0; }
-.rdsh-pwa-card button {
+.dsh-mobile-maxxing-card-text { flex: 1; min-width: 0; }
+.dsh-mobile-maxxing-card button {
   font: inherit; font-size: 13px; cursor: pointer; border-radius: 999px;
   padding: 5px 12px; border: 0;
   background: var(--dsw-alias-button-primary-fill, #4d6bfe);
   color: var(--dsw-alias-label-primary-foreground, #fff);
 }
-.rdsh-pwa-card button:hover { background: var(--dsw-alias-button-primary-hover, #5c78ff); }
-.rdsh-pwa-card button.rdsh-pwa-quiet {
+.dsh-mobile-maxxing-card button:hover { background: var(--dsw-alias-button-primary-hover, #5c78ff); }
+.dsh-mobile-maxxing-card button.dsh-mobile-maxxing-quiet {
   background: transparent; color: var(--dsw-alias-label-secondary, #cfd3d6);
   padding: 5px 8px;
 }
-.rdsh-pwa-card button.rdsh-pwa-quiet:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,.08)); }
+.dsh-mobile-maxxing-card button.dsh-mobile-maxxing-quiet:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,.08)); }
 
-.rdsh-pwa-foot {
+.dsh-mobile-maxxing-foot {
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
   height: 36px; min-width: 36px; padding: 0 10px; border: 0; border-radius: 999px;
   background: transparent; color: var(--dsw-alias-label-primary, #f9fafb);
   font: inherit; font-size: 13px; cursor: pointer; white-space: nowrap;
   -webkit-tap-highlight-color: transparent;
 }
-.rdsh-pwa-foot[data-wide="false"] { width: 36px; min-width: 36px; padding: 0; }
-.rdsh-pwa-foot:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,.08)); }
-.rdsh-pwa-foot svg { flex: none; }
+.dsh-mobile-maxxing-foot[data-wide="false"] { width: 36px; min-width: 36px; padding: 0; }
+.dsh-mobile-maxxing-foot:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,.08)); }
+.dsh-mobile-maxxing-foot svg { flex: none; }
 
-.rdsh-pwa-section { display: flex; flex-direction: column; gap: 12px; color: var(--dsw-alias-label-primary, #f9fafb); }
-.rdsh-pwa-cardbox {
+.dsh-mobile-maxxing-section { display: flex; flex-direction: column; gap: 12px; color: var(--dsw-alias-label-primary, #f9fafb); }
+.dsh-mobile-maxxing-cardbox {
   border: .5px solid var(--dsw-alias-settings-card-stroke, var(--dsw-alias-border-l3, rgba(255,255,255,.12)));
   background: var(--dsw-alias-settings-card-fill, transparent);
   border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px;
 }
-.rdsh-pwa-title { margin: 0; font-size: 16px; font-weight: 500; }
-.rdsh-pwa-desc { margin: 0; font-size: 13px; line-height: 1.6; color: var(--dsw-alias-label-tertiary, #adb2b8); }
-.rdsh-pwa-rows { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 14px; margin: 0; font-size: 13px; }
-.rdsh-pwa-rows dt { color: var(--dsw-alias-label-secondary, #cfd3d6); }
-.rdsh-pwa-rows dd { margin: 0; overflow-wrap: anywhere; }
-.rdsh-pwa-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.rdsh-pwa-actions button {
+.dsh-mobile-maxxing-title { margin: 0; font-size: 16px; font-weight: 500; }
+.dsh-mobile-maxxing-desc { margin: 0; font-size: 13px; line-height: 1.6; color: var(--dsw-alias-label-tertiary, #adb2b8); }
+.dsh-mobile-maxxing-rows { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 14px; margin: 0; font-size: 13px; }
+.dsh-mobile-maxxing-rows dt { color: var(--dsw-alias-label-secondary, #cfd3d6); }
+.dsh-mobile-maxxing-rows dd { margin: 0; overflow-wrap: anywhere; }
+.dsh-mobile-maxxing-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.dsh-mobile-maxxing-actions button {
   font: inherit; font-size: 13px; min-height: 34px; padding: 0 14px; border-radius: 9px; cursor: pointer;
   border: .5px solid var(--dsw-alias-border-l3, rgba(255,255,255,.16));
   background: transparent; color: var(--dsw-alias-label-primary, #f9fafb);
 }
-.rdsh-pwa-actions button:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,.08)); }
-.rdsh-pwa-actions button.rdsh-pwa-primary {
+.dsh-mobile-maxxing-actions button:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,.08)); }
+.dsh-mobile-maxxing-actions button.dsh-mobile-maxxing-primary {
   border-color: transparent;
   background: var(--dsw-alias-button-primary-fill, #4d6bfe);
   color: var(--dsw-alias-label-primary-foreground, #fff);
 }
-.rdsh-pwa-actions button:disabled { opacity: .45; cursor: default; }
-.rdsh-pwa-note { font-size: 12px; line-height: 1.6; color: var(--dsw-alias-label-tertiary, #adb2b8); margin: 0; }
-.rdsh-pwa-code { font-family: var(--dsh-font-family-code, monospace); font-size: 12px; }
+.dsh-mobile-maxxing-actions button:disabled { opacity: .45; cursor: default; }
+.dsh-mobile-maxxing-note { font-size: 12px; line-height: 1.6; color: var(--dsw-alias-label-tertiary, #adb2b8); margin: 0; }
+.dsh-mobile-maxxing-code { font-family: var(--dsh-font-family-code, monospace); font-size: 12px; }
 `;
 
     // ---------------------------------------------------------------------
@@ -604,9 +604,9 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       toastRoot.replaceChildren();
       if (install) {
         const card = document.createElement("div");
-        card.className = "rdsh-pwa-card rdsh-pwa-install";
+        card.className = "dsh-mobile-maxxing-card dsh-mobile-maxxing-install";
         const text = document.createElement("span");
-        text.className = "rdsh-pwa-card-text";
+        text.className = "dsh-mobile-maxxing-card-text";
         text.textContent = state.installable
           ? t("pwa.install.promptable")
           : t("pwa.install.iosHint");
@@ -616,11 +616,11 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         installButton.addEventListener("click", () => void promptInstall());
         const dismiss = document.createElement("button");
         dismiss.type = "button";
-        dismiss.className = "rdsh-pwa-quiet";
+        dismiss.className = "dsh-mobile-maxxing-quiet";
         dismiss.textContent = t("pwa.later");
         dismiss.addEventListener("click", snoozeInstallPrompt);
         const actions = document.createElement("div");
-        actions.className = "rdsh-pwa-install-actions";
+        actions.className = "dsh-mobile-maxxing-install-actions";
         if (state.installable) actions.append(installButton);
         actions.append(dismiss);
         card.append(text, actions);
@@ -628,9 +628,9 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       }
       if (state.updateReady && !state.updateDismissed) {
         const card = document.createElement("div");
-        card.className = "rdsh-pwa-card";
+        card.className = "dsh-mobile-maxxing-card";
         const text = document.createElement("span");
-        text.className = "rdsh-pwa-card-text";
+        text.className = "dsh-mobile-maxxing-card-text";
         text.textContent = t("pwa.update.available");
         const reload = document.createElement("button");
         reload.type = "button";
@@ -638,7 +638,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         reload.addEventListener("click", () => void applyUpdate());
         const dismiss = document.createElement("button");
         dismiss.type = "button";
-        dismiss.className = "rdsh-pwa-quiet";
+        dismiss.className = "dsh-mobile-maxxing-quiet";
         dismiss.textContent = t("pwa.later");
         dismiss.addEventListener("click", () => emit({ updateDismissed: true }));
         card.append(text, reload, dismiss);
@@ -646,7 +646,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       }
       if (state.offline) {
         const pill = document.createElement("div");
-        pill.className = "rdsh-pwa-pill";
+        pill.className = "dsh-mobile-maxxing-pill";
         pill.textContent = t("pwa.offline");
         toastRoot.append(pill);
       }
@@ -682,7 +682,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         "button",
         {
           type: "button",
-          className: "rdsh-pwa-foot",
+          className: "dsh-mobile-maxxing-foot",
           "data-wide": wide ? "true" : "false",
           title: t("pwa.install.title"),
           "aria-label": t("pwa.install.title"),
@@ -752,15 +752,15 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
 
       return h(
         "section",
-        { className: "rdsh-pwa-section" },
+        { className: "dsh-mobile-maxxing-section" },
         h(
           "div",
-          { className: "rdsh-pwa-cardbox" },
-          h("h3", { className: "rdsh-pwa-title" }, t("pwa.section.title")),
-          h("p", { className: "rdsh-pwa-desc" }, t("pwa.section.desc")),
+          { className: "dsh-mobile-maxxing-cardbox" },
+          h("h3", { className: "dsh-mobile-maxxing-title" }, t("pwa.section.title")),
+          h("p", { className: "dsh-mobile-maxxing-desc" }, t("pwa.section.desc")),
           h(
             "dl",
-            { className: "rdsh-pwa-rows" },
+            { className: "dsh-mobile-maxxing-rows" },
             h("dt", null, t("pwa.row.displayMode")),
             h("dd", null, s.standalone ? t("pwa.row.displayMode.standalone") : t("pwa.row.displayMode.browser")),
             h("dt", null, t("pwa.row.install")),
@@ -768,22 +768,22 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
             h("dt", null, t("pwa.row.offline")),
             h("dd", null, swLabel(s)),
             s.build !== "" ? h("dt", null, t("pwa.row.build")) : null,
-            s.build !== "" ? h("dd", { className: "rdsh-pwa-code" }, s.build) : null,
+            s.build !== "" ? h("dd", { className: "dsh-mobile-maxxing-code" }, s.build) : null,
           ),
           h(
             "div",
-            { className: "rdsh-pwa-actions" },
-            s.installable ? h("button", { type: "button", className: "rdsh-pwa-primary", onClick: install, disabled: busy }, t("pwa.install.button")) : null,
-            s.updateReady ? h("button", { type: "button", className: "rdsh-pwa-primary", onClick: () => void applyUpdate() }, t("pwa.action.reloadUpdate")) : null,
+            { className: "dsh-mobile-maxxing-actions" },
+            s.installable ? h("button", { type: "button", className: "dsh-mobile-maxxing-primary", onClick: install, disabled: busy }, t("pwa.install.button")) : null,
+            s.updateReady ? h("button", { type: "button", className: "dsh-mobile-maxxing-primary", onClick: () => void applyUpdate() }, t("pwa.action.reloadUpdate")) : null,
             h("button", { type: "button", onClick: check, disabled: busy }, busy ? t("pwa.action.checking") : t("pwa.action.check")),
           ),
-          message !== "" ? h("p", { className: "rdsh-pwa-note" }, message) : null,
+          message !== "" ? h("p", { className: "dsh-mobile-maxxing-note" }, message) : null,
           s.ios && !s.standalone
-            ? h("p", { className: "rdsh-pwa-note" }, t("pwa.note.ios"))
+            ? h("p", { className: "dsh-mobile-maxxing-note" }, t("pwa.note.ios"))
             : null,
-          !s.secure ? h("p", { className: "rdsh-pwa-note" }, t("pwa.note.insecure")) : null,
-          s.sw === "error" && s.swError !== "" ? h("p", { className: "rdsh-pwa-note" }, t("pwa.note.swError", { error: s.swError })) : null,
-          s.bootError !== "" ? h("p", { className: "rdsh-pwa-note" }, t("pwa.note.bootError", { error: s.bootError })) : null,
+          !s.secure ? h("p", { className: "dsh-mobile-maxxing-note" }, t("pwa.note.insecure")) : null,
+          s.sw === "error" && s.swError !== "" ? h("p", { className: "dsh-mobile-maxxing-note" }, t("pwa.note.swError", { error: s.swError })) : null,
+          s.bootError !== "" ? h("p", { className: "dsh-mobile-maxxing-note" }, t("pwa.note.bootError", { error: s.bootError })) : null,
         ),
       );
     }
@@ -808,7 +808,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         document.head.appendChild(style);
 
         toastRoot = document.createElement("div");
-        toastRoot.className = "rdsh-pwa-toasts";
+        toastRoot.className = "dsh-mobile-maxxing-toasts";
         toastRoot.setAttribute("role", "status");
         toastRoot.setAttribute("aria-live", "polite");
         document.body.appendChild(toastRoot);
@@ -919,7 +919,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
           // mount again instead of leaving the shell torn down.
           booted = false;
         };
-      }, "rdsh-pwa: app shell");
+      }, "dsh-mobile-maxxing: app shell");
     }
 
     // Subscribers are a Set of no-arg callbacks; the hook and the toast
@@ -937,7 +937,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         } catch (error) {
           // Surface a boot failure to Settings and to tests instead of leaving
           // only a console trace behind.
-          console.error("[rdsh-pwa] boot failed", error);
+          console.error("[dsh-mobile-maxxing] boot failed", error);
           emit({ bootError: String((error && error.message) || error) });
         }
         ctx.slots.inject("sidebar.footer.action", () => ctx.slots.register({
@@ -1047,7 +1047,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     // Store
     // ---------------------------------------------------------------------
     /** Browser-local theme choice; also read while the store initialises. */
-    const DEVICE_THEME_KEY = "rdsh-pwa:device-theme";
+    const DEVICE_THEME_KEY = "dsh-mobile-maxxing:device-theme";
     const DEVICE_THEME_MODES = ["", "light", "dark", "system"];
     // The device-theme choices are rendered through the copy table so a future
     // Japanese pack can translate them without touching this file.
@@ -5198,13 +5198,13 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     /**
      * Where the browser half keeps the notification routes.
      *
-     * They are this package's own (`/api/rdsh-pwa/push/…`): the notification
+     * They are this package's own (`/api/dsh-mobile-maxxing/push/…`): the notification
      * plugin this package replaces (`dsh-notify-push`) is credited in
      * README.md for the overall design, but nothing here calls its API.
      */
     // Relative to the page so a deployment under a proxy prefix (/dsh/…) keeps
     // working; every caller does fetch(`${PUSH_API}/…`).
-    const PUSH_API = "api/rdsh-pwa/push";
+    const PUSH_API = "api/dsh-mobile-maxxing/push";
 
     /** Preset notification sounds, synthesised — no audio files to ship. */
     const SOUND_PRESETS = {
@@ -5511,7 +5511,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     function onWorkerMessage(event) {
       const data = event?.data;
       if (data === null || typeof data !== "object") return;
-      if (data.type === "rdsh-pwa:notify") {
+      if (data.type === "dsh-mobile-maxxing:notify") {
         const shown = notifyUser({
           title: typeof data.title === "string" ? data.title : "DSH",
           body: typeof data.body === "string" ? data.body : "",
@@ -5523,7 +5523,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         if (shown) event?.ports?.[0]?.postMessage("shown");
         return;
       }
-      if (data.type === "rdsh-pwa:open-session" || data.type === "dsh-notify-push:open-session") {
+      if (data.type === "dsh-mobile-maxxing:open-session" || data.type === "dsh-notify-push:open-session") {
         // The second name is the previous plugin's; still honoured so a banner
         // already on screen keeps working after this package takes over.
         requestSession(typeof data.sessionId === "string" ? data.sessionId : "");
@@ -6675,8 +6675,8 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
     [data-rdsh-composer-dock] button { font-size: 10px !important; padding: 1px 2px !important; }
   }
   /* Overlay UI belongs on top of the drawer's own chrome, not across it. */
-  html[data-rdsh-drawer="open"] .rdsh-pwa-install,
-  html[data-rdsh-drawer="open"] .rdsh-pwa-card { display: none; }
+  html[data-rdsh-drawer="open"] .dsh-mobile-maxxing-install,
+  html[data-rdsh-drawer="open"] .dsh-mobile-maxxing-card { display: none; }
   /* The right sidebar menu owns the screen; the floating hamburger would sit
      on top of it (and keep its hover state). */
   html[data-rdsh-rightpanel-open] .rdsh-mux-fab { display: none !important; }
@@ -7569,14 +7569,14 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
           try {
             part = factory();
           } catch (error) {
-            console.error(`[rdsh-pwa] ${name} client half failed to build`, error);
+            console.error(`[dsh-mobile-maxxing] ${name} client half failed to build`, error);
             continue;
           }
           if (part === null || typeof part !== "object" || typeof part.apply !== "function") continue;
           try {
             part.apply(ctx);
           } catch (error) {
-            console.error(`[rdsh-pwa] ${name} client half failed to apply`, error);
+            console.error(`[dsh-mobile-maxxing] ${name} client half failed to apply`, error);
           }
         }
       },

@@ -994,7 +994,7 @@ test("boot records this page's push origin so a restart cannot double-fan-out", 
 		},
 	});
 	assert.ok(
-		urls.some((url) => url.endsWith("api/rdsh-pwa/push/config")),
+		urls.some((url) => url.endsWith("api/dsh-mobile-maxxing/push/config")),
 		`boot did not call the push config route: ${JSON.stringify(urls)} ${JSON.stringify(booted.sandbox.__RDSH_MOBILE_UX__?.state?.bootError)}`,
 	);
 	booted.disposeAll();
@@ -1012,7 +1012,7 @@ test("mobile-send carries the page origin so the host can route the turn back", 
 	booted.sandbox.location = { origin: "https://app.example:8446", href: "https://app.example:8446/" };
 	booted.sandbox.window.location = booted.sandbox.location;
 	booted.sandbox.__RDSH_MOBILE_UX__.markMobileSession("session-1");
-	const call = calls.find((entry) => entry.url.endsWith("api/rdsh-pwa/push/mobile-send"));
+	const call = calls.find((entry) => entry.url.endsWith("api/dsh-mobile-maxxing/push/mobile-send"));
 	assert.ok(call, "mobile-send was not called");
 	assert.deepEqual(JSON.parse(call.body), { sessionId: "session-1", origin: "https://app.example:8446" });
 	booted.disposeAll();

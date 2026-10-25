@@ -79,7 +79,7 @@ class Cdp {
 }
 
 async function startChrome() {
-	const profile = await mkdtemp(join(tmpdir(), "rdsh-pwa-e2e-"));
+	const profile = await mkdtemp(join(tmpdir(), "dsh-mobile-maxxing-e2e-"));
 	const child = spawn(CHROME, [
 		"--headless=new",
 		`--remote-debugging-port=${PORT}`,
@@ -130,7 +130,7 @@ async function checkStatic() {
 	check("worker is JavaScript with root scope", /javascript/.test(worker.headers.get("content-type") || "") && worker.headers.get("service-worker-allowed") === "/");
 
 	const index = await http("/");
-	check("index carries the app metadata", index.text.includes("<!--rdsh-pwa-->"));
+	check("index carries the app metadata", index.text.includes("<!--dsh-mobile-maxxing-->"));
 	check("index links the Apple touch icon", index.text.includes("apple-touch-icon"));
 	check("index allows edge-to-edge drawing", index.text.includes("viewport-fit=cover"));
 
@@ -147,7 +147,7 @@ async function checkRuntime() {
 	cdp.on("Runtime.consoleAPICalled", ({ type, args }) => {
 		if (type !== "error") return;
 		const text = args.map((arg) => arg.value ?? arg.description ?? "").join(" ");
-		if (text.includes("[rdsh-pwa]")) pluginErrors.push(text.split("\n")[0]);
+		if (text.includes("[dsh-mobile-maxxing]")) pluginErrors.push(text.split("\n")[0]);
 	});
 	await cdp.send("Page.enable");
 	await cdp.send("Runtime.enable");
@@ -180,13 +180,13 @@ async function checkRuntime() {
 			controller: navigator.serviceWorker.controller ? navigator.serviceWorker.controller.scriptURL : null,
 			waiting: reg && reg.waiting ? reg.waiting.scriptURL : null,
 			keys: await caches.keys(),
-			installButton: !!document.querySelector('.rdsh-pwa-foot'),
+			installButton: !!document.querySelector('.dsh-mobile-maxxing-foot'),
 			optimized: performance.getEntriesByType('navigation').length > 0,
 		};
 	})()`);
 	check("our worker controls the page", /\/sw\.js$/.test(runtime.controller || ""), runtime.controller);
 	check("no competing worker waits behind ours", runtime.waiting === null, runtime.waiting);
-	check("a versioned shell cache exists", runtime.keys.some((key) => key.startsWith("rdsh-pwa-")), runtime.keys);
+	check("a versioned shell cache exists", runtime.keys.some((key) => key.startsWith("dsh-mobile-maxxing-")), runtime.keys);
 	check("the install affordance renders", runtime.installButton === true);
 
 	await cdp.send("Network.emulateNetworkConditions", { offline: true, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
@@ -198,7 +198,7 @@ async function checkRuntime() {
 		offline = await cdp.eval(`(() => ({
 			title: document.title,
 			offline: globalThis.__RDSH_PWA__ ? globalThis.__RDSH_PWA__.state.offline : null,
-			pill: document.querySelector('.rdsh-pwa-pill') ? document.querySelector('.rdsh-pwa-pill').textContent : null,
+			pill: document.querySelector('.dsh-mobile-maxxing-pill') ? document.querySelector('.dsh-mobile-maxxing-pill').textContent : null,
 			root: !!document.getElementById('root'),
 		}))()`);
 		if (offline.pill !== null) break;

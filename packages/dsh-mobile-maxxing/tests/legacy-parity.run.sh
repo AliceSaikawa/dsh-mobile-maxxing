@@ -3,7 +3,7 @@
 #
 #   BASELINE_REPO=/path/to/DSH-PWA \
 #   MOBILE_UI=/path/to/rdsh-mobile-ui \
-#   packages/rdsh-pwa/tests/legacy-parity.run.sh
+#   packages/dsh-mobile-maxxing/tests/legacy-parity.run.sh
 #
 # Starts two throwaway DSH homes (mktemp, never an existing home), one with the
 # legacy split packages and one with this worktree, on localhost-only ports,
@@ -96,7 +96,7 @@ provision() {
 	local home="$1" plugin="$2" legacy="$3"
 	mkdir -p "$home/profiles/parity/node_modules"
 	ln -s "$WEB_MODULES/@deepseek-ai" "$home/profiles/parity/node_modules/@deepseek-ai"
-	ln -s "$plugin" "$home/profiles/parity/node_modules/rdsh-pwa"
+	ln -s "$plugin" "$home/profiles/parity/node_modules/dsh-mobile-maxxing"
 	if [ "$legacy" = "1" ]; then
 		ln -s "$BASELINE_REPO/mobile-ux" "$home/profiles/parity/node_modules/rdsh-mobile-ux"
 		ln -s "$MOBILE_UI" "$home/profiles/parity/node_modules/rdsh-mobile-ui"
@@ -107,7 +107,7 @@ const [path, plugin, legacy, mobileUx, mobileUi] = process.argv.slice(2);
 const dependencies = {
 	"@deepseek-ai/dsh-base": "0.2.1-rc.2",
 	"@deepseek-ai/dsh-web-app": "0.2.1-rc.2",
-	"rdsh-pwa": `link:${plugin}`,
+	"dsh-mobile-maxxing": `link:${plugin}`,
 };
 const bundles = ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app"];
 if (legacy === "1") {
@@ -115,7 +115,7 @@ if (legacy === "1") {
 	dependencies["rdsh-mobile-ui"] = `link:${mobileUi}`;
 	bundles.push("rdsh-mobile-ui");
 }
-bundles.push("rdsh-pwa");
+bundles.push("dsh-mobile-maxxing");
 if (legacy === "1") bundles.push("rdsh-mobile-ux");
 fs.writeFileSync(path, `${JSON.stringify({
 	name: "dsh-profile-parity",
@@ -139,7 +139,7 @@ EOF
 }
 
 provision "$BASELINE_HOME" "$BASELINE_REPO" 1
-provision "$UNIFIED_HOME" "$UNIFIED_REPO/packages/rdsh-pwa" 0
+provision "$UNIFIED_HOME" "$UNIFIED_REPO/packages/dsh-mobile-maxxing" 0
 
 start_server() {
 	local home="$1" port="$2" log="$3" pidfile="$4"
@@ -200,7 +200,7 @@ set +e
 BASE_URL_BASELINE="http://127.0.0.1:$BASELINE_PORT/?token=$BASELINE_TOKEN" \
 BASE_URL_UNIFIED="http://127.0.0.1:$UNIFIED_PORT/?token=$UNIFIED_TOKEN" \
 QA_OUT="$RUN_DIR" CDP_PORT="$CDP_PORT" CHROME="$CHROME" \
-	"$NODE" "$UNIFIED_REPO/packages/rdsh-pwa/tests/legacy-parity.e2e.mjs"
+	"$NODE" "$UNIFIED_REPO/packages/dsh-mobile-maxxing/tests/legacy-parity.e2e.mjs"
 STATUS=$?
 set -e
 

@@ -1,5 +1,5 @@
 /**
- * rdsh-pwa — notifications, host half.
+ * dsh-mobile-maxxing — notifications, host half.
  *
  * Web Push written directly against the RFCs on `node:crypto` alone:
  *
@@ -8,12 +8,12 @@
  *   - RFC 8188 — the record framing that carries the ciphertext.
  *
  * No push library is involved, so the package installs nothing beyond DSH
- * itself. The HTTP shape (`/api/rdsh-pwa/push/...`) and the service-worker
+ * itself. The HTTP shape (`/api/dsh-mobile-maxxing/push/...`) and the service-worker
  * message contract are this package's own; the plugin this replaces
  * (`dsh-notify-push`) is credited in README.md as the reference for the
  * overall design, not as a source of code.
  *
- * @module rdsh-pwa/notify/host
+ * @module dsh-mobile-maxxing/notify/host
  */
 import {
 	createCipheriv,
@@ -73,7 +73,7 @@ export function stateDirectory() {
 	const home = typeof process.env.DSH_HOME === "string" && process.env.DSH_HOME !== ""
 		? process.env.DSH_HOME
 		: join(homedir(), ".dsh");
-	return join(home, "rdsh-pwa");
+	return join(home, "dsh-mobile-maxxing");
 }
 
 // ---------------------------------------------------------------------------
@@ -723,7 +723,7 @@ export function applyNotify(ctx, config) {
 				lang: copy.lang,
 				session: sessionNameOf(ctx, session),
 			}), { origin }).catch((error) => {
-				console.error("[rdsh-pwa] turn-end push failed", error);
+				console.error("[dsh-mobile-maxxing] turn-end push failed", error);
 			});
 		});
 		agentCtx.effect(() => agentCtx.on("user-questions/request", function (request, next) {
@@ -740,11 +740,11 @@ export function applyNotify(ctx, config) {
 					lang: copy.lang,
 					session: asking === undefined ? "" : sessionNameOf(ctx, asking),
 				}), { origin }).catch((error) => {
-					console.error("[rdsh-pwa] question push failed", error);
+					console.error("[dsh-mobile-maxxing] question push failed", error);
 				});
 			}
 			return next();
-		}, { prepend: true }), "rdsh-pwa: question push fan-out");
+		}, { prepend: true }), "dsh-mobile-maxxing: question push fan-out");
 	});
 
 	ctx.inject(["connection", "webServer"], (routeCtx) => {
@@ -781,7 +781,7 @@ export function applyNotify(ctx, config) {
 		const routes = [
 			{
 				kind: "exact",
-				path: "/api/rdsh-pwa/push/vapid",
+				path: "/api/dsh-mobile-maxxing/push/vapid",
 				handler: (req, res) => {
 					if (!guard(req, res)) return;
 					json(res, 200, { ok: true, publicKey: store.keys().publicKey, subject: store.subject(copy.subject) });
@@ -789,7 +789,7 @@ export function applyNotify(ctx, config) {
 			},
 			{
 				kind: "exact",
-				path: "/api/rdsh-pwa/push/config",
+				path: "/api/dsh-mobile-maxxing/push/config",
 				handler: (req, res) => {
 					if (!guard(req, res)) return;
 					// The page renders its own in-app banners, so it needs the
@@ -799,7 +799,7 @@ export function applyNotify(ctx, config) {
 			},
 			{
 				kind: "exact",
-				path: "/api/rdsh-pwa/push/subscribe",
+				path: "/api/dsh-mobile-maxxing/push/subscribe",
 				handler: async (req, res) => {
 					if (!guard(req, res)) return;
 					if (req.method !== "POST") {
@@ -819,7 +819,7 @@ export function applyNotify(ctx, config) {
 			},
 			{
 				kind: "exact",
-				path: "/api/rdsh-pwa/push/unsubscribe",
+				path: "/api/dsh-mobile-maxxing/push/unsubscribe",
 				handler: async (req, res) => {
 					if (!guard(req, res)) return;
 					if (req.method !== "POST") {
@@ -835,7 +835,7 @@ export function applyNotify(ctx, config) {
 			},
 			{
 				kind: "exact",
-				path: "/api/rdsh-pwa/push/mobile-send",
+				path: "/api/dsh-mobile-maxxing/push/mobile-send",
 				handler: async (req, res) => {
 					if (!guard(req, res)) return;
 					if (req.method !== "POST") {
@@ -852,7 +852,7 @@ export function applyNotify(ctx, config) {
 			},
 			{
 				kind: "exact",
-				path: "/api/rdsh-pwa/push/preview",
+				path: "/api/dsh-mobile-maxxing/push/preview",
 				handler: (req, res) => {
 					if (!guard(req, res)) return;
 					// Answers "what would you send?" without sending anything.
@@ -881,7 +881,7 @@ export function applyNotify(ctx, config) {
 			},
 			{
 				kind: "exact",
-				path: "/api/rdsh-pwa/push/test",
+				path: "/api/dsh-mobile-maxxing/push/test",
 				handler: async (req, res) => {
 					if (!guard(req, res)) return;
 					if (req.method !== "POST") {
@@ -902,7 +902,7 @@ export function applyNotify(ctx, config) {
 				},
 			},
 		];
-		for (const route of routes) routeCtx.effect(() => routeCtx.webServer.register(route), `rdsh-pwa: ${route.path}`);
+		for (const route of routes) routeCtx.effect(() => routeCtx.webServer.register(route), `dsh-mobile-maxxing: ${route.path}`);
 	});
 
 	return { store, fanOut };

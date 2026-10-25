@@ -263,9 +263,9 @@ test("an explicit en profile makes every host surface English", async () => {
 	assert.match(worker.text, /"sw\.offlineHeading":"You're offline"/);
 
 	const preview = JSON.parse((await call(
-		routes.get("/api/rdsh-pwa/push/preview"),
+		routes.get("/api/dsh-mobile-maxxing/push/preview"),
 		"GET",
-		"/api/rdsh-pwa/push/preview?sessionId=",
+		"/api/dsh-mobile-maxxing/push/preview?sessionId=",
 	)).text);
 	assert.equal(preview.copy.lang, "en");
 	assert.equal(preview.turnEnd.title, "DSH: Work finished");
@@ -276,14 +276,14 @@ test("index decoration is idempotent", () => {
 	const once = decorateIndex(INDEX, {});
 	const twice = decorateIndex(once, {});
 	assert.equal(once, twice, "a second tap must not duplicate the block");
-	assert.equal(once.split("<!--rdsh-pwa-->").length - 1, 1);
+	assert.equal(once.split("<!--dsh-mobile-maxxing-->").length - 1, 1);
 	assert.equal((once.match(/globalThis\.__RDSH_PWA_LANG__\s*=/g) ?? []).length, 1);
 	assert.equal(decorateIndex("", {}), "");
 });
 
 test("decorateIndex still works when the document has no viewport or head", () => {
 	const bare = decorateIndex("<div id=root></div>", {});
-	assert.ok(bare.includes("<!--rdsh-pwa-->"));
+	assert.ok(bare.includes("<!--dsh-mobile-maxxing-->"));
 	assert.ok(bare.includes("</div>"));
 	const noViewport = decorateIndex("<head></head><body></body>", {});
 	assert.match(noViewport, /<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">/);
@@ -292,7 +292,7 @@ test("decorateIndex still works when the document has no viewport or head", () =
 test("an old marker without the payload gets copy, probes and lang exactly once", () => {
 	// What the split-plugin tap left behind: marker and PWA meta, no dictionary.
 	const legacy = INDEX.replace("</head>", [
-		"<!--rdsh-pwa-->",
+		"<!--dsh-mobile-maxxing-->",
 		'<meta name="mobile-web-app-capable" content="yes">',
 		'<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">',
 		"</head>",
@@ -304,7 +304,7 @@ test("an old marker without the payload gets copy, probes and lang exactly once"
 	assert.equal(injectedPayload(once).__RDSH_PWA_LANG__, "ja");
 	assert.equal((once.match(/name="mobile-web-app-capable"/g) ?? []).length, 1,
 		"the legacy meta is not added a second time");
-	assert.equal((once.match(/<!--rdsh-pwa-->/g) ?? []).length, 1);
+	assert.equal((once.match(/<!--dsh-mobile-maxxing-->/g) ?? []).length, 1);
 	// Re-tapping the finished response is a no-op.
 	assert.equal(decorateIndex(once, {}), once);
 });
@@ -315,7 +315,7 @@ test("a partial payload gets only the missing globals, with or without the marke
 	const copyAndProbes = INDEX.replace("</head>",
 		'<script>globalThis.__RDSH_PWA_COPY__ = {"en":{}};globalThis.__RDSH_PWA_PROBES__ = {actions:["操作"]};</script></head>');
 	for (const base of [copyOnly, copyAndProbes]) {
-		for (const html of [base, base.replace("<head>", "<head><!--rdsh-pwa-->")]) {
+		for (const html of [base, base.replace("<head>", "<head><!--dsh-mobile-maxxing-->")]) {
 			const fixed = decorateIndex(html, {});
 			assert.equal((fixed.match(/globalThis\.__RDSH_PWA_COPY__\s*=/g) ?? []).length, 1,
 				"an existing copy table is not duplicated");
@@ -361,7 +361,7 @@ test("routes serve the manifest, the worker and the icons", async () => {
 	// Assert the content instead of the count.
 	assert.ok(taps.length >= 1, "at least the PWA tap");
 	const decorated = taps.reduce((html, tap) => tap(html), INDEX);
-	assert.equal(decorated.split("<!--rdsh-pwa-->").length - 1, 1, "one PWA block");
+	assert.equal(decorated.split("<!--dsh-mobile-maxxing-->").length - 1, 1, "one PWA block");
 	assert.equal(injectedPayload(decorated).__RDSH_PWA_LANG__, "ja",
 		"the mounted tap injects the normalized host language");
 	assert.ok(decorated.includes("__RDSH_MOBILE_UX_CONFIG__"), "the mobile-ux half mounted");
@@ -370,13 +370,13 @@ test("routes serve the manifest, the worker and the icons", async () => {
 
 	// The notification half is part of this package now.
 	for (const path of [
-		"/api/rdsh-pwa/push/vapid",
-		"/api/rdsh-pwa/push/config",
-		"/api/rdsh-pwa/push/subscribe",
-		"/api/rdsh-pwa/push/unsubscribe",
-		"/api/rdsh-pwa/push/mobile-send",
-		"/api/rdsh-pwa/push/preview",
-		"/api/rdsh-pwa/push/test",
+		"/api/dsh-mobile-maxxing/push/vapid",
+		"/api/dsh-mobile-maxxing/push/config",
+		"/api/dsh-mobile-maxxing/push/subscribe",
+		"/api/dsh-mobile-maxxing/push/unsubscribe",
+		"/api/dsh-mobile-maxxing/push/mobile-send",
+		"/api/dsh-mobile-maxxing/push/preview",
+		"/api/dsh-mobile-maxxing/push/test",
 	]) {
 		assert.ok(routes.has(path), `missing ${path}`);
 	}
@@ -469,8 +469,8 @@ test("the worker treats the markdown-cjk entry chunks as cacheable", async () =>
 test("notification copy defaults to the package language and keeps an explicit override", async () => {
 	const previewOf = async (config) => {
 		const { routes } = mount(config);
-		const route = routes.get("/api/rdsh-pwa/push/preview");
-		const response = await call(route, "GET", "/api/rdsh-pwa/push/preview?sessionId=");
+		const route = routes.get("/api/dsh-mobile-maxxing/push/preview");
+		const response = await call(route, "GET", "/api/dsh-mobile-maxxing/push/preview?sessionId=");
 		return JSON.parse(response.text);
 	};
 	assert.equal((await previewOf({})).copy.lang, "ja", "top-level lang is the notification default");

@@ -1,7 +1,7 @@
 /*
- * rdsh-pwa — app-shell service worker.
+ * dsh-mobile-maxxing — app-shell service worker.
  *
- * Served by the rdsh-pwa host plugin at /sw.js (root scope). The host prepends
+ * Served by the dsh-mobile-maxxing host plugin at /sw.js (root scope). The host prepends
  * `self.__RDSH_PWA_BUILD__` and `self.__RDSH_PWA_CONFIG__`; the build hash is
  * derived from this file's bytes, so editing it retires the old cache and
  * makes the page offer "reload to update".
@@ -25,7 +25,7 @@ const NAVIGATION_TIMEOUT_MS = Number.isFinite(CONFIG.navigationTimeoutMs) ? CONF
 const COPY = CONFIG.copy && typeof CONFIG.copy === "object" ? CONFIG.copy : {};
 const DOCUMENT_LANG = typeof CONFIG.lang === "string" ? CONFIG.lang.replace(/[^A-Za-z0-9-]/g, "") || "en" : "en";
 const copy = (key, fallback) => (typeof COPY[key] === "string" && COPY[key] !== "" ? COPY[key] : fallback);
-const CACHE_PREFIX = "rdsh-pwa-";
+const CACHE_PREFIX = "dsh-mobile-maxxing-";
 const CACHE_NAME = CACHE_PREFIX + BUILD;
 const MAX_STATIC_ENTRIES = 250;
 
@@ -220,7 +220,7 @@ self.addEventListener("fetch", (event) => {
  *
  * Only one worker can control a scope. The browser half redirects a legacy
  * `/push/sw.js` registration here, and these handlers speak this package's own
- * contract: `{ title, body, url, sessionId, kind }` in, `rdsh-pwa:open-session`
+ * contract: `{ title, body, url, sessionId, kind }` in, `dsh-mobile-maxxing:open-session`
  * out. The previous plugin's message name is still accepted for pages that are
  * already open across an upgrade.
  */
@@ -268,7 +268,7 @@ async function handOff(client, payload) {
 			};
 		});
 		client.postMessage({
-			type: "rdsh-pwa:notify",
+			type: "dsh-mobile-maxxing:notify",
 			title: payload.title,
 			body: payload.body,
 			sessionId: payload.sessionId,
@@ -299,7 +299,7 @@ self.addEventListener("push", (event) => {
 			icon: new URL("pwa/icon-192.png", SCOPE).href,
 			badge: new URL("pwa/badge-96.png", SCOPE).href,
 			// One banner per session: a shared tag would merge different sessions.
-			tag: payload.sessionId !== "" ? `rdsh-pwa:${payload.sessionId}` : "rdsh-pwa:notice",
+			tag: payload.sessionId !== "" ? `dsh-mobile-maxxing:${payload.sessionId}` : "dsh-mobile-maxxing:notice",
 			renotify: true,
 			requireInteraction: true,
 			data: { url: payload.url, sessionId: payload.sessionId },
@@ -331,7 +331,7 @@ self.addEventListener("notificationclick", (event) => {
 			// The SPA has no session routing: an open window is switched in-page
 			// by the notification plugin's listener instead of by a URL.
 			if (sessionId !== "" && "postMessage" in client) {
-				client.postMessage({ type: "rdsh-pwa:open-session", sessionId });
+				client.postMessage({ type: "dsh-mobile-maxxing:open-session", sessionId });
 				return;
 			}
 			if (target !== new URL("./", SCOPE).href && "navigate" in client) {
@@ -365,14 +365,14 @@ self.addEventListener("message", (event) => {
 self.addEventListener("pushsubscriptionchange", (event) => {
 	event.waitUntil((async () => {
 		try {
-			const response = await fetch(new URL("api/rdsh-pwa/push/vapid", SCOPE), { cache: "no-store" });
+			const response = await fetch(new URL("api/dsh-mobile-maxxing/push/vapid", SCOPE), { cache: "no-store" });
 			if (!response.ok) return;
 			const { publicKey } = await response.json();
 			const padding = "=".repeat((4 - (publicKey.length % 4)) % 4);
 			const raw = atob((publicKey + padding).replace(/-/g, "+").replace(/_/g, "/"));
 			const key = new Uint8Array([...raw].map((character) => character.charCodeAt(0)));
 			const subscription = await self.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
-			await fetch(new URL("api/rdsh-pwa/push/subscribe", SCOPE), {
+			await fetch(new URL("api/dsh-mobile-maxxing/push/subscribe", SCOPE), {
 				method: "POST",
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ subscription: subscription.toJSON(), label: navigator.userAgent, origin: self.location.origin }),

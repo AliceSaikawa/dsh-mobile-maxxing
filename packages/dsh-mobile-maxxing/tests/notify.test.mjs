@@ -155,7 +155,7 @@ test("the endpoint origin is what VAPID signs for", () => {
 });
 
 test("the store persists a subscription and picks the VAPID subject", () => {
-	const file = join(mkdtempSync(join(tmpdir(), "rdsh-pwa-")), "push.json");
+	const file = join(mkdtempSync(join(tmpdir(), "dsh-mobile-maxxing-")), "push.json");
 	const store = new PushStore(file);
 	const userAgent = createECDH("prime256v1");
 	userAgent.generateKeys();
@@ -178,14 +178,14 @@ test("the store persists a subscription and picks the VAPID subject", () => {
 });
 
 test("a subscription without keys is refused", () => {
-	const file = join(mkdtempSync(join(tmpdir(), "rdsh-pwa-")), "push.json");
+	const file = join(mkdtempSync(join(tmpdir(), "dsh-mobile-maxxing-")), "push.json");
 	const store = new PushStore(file);
 	assert.throws(() => store.add({ endpoint: "https://x/y" }), /client keys/);
 	assert.throws(() => store.add({ keys: {} }), /endpoint/);
 });
 
 test("push endpoints must be real https push services", () => {
-	const file = join(mkdtempSync(join(tmpdir(), "rdsh-pwa-")), "push.json");
+	const file = join(mkdtempSync(join(tmpdir(), "dsh-mobile-maxxing-")), "push.json");
 	const store = new PushStore(file);
 	const userAgent = createECDH("prime256v1");
 	userAgent.generateKeys();
@@ -212,8 +212,8 @@ test("push endpoints must be real https push services", () => {
 
 test("a phone send marks the next turn; a desktop send does not", async () => {
 	const home = mkdtempSync(join(tmpdir(), "rdsh-fromphone-"));
-	const file = join(home, "rdsh-pwa", "push.json");
-	mkdirSync(join(home, "rdsh-pwa"), { recursive: true });
+	const file = join(home, "dsh-mobile-maxxing", "push.json");
+	mkdirSync(join(home, "dsh-mobile-maxxing"), { recursive: true });
 	const makeKeys = () => {
 		const ecdh = createECDH("prime256v1");
 		ecdh.generateKeys();
@@ -258,7 +258,7 @@ test("a phone send marks the next turn; a desktop send does not", async () => {
 			effect(fn) { return scope.effect(fn); },
 		};
 		applyNotify(ctx, { onlyMobileTurns: true });
-		const mobileSend = routes.get("/api/rdsh-pwa/push/mobile-send");
+		const mobileSend = routes.get("/api/dsh-mobile-maxxing/push/mobile-send");
 		const post = async (path, body) => {
 			const req = Readable.from([Buffer.from(JSON.stringify(body))]);
 			req.method = "POST";
@@ -270,7 +270,7 @@ test("a phone send marks the next turn; a desktop send does not", async () => {
 		};
 		const wait = () => new Promise((resolve) => setTimeout(resolve, 20));
 
-		assert.equal(await post("/api/rdsh-pwa/push/mobile-send", { sessionId: "s1" }), 200);
+		assert.equal(await post("/api/dsh-mobile-maxxing/push/mobile-send", { sessionId: "s1" }), 200);
 		listeners.get("session/event")({ id: "s1" }, { type: "turn/start" });
 		listeners.get("session/event")({ id: "s1" }, { type: "turn/end", data: { reason: { kind: "completed" } } });
 		await wait();
@@ -290,8 +290,8 @@ test("a phone send marks the next turn; a desktop send does not", async () => {
 
 test("notification fan-out targets the app that started the turn or request", async () => {
 	const home = mkdtempSync(join(tmpdir(), "rdsh-targeting-"));
-	const file = join(home, "rdsh-pwa", "push.json");
-	mkdirSync(join(home, "rdsh-pwa"), { recursive: true });
+	const file = join(home, "dsh-mobile-maxxing", "push.json");
+	mkdirSync(join(home, "dsh-mobile-maxxing"), { recursive: true });
 	const makeKeys = () => {
 		const ecdh = createECDH("prime256v1");
 		ecdh.generateKeys();
@@ -356,13 +356,13 @@ test("notification fan-out targets the app that started the turn or request", as
 		// No request-derived origin: /test without an Origin header keeps the
 		// historical all-subscriptions fallback.
 		const legacy = harness("http://127.0.0.1:3207");
-		assert.equal(await request(legacy, "/api/rdsh-pwa/push/test", { body: {} }), 200);
+		assert.equal(await request(legacy, "/api/dsh-mobile-maxxing/push/test", { body: {} }), 200);
 		await wait();
 		assert.deepEqual(calls.sort(), ["https://web.push.apple.com/old", "https://web.push.apple.com/phone"].sort());
 		calls.length = 0;
 
 		// An origin-less mobile-send keeps the legacy fallback as well.
-		assert.equal(await request(legacy, "/api/rdsh-pwa/push/mobile-send", { body: { sessionId: "s1" } }), 200);
+		assert.equal(await request(legacy, "/api/dsh-mobile-maxxing/push/mobile-send", { body: { sessionId: "s1" } }), 200);
 		turn(legacy, "s1", "turn/start");
 		turn(legacy, "s1", "turn/end");
 		await wait();
@@ -370,13 +370,13 @@ test("notification fan-out targets the app that started the turn or request", as
 
 		// /test with an explicit origin sends only to that app.
 		calls.length = 0;
-		assert.equal(await request(legacy, "/api/rdsh-pwa/push/test", { body: {}, origin: "https://app.example:8446" }), 200);
+		assert.equal(await request(legacy, "/api/dsh-mobile-maxxing/push/test", { body: {}, origin: "https://app.example:8446" }), 200);
 		await wait();
 		assert.deepEqual(calls, ["https://web.push.apple.com/phone"]);
 
 		// mobile-send with the page origin pins turn/end to that app.
 		calls.length = 0;
-		assert.equal(await request(legacy, "/api/rdsh-pwa/push/mobile-send", { body: { sessionId: "s1", origin: "https://app.example:8446" } }), 200);
+		assert.equal(await request(legacy, "/api/dsh-mobile-maxxing/push/mobile-send", { body: { sessionId: "s1", origin: "https://app.example:8446" } }), 200);
 		turn(legacy, "s1", "turn/start");
 		turn(legacy, "s1", "turn/end");
 		await wait();
@@ -399,14 +399,14 @@ test("notification fan-out targets the app that started the turn or request", as
 		// Question fallback: ownOrigins when no turn origin is known.
 		calls.length = 0;
 		const own = harness("http://127.0.0.1:3207");
-		assert.equal(await request(own, "/api/rdsh-pwa/push/vapid", { method: "GET", origin: "https://app.example:8444" }), 200);
+		assert.equal(await request(own, "/api/dsh-mobile-maxxing/push/vapid", { method: "GET", origin: "https://app.example:8444" }), 200);
 		question(own);
 		await wait();
 		assert.deepEqual(calls, ["https://web.push.apple.com/old"]);
 
 		// Question priority: the turn's origin wins over ownOrigins.
 		calls.length = 0;
-		assert.equal(await request(own, "/api/rdsh-pwa/push/mobile-send", { body: { sessionId: "s1", origin: "https://app.example:8446" } }), 200);
+		assert.equal(await request(own, "/api/dsh-mobile-maxxing/push/mobile-send", { body: { sessionId: "s1", origin: "https://app.example:8446" } }), 200);
 		turn(own, "s1", "turn/start");
 		question(own);
 		await wait();
@@ -445,7 +445,7 @@ test("a broken push store does not stop the PWA routes", async () => {
 		effect: (fn) => scope.effect(fn),
 	};
 	// A directory where the state file should be makes the write fail.
-	const blocked = join(mkdtempSync(join(tmpdir(), "rdsh-pwa-")), "rdsh-pwa");
+	const blocked = join(mkdtempSync(join(tmpdir(), "dsh-mobile-maxxing-")), "dsh-mobile-maxxing");
 	mkdtempSync(blocked);
 	const previous = process.env.DSH_HOME;
 	process.env.DSH_HOME = join(blocked, "..");

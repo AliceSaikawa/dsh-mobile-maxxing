@@ -1,6 +1,6 @@
 # 使い方（日本語）
 
-`rdsh-pwa` の詳しい説明です。**インストールは [README](../README.md#インストール) を見てください。**
+`dsh-mobile-maxxing` の詳しい説明です。**インストールは [README](../README.md#インストール) を見てください。**
 
 English: [USAGE.en.md](USAGE.en.md)
 
@@ -11,7 +11,7 @@ English: [USAGE.en.md](USAGE.en.md)
 
 | 元 | いま |
 | --- | --- |
-| `rdsh-pwa` | PWA（インストール可能化・オフライン起動・通知の送受信・通知音） |
+| `dsh-mobile-maxxing` | PWA（インストール可能化・オフライン起動・通知の送受信・通知音） |
 | `rdsh-mobile-ux` | スマホ幅のUX（ドロワー・設定・入力・コード表示・アプリ内バナー） |
 | `rdsh-markdown-cjk` | CJK の自動リンク崩れ修正（ホスト専用） |
 | `rdsh-session-id-copy` | セッションメニューにセッションIDのコピー行を足す |
@@ -89,7 +89,7 @@ Settings をスマホ幅に積み、タップと長押しを分け、通知設�
 
 実行中セッションのラベルの動きは `mobileUx.runningAnimation` で選べます（`aurora` /
 `breathing` / `outline` / `none`、既定は `outline`）。3案のモックアップはリポジトリの
-`packages/rdsh-pwa/mockups/` にあります（配布物には含みません）。
+`packages/dsh-mobile-maxxing/mockups/` にあります（配布物には含みません）。
 
 スマホ幅でだけ効く装飾（セッション行の実行中アニメ・枠色・画像ビューアの上書き・出力速度の
 表示）は、すべて同じメディアクエリの内側にあります。PC 幅では素の DSH と同じ見た目になります。
@@ -125,8 +125,8 @@ Settings をスマホ幅に積み、タップと長押しを分け、通知設�
 音量は 0〜100% で保存されます（`localStorage`）。プロファイル設定で既定値を変えることもできます。
 
 ```yaml
-- id: rdsh-pwa
-  name: "rdsh-pwa"
+- id: dsh-mobile-maxxing
+  name: "dsh-mobile-maxxing"
   config:
     notifications:
       appName: "DSH"
@@ -150,14 +150,14 @@ Web Push の標準化部分は外部ライブラリを使わず、`node:crypto` 
 - **VAPID（RFC 8292）** — ES256 の JWT を `Authorization` ヘッダに載せる。署名は `ieee-p1363`（DER ではなく `r||s`）
 - **暗号化（RFC 8291 / 8188）** — ECDH → HKDF → AES-128-GCM。`aes128gcm` のレコードフレームも自前
 
-キーと購読は `~/.dsh/rdsh-pwa/push.json`（`0600`）に保存します。VAPID の `sub` は
+キーと購読は `~/.dsh/dsh-mobile-maxxing/push.json`（`0600`）に保存します。VAPID の `sub` は
 `config.notifications.subject` → 最新の購読が記録した `https` オリジン → `mailto:dsh@example.com`
 の順で決めます（Apple は `mailto:root@localhost` を `403 BadJwtToken` で拒否するため）。
 
 ### 旧プラグインとの関係
 
 以前の構成で使っていた `dsh-notify-push` とは**API もサービスワーカーも共有しません**。
-`/api/rdsh-pwa/push/…` はこのパッケージ固有です。両方が入っている場合、サービスワーカーの
+`/api/dsh-mobile-maxxing/push/…` はこのパッケージ固有です。両方が入っている場合、サービスワーカーの
 登録先が競合するため、このパッケージは `/push/sw.js` への登録を自分の `/sw.js` に付け替えます
 （ラップは該当 URL 以外には影響せず、破棄時に元へ戻します）。
 
@@ -181,16 +181,16 @@ rdsh-mobile-ui / rdsh-answer-guard など）は不要で、素の DSH にその�
 
 ## 旧構成からの移行
 
-以前の `rdsh-pwa` + `rdsh-mobile-ux` の2プラグイン構成から移る場合の読み替えです。
+以前の `dsh-mobile-maxxing` + `rdsh-mobile-ux` の2プラグイン構成から移る場合の読み替えです。
 **このパッケージは profile を書き換えません。**
 
 - `rdsh-mobile-ux` の `runningAnimation` / `hideLabels` / `showHiddenControls` は
-  `rdsh-pwa` の `mobileUx.*` へ移す
+  `dsh-mobile-maxxing` の `mobileUx.*` へ移す
 - 統合版と重なる `rdsh-mobile-ux` / `rdsh-markdown-cjk` / `rdsh-session-id-copy` /
   `dsh-notify-push` を profile から外す。レイアウト用の `rdsh-mobile-ui` と通知音の
   `@local/dsh-sound` も、残すと二重制御・二重再生になるため外す
-- `rdsh-pwa` は1つだけにする。`lang`（既定 `ja`）と `appleStatusBarStyle` は
-  `rdsh-pwa` の config に置く
+- `dsh-mobile-maxxing` は1つだけにする。`lang`（既定 `ja`）と `appleStatusBarStyle` は
+  `dsh-mobile-maxxing` の config に置く
 
 重複したままにすると、ルート・スロット・通知が二重になります。
 
@@ -202,8 +202,8 @@ BASE_URL=http://127.0.0.1:3099 node tests/e2e.mjs   # 実ブラウザで end-to-
 npm pack                          # 配布用 tarball（リリースに添付する）
 ```
 
-`rdsh-pwa-0.1.0.tgz` を GitHub Releases に添付してあります。`npm install <そのURL>` で
-`rdsh-pwa` と `rdsh-mobile-ux` の両方が入ることを確認済みです。
+`dsh-mobile-maxxing-0.1.0.tgz` を GitHub Releases に添付してあります。`npm install <そのURL>` で
+`dsh-mobile-maxxing` と `rdsh-mobile-ux` の両方が入ることを確認済みです。
 
 `tests/e2e.mjs` はヘッドレス Chrome を自前で起動し、マニフェスト・メタ情報・サービスワーカー制御・
 インストール導線・**オフライン再読み込み**まで確認します。

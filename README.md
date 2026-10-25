@@ -31,10 +31,10 @@ dsh plugin --profile web add https://github.com/kuraneko1/dsh-mobile-maxxing
 
 ## もっと詳しく
 
-- **日本語**: [`packages/rdsh-pwa/docs/USAGE.ja.md`](packages/rdsh-pwa/docs/USAGE.ja.md)
-- **English**: [`packages/rdsh-pwa/docs/USAGE.en.md`](packages/rdsh-pwa/docs/USAGE.en.md)
+- **日本語**: [`packages/dsh-mobile-maxxing/docs/USAGE.ja.md`](packages/dsh-mobile-maxxing/docs/USAGE.ja.md)
+- **English**: [`packages/dsh-mobile-maxxing/docs/USAGE.en.md`](packages/dsh-mobile-maxxing/docs/USAGE.en.md)
 
-パッケージ単体の説明は [`packages/rdsh-pwa/README.md`](packages/rdsh-pwa/README.md) です。
+パッケージ単体の説明は [`packages/dsh-mobile-maxxing/README.md`](packages/dsh-mobile-maxxing/README.md) です。
 
 ## 開発
 
@@ -59,9 +59,9 @@ node scripts/pack-all.mjs
 gh release create vX.Y.Z dist/*.tgz
 ```
 
-`dist/` には版付き（`rdsh-pwa-<version>.tgz`）と版なし（`rdsh-pwa.tgz`）の両方ができます。
+`dist/` には版付き（`dsh-mobile-maxxing-<version>.tgz`）と版なし（`dsh-mobile-maxxing.tgz`）の両方ができます。
 
-**README が指すのは版付きの URL です。** 版なしの `releases/latest/download/rdsh-pwa.tgz` は
+**README が指すのは版付きの URL です。** 版なしの `releases/latest/download/dsh-mobile-maxxing.tgz` は
 人が手で落とすには便利ですが、`dsh plugin --profile web add`（pnpm）は URL 単位でキャッシュするため、
 同じ URL のまま更新すると古い tarball が入ります。版付き URL ならリリースごとに別 URL になり、
 この問題が起きません。
@@ -101,8 +101,8 @@ push library are needed.
 
 ## More detail
 
-- **English**: [`packages/rdsh-pwa/docs/USAGE.en.md`](packages/rdsh-pwa/docs/USAGE.en.md)
-- **日本語**: [`packages/rdsh-pwa/docs/USAGE.ja.md`](packages/rdsh-pwa/docs/USAGE.ja.md)
+- **English**: [`packages/dsh-mobile-maxxing/docs/USAGE.en.md`](packages/dsh-mobile-maxxing/docs/USAGE.en.md)
+- **日本語**: [`packages/dsh-mobile-maxxing/docs/USAGE.ja.md`](packages/dsh-mobile-maxxing/docs/USAGE.ja.md)
 
 ## Development
 
@@ -121,11 +121,11 @@ node scripts/pack-all.mjs
 gh release create vX.Y.Z dist/*.tgz
 ```
 
-`dist/` holds both a versioned tarball (`rdsh-pwa-<version>.tgz`) and a version-free alias
-(`rdsh-pwa.tgz`).
+`dist/` holds both a versioned tarball (`dsh-mobile-maxxing-<version>.tgz`) and a version-free alias
+(`dsh-mobile-maxxing.tgz`).
 
 **The READMEs link the versioned URL.** The alias
-(`releases/latest/download/rdsh-pwa.tgz`) is handy for a manual download, but
+(`releases/latest/download/dsh-mobile-maxxing.tgz`) is handy for a manual download, but
 `dsh plugin --profile web add` (pnpm) caches by URL, so updating behind the same URL installs the old
 tarball. A versioned URL changes every release and avoids that.
 

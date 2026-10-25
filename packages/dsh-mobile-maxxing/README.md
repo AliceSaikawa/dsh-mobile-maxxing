@@ -1,4 +1,4 @@
-# dsh-mobile-maxxing — `rdsh-pwa`
+# dsh-mobile-maxxing — `dsh-mobile-maxxing`
 
 DSH（DeepSeek Harness）の Web UI をスマホで使い倒すための統合プラグインです。
 PWA・通知・モバイルUX・CJK表示の修正・セッションIDのコピーを1パッケージにまとめています。
@@ -22,11 +22,11 @@ dsh plugin --profile web add https://github.com/kuraneko1/dsh-mobile-maxxing
 ```json
 {
   "dependencies": {
-    "rdsh-pwa": "https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.4.0/rdsh-pwa-0.4.0.tgz"
+    "dsh-mobile-maxxing": "https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.4.0/dsh-mobile-maxxing-0.4.0.tgz"
   },
   "dsh": {
     "profile": {
-      "bundles": ["...", "rdsh-pwa"]
+      "bundles": ["...", "dsh-mobile-maxxing"]
     }
   }
 }
@@ -94,11 +94,11 @@ dsh plugin --profile web add https://github.com/kuraneko1/dsh-mobile-maxxing
 ```json
 {
   "dependencies": {
-    "rdsh-pwa": "https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.4.0/rdsh-pwa-0.4.0.tgz"
+    "dsh-mobile-maxxing": "https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.4.0/dsh-mobile-maxxing-0.4.0.tgz"
   },
   "dsh": {
     "profile": {
-      "bundles": ["...", "rdsh-pwa"]
+      "bundles": ["...", "dsh-mobile-maxxing"]
     }
   }
 }

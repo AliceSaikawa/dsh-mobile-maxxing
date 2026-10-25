@@ -3,7 +3,7 @@
 ## 構成
 
 ```
-packages/rdsh-pwa/    単一のプラグイン（1パッケージ・1インストール）
+packages/dsh-mobile-maxxing/    単一のプラグイン（1パッケージ・1インストール）
   index.js            ホスト側の入口。4つの host half をここから mount する
   client.js           ブラウザ側。3つの機能を1モジュールにまとめてある
   lib/                ホスト側の各機能
@@ -16,7 +16,7 @@ scripts/pack-all.mjs  配布用 tarball を dist/ にまとめる
 
 DSH のクライアントモジュールシステムは**1パッケージ＝1ブラウザモジュール**です。
 別パッケージに分けると、その分だけ別モジュールとして登録され、インストール・設定・
-有効化がすべて分散します。もともと別々だった3つのプラグイン（`rdsh-pwa` / `rdsh-mobile-ux` /
+有効化がすべて分散します。もともと別々だった3つのプラグイン（`dsh-mobile-maxxing` / `rdsh-mobile-ux` /
 `rdsh-session-id-copy`）と、ホスト専用だった `rdsh-markdown-cjk` は、この理由で1つにまとめました。
 
 `client.js` は「もとの各プラグインの `factory` 本体をそのまま関数に包んだもの」を
@@ -47,7 +47,7 @@ DSH のクライアントモジュールシステムは**1パッケージ＝1ブ
 
 ```sh
 npm test                                  # 全部（37件）
-node --test packages/rdsh-pwa/tests/plugin.test.mjs   # 1ファイルだけ
+node --test packages/dsh-mobile-maxxing/tests/plugin.test.mjs   # 1ファイルだけ
 ```
 
 `tests/e2e.mjs` は実ブラウザでの確認用で、`npm test` には含めていません。
@@ -65,7 +65,7 @@ gh release create v0.2.1 dist/*.tgz
 
 統合前の履歴は以下に残しています。
 
-- `kuraneko1/DSH-PWA` — `rdsh-pwa` / `rdsh-mobile-ux`
+- `kuraneko1/DSH-PWA` — `dsh-mobile-maxxing` / `rdsh-mobile-ux`
 - `kuraneko1/rdsh-markdown-cjk`
 - ローカルのみだったもの: `rdsh-session-id-copy`
 

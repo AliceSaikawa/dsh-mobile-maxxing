@@ -3,6 +3,6 @@
 # the client module system maps one package to one browser module, so the
 # behaviours cannot be separate packages without also being separate modules.
 - insert:
-    - id: rdsh-pwa
-      name: "rdsh-pwa"
+    - id: dsh-mobile-maxxing
+      name: "dsh-mobile-maxxing"
       config: {}

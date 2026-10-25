@@ -47,7 +47,7 @@ function mount(config) {
 }
 
 test('the CJK fix is part of the merged package, not its own plugin', () => {
-	// It ships inside rdsh-pwa now; index.js mounts it alongside the rest.
+	// It ships inside dsh-mobile-maxxing now; index.js mounts it alongside the rest.
 	assert.equal(typeof apply, 'function');
 });
 

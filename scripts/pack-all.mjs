@@ -13,7 +13,7 @@ const dist = join(root, "dist");
 rmSync(dist, { recursive: true, force: true });
 mkdirSync(dist, { recursive: true });
 
-// The repository root is the published package; packages/rdsh-pwa/ is the
+// The repository root is the published package; packages/dsh-mobile-maxxing/ is the
 // implementation and ships inside it.
 const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const packages = [{
@@ -54,7 +54,7 @@ const packed = [];
 for (const item of packages) {
 	execFileSync("npm", ["pack", "--pack-destination", dist], { cwd: item.directory, stdio: "pipe" });
 	// A second copy under a version-free name, so documentation can link
-	// `releases/latest/download/rdsh-pwa.tgz` and keep working across versions.
+	// `releases/latest/download/dsh-mobile-maxxing.tgz` and keep working across versions.
 	copyFileSync(join(dist, item.file), join(dist, item.alias));
 	packed.push(item);
 	console.log(`packed ${item.file} (+ ${item.alias})`);

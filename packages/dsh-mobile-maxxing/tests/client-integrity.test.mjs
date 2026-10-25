@@ -239,7 +239,7 @@ test("the device theme never writes the shared preference", () => {
 	// #5: theme.setTheme() writes the profile, which is what propagated a phone
 	// change to every connected browser. The override must stay browser-local.
 	assert.equal(/setTheme\s*\(/.test(stripLiterals(CLIENT)), false, "theme.setTheme() must never be called");
-	assert.match(CLIENT, /rdsh-pwa:device-theme/, "the choice is stored per browser");
+	assert.match(CLIENT, /dsh-mobile-maxxing:device-theme/, "the choice is stored per browser");
 	assert.match(CLIENT, /data-ds-dark-theme/, "the override repaints the upstream palette attribute");
 });
 
@@ -308,7 +308,7 @@ test("upstream hooks are styled only inside the phone query", () => {
 	const allow = [
 		/^html\[data-rdsh-safe-(top|bottom|left|right)\]/,
 		/^html\[data-rdsh-native-gap\]/,
-		/^html\[data-rdsh-pwa=/,
+		/^html\[data-dsh-mobile-maxxing=/,
 		/^html\[data-rdsh-hide-settings\]/,
 		/^\[data-rdsh-session-frame\]$/,
 	];

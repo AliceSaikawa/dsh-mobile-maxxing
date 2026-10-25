@@ -221,7 +221,7 @@ function boot({ theme = null, seed = {} } = {}) {
 test("without a theme service nothing is painted and nothing throws", () => {
 	const { api, body, documentElement, sandbox } = boot({
 		theme: null,
-		seed: { "rdsh-pwa:device-theme": "dark" },
+		seed: { "dsh-mobile-maxxing:device-theme": "dark" },
 	});
 	assert.ok(api !== undefined, "the debug surface is live");
 	assert.equal(body.hasAttribute("data-ds-dark-theme"), false, "the shared palette is untouched");
@@ -233,7 +233,7 @@ test("a stored choice repaints the palette and survives a later theme/change", a
 	const snapshot = { preference: "light", active: { colorScheme: "light", tokens: {} } };
 	const { api, body, documentElement, listeners, sandbox } = boot({
 		theme: { getTheme: () => snapshot },
-		seed: { "rdsh-pwa:device-theme": "dark" },
+		seed: { "dsh-mobile-maxxing:device-theme": "dark" },
 	});
 	assert.equal(body.hasAttribute("data-ds-dark-theme"), true, "dark choice is applied at boot");
 	assert.equal(documentElement.getAttribute("data-rdsh-device-theme"), "dark");
@@ -250,7 +250,7 @@ test("choosing the shared theme gives the palette back", async () => {
 	const snapshot = { preference: "light", active: { colorScheme: "light", tokens: {} } };
 	const { api, body, documentElement, sandbox } = boot({
 		theme: { getTheme: () => snapshot },
-		seed: { "rdsh-pwa:device-theme": "dark" },
+		seed: { "dsh-mobile-maxxing:device-theme": "dark" },
 	});
 	assert.equal(body.hasAttribute("data-ds-dark-theme"), true);
 
@@ -258,14 +258,14 @@ test("choosing the shared theme gives the palette back", async () => {
 	assert.equal(body.hasAttribute("data-ds-dark-theme"), false, "the recorded baseline is restored");
 	assert.equal(documentElement.getAttribute("data-rdsh-device-theme"), null);
 	assert.equal(sandbox.document.documentElement.style.colorScheme, "");
-	assert.equal(sandbox.localStorage.getItem("rdsh-pwa:device-theme"), null);
+	assert.equal(sandbox.localStorage.getItem("dsh-mobile-maxxing:device-theme"), null);
 });
 
 test("a registered palette turns the override off instead of mixing tokens", () => {
 	const snapshot = { preference: "custom", active: { colorScheme: "dark", tokens: { "--dsw-alias-bg-base": "#101010" } } };
 	const { api, body, documentElement } = boot({
 		theme: { getTheme: () => snapshot },
-		seed: { "rdsh-pwa:device-theme": "light" },
+		seed: { "dsh-mobile-maxxing:device-theme": "light" },
 	});
 	assert.equal(body.hasAttribute("data-ds-dark-theme"), false, "the shared registered theme's palette stands");
 	assert.equal(documentElement.getAttribute("data-rdsh-device-theme"), null);

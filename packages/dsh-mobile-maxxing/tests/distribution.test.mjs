@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 const packageDir = join(here, "..");
 const repo = join(packageDir, "..", "..");
-// The repository root is the published package; packages/rdsh-pwa ships inside it.
+// The repository root is the published package; packages/dsh-mobile-maxxing ships inside it.
 const manifest = JSON.parse(await readFile(join(repo, "package.json"), "utf8"));
 
 test("the manifest is a DSH bundle with a client half", async () => {
@@ -51,7 +51,7 @@ test("the inventory can read a title, a description and an icon", async () => {
 });
 
 test("the docs use the plugin command DSH takes", async () => {
-	for (const doc of ["README.md", join("packages", "rdsh-pwa", "README.md")]) {
+	for (const doc of ["README.md", join("packages", "dsh-mobile-maxxing", "README.md")]) {
 		const text = await readFile(join(repo, doc), "utf8");
 		assert.doesNotMatch(text, /dsh plugin add\b/, `${doc}: "dsh plugin add" needs --profile`);
 		assert.doesNotMatch(text, /^\s*cd ~\/\.dsh\/profiles\/web/m,

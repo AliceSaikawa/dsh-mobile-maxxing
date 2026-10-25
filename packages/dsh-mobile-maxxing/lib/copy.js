@@ -1,5 +1,5 @@
 /**
- * rdsh-pwa — UI copy, in one place.
+ * dsh-mobile-maxxing — UI copy, in one place.
  *
  * The package used to ship Japanese literals in `client.js`, `sw.js` and
  * `notify/host.js` while the shell it decorates is served in `en`. This module
@@ -16,7 +16,7 @@
  * find controls, not text it renders. They stay bilingual on purpose so a
  * future `ja` shell keeps working. Do not translate them; add a locale.
  *
- * @module rdsh-pwa/copy
+ * @module dsh-mobile-maxxing/copy
  */
 
 /** Every string this package renders, keyed by namespace. */

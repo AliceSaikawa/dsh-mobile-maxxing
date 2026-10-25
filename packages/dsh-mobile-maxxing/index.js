@@ -1,5 +1,5 @@
 /**
- * rdsh-pwa — host half.
+ * dsh-mobile-maxxing — host half.
  *
  * Serves what the browser needs to treat the DSH Web GUI as an installable
  * app, without patching the installed DSH dist:
@@ -16,7 +16,7 @@
  * Every route is registered on the Web server's exact-route table, so it wins
  * over the SPA fallback and stays alive across HMR recompositions.
  *
- * @module rdsh-pwa
+ * @module dsh-mobile-maxxing
  */
 
 import { createHash } from "node:crypto";
@@ -40,7 +40,7 @@ export const inject = [];
  * recognise each other's output, so a version bump here would make each tap
  * add a second set of PWA meta tags to the same response.
  */
-const INDEX_MARKER = "<!--rdsh-pwa-->";
+const INDEX_MARKER = "<!--dsh-mobile-maxxing-->";
 
 /** The browser half reads these globals; presence is what "payload injected" means. */
 const COPY_ASSIGNMENT = /(?:globalThis|self|window)\.__RDSH_PWA_COPY__\s*=/;
@@ -337,7 +337,7 @@ export function apply(ctx, config) {
 			}
 			ctx.inject(services, (scope) => mount(scope, settings));
 		} catch (error) {
-			console.error(`[rdsh-pwa] ${label} host half failed to mount`, error);
+			console.error(`[dsh-mobile-maxxing] ${label} host half failed to mount`, error);
 		}
 	};
 	// Notifications are their own module: the copy, the VAPID pair, the push
@@ -348,7 +348,7 @@ export function apply(ctx, config) {
 	// explicit `notifications.lang` in the profile patch still wins.
 	const notifyConfig = normalizeNotifyConfig(config?.notifications);
 	if (typeof config?.notifications?.lang !== "string") notifyConfig.lang = cfg.lang;
-	mountPart("rdsh-pwa/notify", [], applyNotify, notifyConfig);
+	mountPart("dsh-mobile-maxxing/notify", [], applyNotify, notifyConfig);
 	// mobile-ux and markdown-cjk inject what they need inside their own apply.
 	mountPart("rdsh-mobile-ux", [], applyMobileUx, config?.mobileUx);
 	mountPart("rdsh-markdown-cjk", [], applyMarkdownCjk, config?.markdownCjk);

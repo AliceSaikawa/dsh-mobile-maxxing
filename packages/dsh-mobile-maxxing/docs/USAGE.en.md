@@ -1,6 +1,6 @@
 # Usage (English)
 
-Everything `rdsh-pwa` does, in detail. **For installation see the [README](../README.md#install).**
+Everything `dsh-mobile-maxxing` does, in detail. **For installation see the [README](../README.md#install).**
 
 日本語: [USAGE.ja.md](USAGE.ja.md)
 
@@ -10,7 +10,7 @@ Four plugins that used to be separate, merged into one.
 
 | Was | Now |
 | --- | --- |
-| `rdsh-pwa` | PWA: installable, offline launch, notification send/receive, notification sounds |
+| `dsh-mobile-maxxing` | PWA: installable, offline launch, notification send/receive, notification sounds |
 | `rdsh-mobile-ux` | Phone-width UX: drawer, settings, composer, code view, in-app banners |
 | `rdsh-markdown-cjk` | Fixes broken autolinks around CJK text (host only) |
 | `rdsh-session-id-copy` | Adds a session-id copy row to the session menu |
@@ -129,7 +129,7 @@ Volume is 0–100% and both choices are stored in `localStorage`.
 ### Copy and behaviour
 
 ```yaml
-- id: rdsh-pwa
+- id: dsh-mobile-maxxing
   config:
     notifications:
       appName: "DSH"
@@ -161,7 +161,7 @@ Web Push is implemented directly on `node:crypto`; no push library is involved.
 - **Encryption (RFC 8291 / 8188)** — ECDH → HKDF → AES-128-GCM, including the `aes128gcm`
   record framing
 
-Keys and subscriptions live in `~/.dsh/rdsh-pwa/push.json` (mode `0600`). The VAPID `sub`
+Keys and subscriptions live in `~/.dsh/dsh-mobile-maxxing/push.json` (mode `0600`). The VAPID `sub`
 is resolved from `config.notifications.subject`, then the `https` origin of the newest
 subscription, then `mailto:dsh@example.com` — Apple rejects `mailto:root@localhost` with
 `403 BadJwtToken`.
@@ -173,7 +173,7 @@ so an unvalidated endpoint would be a way to park an internal URL in the store.
 ### Relation to the old plugin
 
 This package does not share an API or a service worker with `dsh-notify-push`. Its routes
-are `/api/rdsh-pwa/push/…`. If both are installed the service-worker registration would
+are `/api/dsh-mobile-maxxing/push/…`. If both are installed the service-worker registration would
 collide, so this package redirects a `/push/sw.js` registration to its own `/sw.js` (the
 wrap touches nothing else and is removed on dispose).
 
@@ -192,16 +192,16 @@ The browser half reads only its own globals (`__RDSH_PWA__`, `__RDSH_PWA_SETTING
 
 ## Migrating from the split plugins
 
-When moving from the old `rdsh-pwa` + `rdsh-mobile-ux` pair, translate the profile patch
+When moving from the old `dsh-mobile-maxxing` + `rdsh-mobile-ux` pair, translate the profile patch
 as follows. **This package never edits the profile.**
 
 - Move `rdsh-mobile-ux`'s `runningAnimation` / `hideLabels` / `showHiddenControls` to
-  `rdsh-pwa.mobileUx.*`
+  `dsh-mobile-maxxing.mobileUx.*`
 - Remove the plugins this package replaces from the profile: `rdsh-mobile-ux`,
   `rdsh-markdown-cjk`, `rdsh-session-id-copy`, `dsh-notify-push`. Also remove
   `rdsh-mobile-ui` (layout) and `@local/dsh-sound` (sounds) if present, or the layout and
   the notification sound are controlled twice
-- Keep one `rdsh-pwa` entry. Put `lang` (default `ja`) and `appleStatusBarStyle` in its
+- Keep one `dsh-mobile-maxxing` entry. Put `lang` (default `ja`) and `appleStatusBarStyle` in its
   config
 
 Leaving the duplicates installed duplicates routes, slots and notifications.
@@ -222,7 +222,7 @@ the module against a stub environment.
 
 ## How it fits together
 
-- The host half serves `/manifest.webmanifest`, `/sw.js` and `/api/rdsh-pwa/push/…`, and
+- The host half serves `/manifest.webmanifest`, `/sw.js` and `/api/dsh-mobile-maxxing/push/…`, and
   adds the PWA metadata to the served index
 - The browser half is loaded verbatim by the client module loader; it installs the layout,
   registers the service worker and renders the banners

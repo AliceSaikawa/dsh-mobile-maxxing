@@ -1,6 +1,6 @@
 {
-  "name": "rdsh-pwa",
-  "version": "0.4.1",
+  "name": "dsh-mobile-maxxing",
+  "version": "0.5.0",
   "type": "module",
   "license": "MIT",
   "description": "DSH Web GUI をインストール可能なアプリにし、スマホ幅のUX・通知・小物をまとめて改善する統合プラグイン",
@@ -57,9 +57,9 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/kuraneko1/dsh-mobile-maxxing.git",
-    "directory": "packages/rdsh-pwa"
+    "directory": "packages/dsh-mobile-maxxing"
   },
-  "homepage": "https://github.com/kuraneko1/dsh-mobile-maxxing/tree/main/packages/rdsh-pwa#readme",
+  "homepage": "https://github.com/kuraneko1/dsh-mobile-maxxing/tree/main/packages/dsh-mobile-maxxing#readme",
   "bugs": {
     "url": "https://github.com/kuraneko1/dsh-mobile-maxxing/issues"
   }

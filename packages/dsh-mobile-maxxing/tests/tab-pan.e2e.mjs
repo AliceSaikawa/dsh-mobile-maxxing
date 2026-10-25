@@ -190,9 +190,9 @@ try {
 			before);
 		check("the fixture scrolls horizontally with smooth behavior",
 			before?.tabs?.overflowX === "auto" && before?.tabs?.scrollBehavior === "smooth", before?.tabs);
-		check("CSS_PHONE reopens tab/strip/tabs/fill to pan-y",
-			after?.tab?.touchAction === "pan-y" && after?.strip?.touchAction === "pan-y"
-			&& after?.tabs?.touchAction === "pan-y" && after?.fill?.touchAction === "pan-y",
+		check("CSS_PHONE reopens tab/strip/tabs/fill to pan-x pan-y",
+			after?.tab?.touchAction === "pan-x pan-y" && after?.strip?.touchAction === "pan-x pan-y"
+			&& after?.tabs?.touchAction === "pan-x pan-y" && after?.fill?.touchAction === "pan-x pan-y",
 			after);
 		await drag(page, [100, 50], horizontal(100));
 		check("a tab-body swipe pans the strip", (await scrollLeft(page)) > 20, await scrollLeft(page));

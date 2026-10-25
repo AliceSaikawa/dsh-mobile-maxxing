@@ -666,11 +666,12 @@ test("the viewport zoom lock is mobile-only and restorable", () => {
 	// and put back on dispose.
 	const body = functionHead("enforceNoZoomViewport", 1600);
 	assert.match(body, /if \(!phone\(\)\) \{\s*\n\s*releaseViewportLock\(\);/, "the lock is applied on a desktop");
-	assert.match(
-		body,
-		/const content = "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover";/,
-		"the fixed viewport string is gone",
-	);
+	assert.match(body, /const content = viewportContent\(meta\.getAttribute\("content"\), \{/, "the viewport is not merged over the shipped value");
+	// The mobile value locks zoom, covers the notch and keeps the keyboard layout
+	// in step; merging means no key can be emitted twice.
+	assert.match(body, /"maximum-scale": "maximum-scale=1"/, "the zoom lock is gone");
+	assert.match(body, /"interactive-widget": "interactive-widget=resizes-content"/, "the keyboard layout token is gone");
+	assert.match(CLIENT, /function viewportContent\(current, wanted\)/, "the viewport merger is gone");
 	assert.match(body, /if \(meta\.getAttribute\("content"\) !== content\) meta\.setAttribute\("content", content\);/, "the viewport is not applied");
 	assert.match(CLIENT, /viewportBaseline = \{ content: viewportMetaOwned \? null : meta\.getAttribute\("content"\) \};/, "the original content is not captured");
 	assert.match(CLIENT, /meta\.setAttribute\("content", baseline\.content\)/, "the original content is not restored");

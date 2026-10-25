@@ -991,15 +991,17 @@ test("a closed panel or a desktop width clears the terminal fit", () => {
 	assert.equal(terminal.screen.style.height, undefined, "a closed panel keeps no inline height");
 	booted.disposeAll();
 
-	// A 390px desktop window is still desktop mode and never fits.
+	// A 390px desktop window builds no plugin: no visual-viewport handler is
+	// installed and no fit is ever attempted.
 	const desktop = bootGestures({ mode: "desktop", width: 390 });
+	assert.equal(visualViewportHandler(desktop), undefined, "a desktop installed a visual-viewport handler");
 	const desktopCollapse = panelFixture(desktop.doc);
 	const desktopTerminal = terminalFixture(desktop.doc, desktopCollapse);
 	desktop.drainFrames();
 	desktop.visualViewport.height = 544;
-	visualViewportHandler(desktop)();
 	desktop.drainFrames();
 	assert.equal(desktopTerminal.screen.style.height, undefined, "a desktop window never fits");
+	assert.equal(desktop.doc.documentElement.hasAttribute("data-rdsh-rightpanel-open"), false, "a desktop wrote mobile panel state");
 	desktop.disposeAll();
 
 	// A 1024px mobile tablet keeps the fit feature.

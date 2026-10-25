@@ -101,6 +101,33 @@ window.__ModuleLoader__.load({
       return probeValues(key, fallback).map((value) => `${tag}[aria-label*="${cssValue(value)}"]`).join(", ");
     }
 
+    /**
+     * Merge `<meta name="viewport">` directives without duplicating a key.
+     *
+     * The host's early head does not touch the viewport (the stock meta is
+     * parsed later, and a second one must not appear), so the mobile half owns
+     * the value. Unknown tokens the page already carries are kept: only the
+     * keys in `wanted` are replaced, and each key appears once.
+     */
+    function viewportContent(current, wanted) {
+      const order = [];
+      const values = new Map();
+      for (const token of String(current ?? "").split(",")) {
+        const trimmed = token.trim();
+        if (trimmed === "") continue;
+        const at = trimmed.indexOf("=");
+        const key = (at === -1 ? trimmed : trimmed.slice(0, at)).trim().toLowerCase();
+        if (key === "" || values.has(key)) continue;
+        values.set(key, trimmed);
+        order.push(key);
+      }
+      for (const [key, value] of Object.entries(wanted)) {
+        if (!values.has(key)) order.push(key);
+        values.set(key, value);
+      }
+      return order.map((key) => values.get(key)).join(", ");
+    }
+
     // ---------------------------------------------------------------------
 
     // Device mode: the host bootstrap decides it once, this bundle consumes it.
@@ -128,6 +155,9 @@ window.__ModuleLoader__.load({
     }
 
     const DEVICE_MODE = readDeviceMode();
+
+    // Desktop must keep the upstream UI: do not build or apply any plugin part.
+    if (DEVICE_MODE !== "mobile") return { apply() {} };
 
     // Keep the DOM marker in step with the value this bundle will use. This is
     // propagation of the host decision, not a second classifier.
@@ -930,7 +960,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         // viewport still has to allow drawing under the notch.
         const viewport = document.querySelector('meta[name="viewport"]');
         if (viewport !== null && !/viewport-fit\s*=\s*cover/i.test(viewport.content)) {
-          viewport.content = `${viewport.content}, viewport-fit=cover`;
+          viewport.content = viewportContent(viewport.content, { "viewport-fit": "viewport-fit=cover" });
         }
 
         const modeQueries = [STANDALONE_QUERY, FULLSCREEN_QUERY, MINIMAL_QUERY].map((query) => window.matchMedia(query));
@@ -2118,6 +2148,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       clearModelSearch();
       clearActivityChips();
       clearPreviewTools();
+      // The file-tree tools own document-level pointer/scroll listeners. This
+      // teardown must retire them too, or a mobile boot leaves them behind.
+      disposeWorkspaceTools();
       clearComposerHooks();
       clearTypingAnimations();
       removeDrawerNodes();
@@ -3781,7 +3814,17 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (viewportBaseline === null) {
         viewportBaseline = { content: viewportMetaOwned ? null : meta.getAttribute("content") };
       }
-      const content = "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover";
+      // `interactive-widget=resizes-content` keeps the layout viewport in step
+      // with the on-screen keyboard on Android/Chrome; iOS shrinks only the
+      // visual viewport, which the mobile UX handles itself.
+      const content = viewportContent(meta.getAttribute("content"), {
+        width: "width=device-width",
+        "initial-scale": "initial-scale=1",
+        "maximum-scale": "maximum-scale=1",
+        "user-scalable": "user-scalable=no",
+        "viewport-fit": "viewport-fit=cover",
+        "interactive-widget": "interactive-widget=resizes-content",
+      });
       if (meta.getAttribute("content") !== content) meta.setAttribute("content", content);
     }
 

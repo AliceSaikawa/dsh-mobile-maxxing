@@ -75,13 +75,16 @@ untranslated dictionary keys fall back to English.
 
 The mobile UI is selected by the **device mode**, not by the window width. A small
 script injected by the host at the top of `<head>` decides it once in the browser and
-writes `globalThis.__RDSH_DEVICE_MODE__` plus `html[data-rdsh-device-mode]`
+writes `globalThis.__RDSH_DEVICE_MODE__` and, in mobile mode only,
+`html[data-rdsh-device-mode]` (a desktop document carries no marker)
 (`"mobile"` or `"desktop"`). The same HTML/JS is served to every device; there is no
 SSR. Client code consumes the value; it never re-classifies from UA, width, pointer
 kind or touch points.
 
 Resolution order: a valid `__RDSH_DEVICE_MODE__`, then a valid
-`data-rdsh-device-mode` attribute, then `"desktop"` (fail closed). If the two
+`data-rdsh-device-mode` attribute, then `"desktop"` (fail closed). A desktop
+build is a hard no-op: no part is applied, so no DOM, style, listener or storage
+is touched. If the two
 disagree, the global wins and the root attribute is synchronised to it.
 
 - Phones (iPhone/Android, portrait or landscape) and tablets (iPad, Android tablets)
@@ -165,12 +168,12 @@ Volume is 0–100% and both choices are stored in `localStorage`.
       subject: ""             # VAPID contact; "" means the app's own origin
 ```
 
-With the `onlyMobileTurns: true` default a desktop send is never notified. To get
-notifications on a desktop too, turn on **Settings → Mobile → "Notify me for turns
-sent from this browser too"** in that browser. It does not write the host config:
-it marks the browser's own sends as phone sends, so the choice is per browser
-(`localStorage`). Set `onlyMobileTurns: false` in the profile to notify every
-device instead.
+With the `onlyMobileTurns: true` default a desktop send is never notified. The
+switch lives in **Settings → Mobile** of a browser that runs the mobile UI; a PC
+never shows it because the plugin applies nothing there. It does not write the
+host config: it marks the browser's own sends as phone sends, so the choice is per
+browser (`localStorage`). Set `onlyMobileTurns: false` in the profile to notify
+every device instead.
 
 Placeholders: `{app}` `{session}` everywhere; `{status}` `{detail}` `{reason}` for a
 turn end; `{header}` `{question}` `{count}` for a question. An unknown placeholder stays

@@ -468,11 +468,14 @@ function boot({ mode = "mobile", width = 390 } = {}) {
 		on: () => () => {},
 	};
 	plugin.apply(ctx);
-	const tools = sandbox.__RDSH_WORKSPACE_TEST__.workspace;
-	assert.ok(tools, "the workspace test seam was not installed");
+	const tools = sandbox.__RDSH_WORKSPACE_TEST__?.workspace;
+	// Desktop builds no plugin, so the seam is never installed.
+	if (mode !== "mobile") assert.equal(tools, undefined, "a desktop boot installed the workspace tools");
+	else assert.ok(tools, "the workspace test seam was not installed");
 
 	const reset = () => {
-		tools.disposeWorkspaceTools();
+		// A desktop boot has no tools; reset only clears this harness's state.
+		tools?.disposeWorkspaceTools();
 		document.body.childNodes = [];
 		document.activeElement = document.body;
 		sandbox.CSS.highlights.clear();
@@ -1072,7 +1075,8 @@ test("#43 the root path is a keyboard menu trigger only in mobile mode and resto
 	desktopTree.path.setAttribute("tabindex", "-1");
 	desktopTree.path.setAttribute("role", "note");
 	desktopTree.path.setAttribute("aria-label", "custom root");
-	desktop.tools.decorateWorkspaceFiles();
+	// Nothing decorates on a desktop: the seam does not exist.
+	assert.equal(desktop.tools, undefined, "a desktop boot installed the workspace tools");
 	assert.equal(desktopTree.path.hasAttribute("data-rdsh-files-root-path"), false, "desktop kept the root trigger hook");
 	assert.equal(desktopTree.path.getAttribute("tabindex"), "-1", "desktop did not restore tabindex");
 	assert.equal(desktopTree.path.getAttribute("role"), "note", "desktop did not restore role");
@@ -1106,8 +1110,7 @@ test("the new tree/search work survives width but is absent on desktop and remov
 	const desktop = boot({ mode: "desktop", width: 390 });
 	desktop.reset();
 	const desktopTree = filesTree(desktop.document);
-	desktop.tools.decorateWorkspaceFiles();
-	desktop.tools.installWorkspaceTools();
+	assert.equal(desktop.tools, undefined, "a desktop boot installed the workspace tools");
 	assert.equal(desktopTree.root.querySelector("[data-rdsh-files-search]"), null, "desktop got the search row");
 	assert.equal(desktopTree.root.hasAttribute("data-rdsh-files-tree"), false, "desktop got the tree hook");
 	assert.equal(desktopTree.path.hasAttribute("data-rdsh-files-root-path"), false, "desktop got the path hook");
@@ -1136,8 +1139,7 @@ test("the new listeners and CSS stay mobile-mode only", () => {
 	const desktop = boot({ mode: "desktop", width: 390 });
 	desktop.reset();
 	const desktopTree = filesTree(desktop.document);
-	desktop.tools.decorateWorkspaceFiles();
-	desktop.tools.installWorkspaceTools();
+	assert.equal(desktop.tools, undefined, "a desktop boot installed the workspace tools");
 	desktop.document.dispatchEvent(event("pointerdown", desktopTree.readme.querySelector("button"), { pointerType: "touch" }));
 	desktop.runTimers(500);
 	assert.equal(desktop.document.querySelector("[data-rdsh-file-menu]"), null, "a desktop press opened the phone menu");

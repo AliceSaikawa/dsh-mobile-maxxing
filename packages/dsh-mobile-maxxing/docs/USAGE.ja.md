@@ -81,13 +81,15 @@ PC と共通のテーマは 設定 → 一般 → 外観 です。
 
 端末モードは**幅ではなく端末**で決まります。ホストが `<head>` 先頭に注入した小さな脚本が、
 ブラウザ上で 1 回だけ判定して `globalThis.__RDSH_DEVICE_MODE__` と
-`html[data-rdsh-device-mode]` に `"mobile"` または `"desktop"` を書きます
+`html[data-rdsh-device-mode]` を書きます。属性は mobile のときだけで、desktop では付きません
 （同一の HTML/JS を全端末に配信し、SSR はしません）。クライアントはその値を使うだけで、
 UA・幅・ポインタ種別・タッチ点数から判定し直しません。
 
 読み込み順は、**有効な `__RDSH_DEVICE_MODE__` → 有効な
 `html[data-rdsh-device-mode]` → どちらも無効なら desktop**（fail closed）です。
-矛盾する場合は global が優先され、`html` の属性もその値に同期されます。
+矛盾する場合は global が優先されます。desktop ではクライアントは**何も構築せず**
+（PWA・設定タブ・セッションIDコピー等すべての part を適用せず）、DOM・style・listener・
+storage のいずれにも触れません。
 
 - スマホ（iPhone/Android、縦横とも）とタブレット（iPad、Android タブレット）は mobile。
   iPadOS のデスクトップ版 UA（Macintosh + `maxTouchPoints`）もタブレットとして mobile。
@@ -162,9 +164,10 @@ mobile モードでだけ効く装飾（セッション行の実行中アニメ�
       onlyMobileTurns: true   # このスマホから送ったターンだけ通知する
 ```
 
-`onlyMobileTurns: true` のままだと、PC から送ったターンは通知されません。PC 側でも受け取りたい
-ときは、そのブラウザの **設定 → モバイル →「このブラウザから送ったターンも通知する」** を ON に
-します。ホスト設定は書き換えず、送信時に「スマホから送った」印を付けるだけなので、設定は
+`onlyMobileTurns: true` のままだと、PC から送ったターンは通知されません。この切り替えは
+**モバイルとして動くブラウザ**の 設定 → モバイル にあり、PC ではプラグイン自体が何もしないため
+表示されません（PC 起点のターンを受け取りたいときは、受け取るモバイル端末側で ON にします）。
+ホスト設定は書き換えず、送信時に「スマホから送った」印を付けるだけなので、設定は
 ブラウザごと（`localStorage`）です。プロファイル側で全端末の通知を止めたいときは
 `onlyMobileTurns` を `false` にしてください。
 

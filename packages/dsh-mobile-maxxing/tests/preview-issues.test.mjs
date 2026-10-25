@@ -520,7 +520,9 @@ function boot({ storage = {}, mode = "mobile", width = 390 } = {}) {
 	};
 	plugin.apply(ctx);
 	const api = sandbox.__RDSH_MOBILE_UX__;
-	assert.ok(api !== undefined, "the diagnostics surface is present");
+	// Desktop builds no plugin: no diagnostics, no decoration.
+	if (mode !== "mobile") assert.equal(api, undefined, "a desktop boot published mobile diagnostics");
+	else assert.ok(api !== undefined, "the diagnostics surface is present");
 	return {
 		sandbox,
 		document,
@@ -818,7 +820,7 @@ test("#35 mode keeps the kebab at any width; a narrow desktop never gets it", ()
 	const desktop = boot({ mode: "desktop", width: 390 });
 	const desktopPreview = makePreview(desktop);
 	const desktopReview = makeReview(desktop);
-	desktop.api.decorateNow();
+	assert.equal(desktop.api, undefined, "a desktop booted the mobile half");
 	assert.equal(desktop.document.querySelectorAll("[data-rdsh-preview-kebab]").length, 0, "a desktop got the kebab");
 	assert.equal(desktopPreview.header.hasAttribute("data-rdsh-preview-header"), false, "the header hook reached a desktop");
 	assert.equal(desktop.document.querySelectorAll("[data-rdsh-preview-secondary]").length, 0, "the moved-action hooks reached a desktop");
@@ -827,7 +829,6 @@ test("#35 mode keeps the kebab at any width; a narrow desktop never gets it", ()
 
 	// Widening a desktop window still does not switch it to mobile.
 	setWidth(desktop, 1024);
-	desktop.api.decorateNow();
 	assert.equal(desktop.document.querySelectorAll("[data-rdsh-preview-kebab]").length, 0, "a width change switched a desktop to mobile");
 	desktop.dispose();
 });
@@ -957,32 +958,46 @@ test("#34 a surface remount with no user choice gets the default once again", ()
 	env.dispose();
 });
 
-test("#34 desktop mode remembers an OFF without phone hooks; width never switches it", async () => {
-	const env = boot({ mode: "desktop", width: 390 });
+test("#34 the OFF memory follows the mode, not the width; a desktop records nothing", async () => {
+	// The OFF memory is a mobile-surface choice. It has to survive a width
+	// change (390 -> 1024) without the plugin re-clicking the user's toggle.
+	const env = boot({ mode: "mobile", width: 390 });
 	makePreview(env);
 	const review = makeReview(env, { tab: "tab-a", pressed: true });
 	env.api.decorateNow();
-	assert.equal(review.state.clicks, 0, "desktop auto-enabled review wrap");
+	assert.equal(review.state.clicks, 0, "mobile auto-enabled review wrap");
 
-	// The user turns wrap off at a narrow desktop window. That is a real choice
-	// too; only the memory is recorded, and no mobile attribute may appear.
 	review.wrap.dispatchEvent(fakeEvent("click", { target: review.wrap, isTrusted: true }));
 	assert.equal(review.wrap.getAttribute("aria-pressed"), "false");
 	await new Promise((resolve) => setTimeout(resolve, 10));
 	const userClicks = review.state.clicks;
-	assert.equal(userClicks, 1, "the trusted desktop click did not run");
-	assert.equal(env.document.querySelectorAll("[data-rdsh-review]").length, 0, "desktop click painted a review hook");
-	assert.equal(env.document.querySelectorAll("[data-rdsh-review-off]").length, 0, "desktop click painted an OFF hook");
-	assert.equal(env.document.querySelectorAll("[data-rdsh-review-auto]").length, 0, "desktop click painted an auto hook");
-	assert.equal(env.document.querySelectorAll("[data-rdsh-review-wrap]").length, 0, "desktop click painted a wrap hook");
+	assert.equal(userClicks, 1, "the trusted mobile click did not run");
+	// On mobile the surface is decorated and the user's OFF is recorded; the
+	// plugin must not click the toggle again (clicks stay at 1).
+	assert.equal(env.document.querySelectorAll("[data-rdsh-review]").length, 1, "the mobile click did not paint the review hook");
+	assert.equal(env.document.querySelectorAll("[data-rdsh-review-off]").length, 1, "the user's OFF was not recorded");
+	assert.equal(env.document.querySelectorAll("[data-rdsh-review-auto]").length, 0, "the mobile click auto-enabled wrap");
 
-	// Widening the desktop window must not switch it to mobile either.
+	// A wider mobile device is still the same surface: the OFF is remembered
+	// and the plugin never re-clicks the user's toggle.
 	setWidth(env, 1024);
 	env.api.decorateNow();
-	assert.equal(review.wrap.getAttribute("aria-pressed"), "false", "a width change overwrote a desktop OFF");
-	assert.equal(review.state.clicks, userClicks, "a width change clicked a desktop-off surface");
-	assert.equal(env.document.querySelectorAll("[data-rdsh-review]").length, 0, "a width change painted mobile hooks on a desktop");
+	assert.equal(review.wrap.getAttribute("aria-pressed"), "false", "a width change overwrote the mobile OFF");
+	assert.equal(review.state.clicks, userClicks, "a width change clicked a user-off surface");
+	assert.equal(env.document.querySelectorAll("[data-rdsh-review-off]").length, 1, "a width change dropped the recorded OFF");
 	env.dispose();
+
+	// Desktop: the plugin is not built, so a trusted click is the app's alone
+	// and nothing is recorded or painted.
+	const desktop = boot({ mode: "desktop", width: 390 });
+	const desktopReview = makeReview(desktop, { tab: "tab-a", pressed: true });
+	assert.equal(desktop.api, undefined, "a desktop booted the mobile half");
+	desktopReview.wrap.dispatchEvent(fakeEvent("click", { target: desktopReview.wrap, isTrusted: true }));
+	assert.equal(desktopReview.state.clicks, 1, "the app's own desktop click was swallowed");
+	assert.equal(desktop.document.querySelectorAll("[data-rdsh-review]").length, 0, "a desktop click painted a review hook");
+	setWidth(desktop, 1024);
+	assert.equal(desktop.document.querySelectorAll("[data-rdsh-review]").length, 0, "a width change painted hooks on a desktop");
+	desktop.dispose();
 });
 
 test("#34 an OFF on tab A does not hide tab B when React reuses the root", async () => {

@@ -1,8 +1,9 @@
 # Desktop / mobile boundary (#44) and right-panel layering (#46)
 
 The boundary is the **device mode**, not the window width. A host bootstrap
-classifies the device once and writes `globalThis.__RDSH_DEVICE_MODE__` plus
-`html[data-rdsh-device-mode]` (`"mobile"` or `"desktop"`). The client resolves
+classifies the device once and writes `globalThis.__RDSH_DEVICE_MODE__` for every
+mode plus, in mobile mode only, `html[data-rdsh-device-mode]` (a desktop document
+carries no marker). The client resolves
 the mode in this order: a valid `__RDSH_DEVICE_MODE__`, then a valid
 `data-rdsh-device-mode` attribute, then `"desktop"` (fail closed); it never
 re-classifies. Phones and tablets get the mobile surface at any width; ordinary
@@ -86,20 +87,18 @@ cannot retry the palette. `boundary-issues.test.mjs` disposes with those frames
 still queued, flushes them, and asserts the viewport, palette, animation and
 drawer state stay released.
 
-## Deliberately device-independent (not gated)
+## Desktop is a hard no-op
 
-- PWA shell: manifest, service worker, offline launch, toasts, Web Push and
-  notification routing. The install card itself is shown in mobile mode at any
-  width (a wide tablet is still installable).
-- Host `index.js`: viewport-fit/interactive-widget injection, iOS metadata,
-  dictionaries. These do not change desktop pixel layout.
-- Session-id copy row, CJK autolink fix, terminal touch-to-wheel bridge,
-  desktop notification opt-in (`notifyDeviceTurns`), notification diagnostics
-  (`data-rdsh-badge-hook`, `-sessions-hook`, `-running-subagents`).
-- The Settings → Mobile cards themselves: their own `.rdsh-mux-*` styles are
-  width-independent. The palette choice they expose paints only in mobile mode.
-- Touch input translation (terminal touch-to-wheel, overscroll guard): a touch
-  PC may use it; it is not mobile chrome and does not change the mode.
+`client.js` resolves the mode before it builds anything and returns
+`{ apply() {} }` for a desktop. A PC therefore gets **no part of this package**:
+no PWA shell (no manifest handling, no service worker registration), no
+session-id copy row, no Settings cards or tabs, no terminal touch bridge, and no
+listener, style, timer, fetch or storage read. Every surface described in this
+document is mobile mode only.
+
+The Settings → Mobile cards expose a per-browser opt-in
+(`notifyDeviceTurns`) for receiving desktop-originated turns on a mobile device;
+it is a mobile-side choice and is never read on a PC.
 
 ## #46 layering
 

@@ -327,7 +327,7 @@ test("the browser module registers and boots without a ReferenceError", () => {
  * Boot the client with an open drawer, tap a button carrying `label`, and say
  * whether the drawer's own collapse button was pressed once timers settled.
  */
-function drawerClosedAfterTapping(label, { narrow = true } = {}) {
+function drawerClosedAfterTapping(label, { narrow = true, mode = "mobile" } = {}) {
 	const timers = [];
 	const clickHandlers = [];
 	let collapsePresses = 0;
@@ -340,6 +340,7 @@ function drawerClosedAfterTapping(label, { narrow = true } = {}) {
 	root.firstElementChild = { firstElementChild: drawerFrame };
 
 	bootClient({
+		mode,
 		narrow,
 		schedule: (callback) => timers.push(callback),
 		configureDocument(doc) {
@@ -350,7 +351,9 @@ function drawerClosedAfterTapping(label, { narrow = true } = {}) {
 			};
 		},
 	});
-	assert.equal(clickHandlers.length, 1, "the client listens for clicks once");
+	// Desktop builds no plugin at all, so it must not install the click listener.
+	assert.equal(clickHandlers.length, mode === "mobile" ? 1 : 0, "the client listens for clicks exactly on mobile");
+	if (clickHandlers.length === 0) return false;
 	timers.length = 0;
 
 	const button = element();
@@ -370,16 +373,22 @@ test("tapping a New session button on a phone closes the drawer", () => {
 
 test("other buttons leave the drawer open, and so does a wide screen", () => {
 	assert.equal(drawerClosedAfterTapping("Session actions"), false);
-	assert.equal(drawerClosedAfterTapping("New session", { narrow: false }), false);
+	assert.equal(drawerClosedAfterTapping("New session", { narrow: false, mode: "desktop" }), false);
 });
 
 /**
  * The device predicate is the #17 fix, so it is exposed on the diagnostics
  * object the boot already publishes (`globalThis.__RDSH_MOBILE_UX__`).
  */
-function phoneOf(options) {
+function phoneOf(options = {}) {
 	const { sandbox } = bootClient(options);
 	const diagnostics = sandbox.__RDSH_MOBILE_UX__;
+	const mode = options.mode ?? (options.narrow === true ? "mobile" : "desktop");
+	if (mode !== "mobile") {
+		// Desktop is a hard no-op: no plugin, so no diagnostics to ask.
+		assert.equal(diagnostics, undefined, "a desktop boot published mobile diagnostics");
+		return false;
+	}
 	assert.ok(diagnostics !== undefined, "the mobile half booted and published its diagnostics");
 	assert.equal(typeof diagnostics.phone, "function", "phone() is observable");
 	return diagnostics.phone();
@@ -397,11 +406,10 @@ test("phone() is the bootstrapped device mode, not the width or pointer", () => 
 	assert.equal(phoneOf({ mode: "bogus", narrow: true }), false, "an invalid bootstrap fails closed to desktop");
 });
 
-test("a missing bootstrap fails closed to desktop", () => {
+test("a missing bootstrap fails closed to a desktop no-op without touching the page", () => {
 	const { sandbox } = bootClient({ injectMode: false, narrow: true });
-	assert.equal(sandbox.__RDSH_MOBILE_UX__.state.mode, "desktop", "an absent bootstrap did not fail closed");
-	assert.equal(sandbox.__RDSH_MOBILE_UX__.phone(), false, "an absent bootstrap enabled mobile UI");
-	assert.equal(sandbox.document.documentElement.getAttribute("data-rdsh-device-mode"), "desktop", "the DOM marker was not normalised to desktop");
+	assert.equal(sandbox.__RDSH_MOBILE_UX__, undefined, "an absent bootstrap booted the mobile half");
+	assert.equal(sandbox.document.documentElement.getAttribute("data-rdsh-device-mode"), null, "the client wrote a marker it does not own");
 });
 
 test("a valid mode attribute is the fallback when the global is invalid", () => {
@@ -418,7 +426,7 @@ test("a valid mode attribute is the fallback when the global is invalid", () => 
 	assert.deepEqual(disposeAll(), []);
 });
 
-test("a valid desktop global wins over a mobile attribute and syncs the marker", () => {
+test("a valid desktop global wins over a mobile attribute and leaves the host marker alone", () => {
 	const { sandbox, disposeAll } = bootClient({
 		mode: "desktop",
 		narrow: false,
@@ -426,15 +434,14 @@ test("a valid desktop global wins over a mobile attribute and syncs the marker",
 			doc.documentElement.setAttribute("data-rdsh-device-mode", "mobile");
 		},
 	});
-	assert.equal(sandbox.__RDSH_MOBILE_UX__.state.mode, "desktop", "the global did not win over the attribute");
-	assert.equal(sandbox.__RDSH_MOBILE_UX__.phone(), false, "the contradictory attribute enabled mobile");
-	assert.equal(sandbox.document.documentElement.getAttribute("data-rdsh-device-mode"), "desktop", "the root marker was not synchronised to desktop");
+	assert.equal(sandbox.__RDSH_MOBILE_UX__, undefined, "the contradictory attribute booted the mobile half");
+	assert.equal(sandbox.document.documentElement.getAttribute("data-rdsh-device-mode"), "mobile", "the client rewrote a marker it does not own");
 	assert.deepEqual(disposeAll(), []);
 });
 
 test("PC 390px stays undecorated and a 1024px tablet stays mobile", () => {
 	const pc = bootClient({ mode: "desktop", narrow: true });
-	assert.equal(pc.sandbox.__RDSH_MOBILE_UX__.phone(), false, "a narrow PC became mobile");
+	assert.equal(pc.sandbox.__RDSH_MOBILE_UX__, undefined, "a narrow PC booted the mobile half");
 	assert.equal(pc.sandbox.document.documentElement.hasAttribute("data-rdsh-anim"), false, "a narrow PC got the mobile animation");
 	assert.equal(pc.sandbox.document.documentElement.hasAttribute("data-rdsh-drawer"), false, "a narrow PC got the drawer state");
 
@@ -450,19 +457,17 @@ test("the store reports the mode separately from the layout", () => {
 	assert.equal(state.mode, "mobile", "the bootstrapped mode is in the store");
 	assert.equal(state.narrow, false, "the layout still measures width");
 	assert.equal(state.phone, true, "a wide mobile device keeps the mobile UI");
-	const desktopNarrow = bootClient({ mode: "desktop", narrow: true }).sandbox.__RDSH_MOBILE_UX__.state;
-	assert.equal(desktopNarrow.mode, "desktop");
-	assert.equal(desktopNarrow.narrow, true, "a narrow desktop still reports the geometry");
-	assert.equal(desktopNarrow.phone, false, "a narrow desktop is not mobile UI");
+	const desktopNarrow = bootClient({ mode: "desktop", narrow: true });
+	assert.equal(desktopNarrow.sandbox.__RDSH_MOBILE_UX__, undefined, "a narrow desktop built a mobile store");
 });
 
 test("the saved Enter-sends choice is read when the page loads", () => {
 	// The store is built while the module body runs, so a key constant declared
 	// below it is still uninitialised then. The read is wrapped in try/catch,
 	// which turned that into "off" on every reload without a visible error.
-	const off = bootClient();
+	const off = bootClient({ mode: "mobile" });
 	assert.equal(off.sandbox.__RDSH_MOBILE_UX__.state.enterToSend, false, "Enter inserts a newline by default");
-	const on = bootClient({ storage: { "rdsh-mobile-ux:enter-to-send": "1" } });
+	const on = bootClient({ mode: "mobile", storage: { "rdsh-mobile-ux:enter-to-send": "1" } });
 	assert.equal(on.sandbox.__RDSH_MOBILE_UX__.state.enterToSend, true, "the saved choice survives a reload");
 });
 
@@ -510,11 +515,17 @@ test("isIos trusts Apple platform strings but not Windows or Android", () => {
 	assert.equal(iosOf({ userAgent: "Mozilla/5.0 (Linux; Android 14; Pixel 8) Chrome/120 Mobile Safari/537.36", platform: "Linux armv8l", maxTouchPoints: 5 }), false, "an Android phone was treated as iOS");
 });
 
-test("the desktop notification opt-in is read from this browser", () => {
-	const off = bootClient();
+test("the device-turn opt-in is read on mobile and never boots a desktop", () => {
+	const off = bootClient({ mode: "mobile" });
 	assert.equal(off.sandbox.__RDSH_MOBILE_UX__.state.notifyDeviceTurns, false, "phone-only stays the default");
-	const on = bootClient({ storage: { "rdsh-mobile-ux:notify-device-turns": "1" } });
+	const on = bootClient({ mode: "mobile", storage: { "rdsh-mobile-ux:notify-device-turns": "1" } });
 	assert.equal(on.sandbox.__RDSH_MOBILE_UX__.state.notifyDeviceTurns, true, "the saved opt-in is read");
+	// Saved opt-ins must not resurrect the plugin on a PC.
+	const desktop = bootClient({
+		mode: "desktop",
+		storage: { "rdsh-mobile-ux:notify-device-turns": "1", "dsh-mobile-maxxing:device-theme": "dark" },
+	});
+	assert.equal(desktop.sandbox.__RDSH_MOBILE_UX__, undefined, "a desktop with saved opt-ins booted the mobile half");
 });
 
 test("the legacy hide list applies at phone width even with a fine pointer", () => {
@@ -553,6 +564,7 @@ test("the effect disposer tears down without a ReferenceError or a stale listene
 	const adds = [];
 	const removes = [];
 	const booted = bootClient({
+		mode: "mobile",
 		configureDocument(doc) {
 			const add = doc.addEventListener;
 			const remove = doc.removeEventListener;
@@ -636,12 +648,12 @@ test("the injected language wins over the shell document language", () => {
 	// The host default (ja) must restore the reference UI even when the shell
 	// document stays lang="en"; an explicit en must equally win over a ja
 	// shell. The document language is only the fallback.
-	assert.equal(bootClient({ lang: "ja", configureDocument: shellLang("en") }).sandbox.__RDSH_MOBILE_UX__.lang, "ja");
-	assert.equal(bootClient({ lang: "en", configureDocument: shellLang("ja") }).sandbox.__RDSH_MOBILE_UX__.lang, "en");
-	assert.equal(bootClient({ lang: "ja-JP", configureDocument: shellLang("en") }).sandbox.__RDSH_MOBILE_UX__.lang, "ja");
-	assert.equal(bootClient({ configureDocument: shellLang("ja") }).sandbox.__RDSH_MOBILE_UX__.lang, "ja");
-	assert.equal(bootClient({ configureDocument: shellLang("en") }).sandbox.__RDSH_MOBILE_UX__.lang, "en");
-	assert.equal(bootClient().sandbox.__RDSH_MOBILE_UX__.lang, "en", "no signals falls back to English");
+	assert.equal(bootClient({ mode: "mobile", lang: "ja", configureDocument: shellLang("en") }).sandbox.__RDSH_MOBILE_UX__.lang, "ja");
+	assert.equal(bootClient({ mode: "mobile", lang: "en", configureDocument: shellLang("ja") }).sandbox.__RDSH_MOBILE_UX__.lang, "en");
+	assert.equal(bootClient({ mode: "mobile", lang: "ja-JP", configureDocument: shellLang("en") }).sandbox.__RDSH_MOBILE_UX__.lang, "ja");
+	assert.equal(bootClient({ mode: "mobile", configureDocument: shellLang("ja") }).sandbox.__RDSH_MOBILE_UX__.lang, "ja");
+	assert.equal(bootClient({ mode: "mobile", configureDocument: shellLang("en") }).sandbox.__RDSH_MOBILE_UX__.lang, "en");
+	assert.equal(bootClient({ mode: "mobile" }).sandbox.__RDSH_MOBILE_UX__.lang, "en", "no signals falls back to English");
 });
 
 test("one failing part does not stop the other client halves", () => {
@@ -649,7 +661,7 @@ test("one failing part does not stop the other client halves", () => {
 	const original = console.error;
 	console.error = (...args) => errors.push(args);
 	try {
-		const booted = bootClient({ failFirstSlot: true });
+		const booted = bootClient({ mode: "mobile", failFirstSlot: true });
 		assert.ok(booted.sandbox.__RDSH_MOBILE_UX__ !== undefined, "mobile UX died with the PWA part");
 		assert.ok(
 			errors.some(([message]) => String(message).includes("pwa client half failed to apply")),
@@ -972,8 +984,8 @@ test("tapping Plugins or Automation tasks closes the phone drawer, never a deskt
 	// screen; on a desktop-width window the stock sidebar is not ours to close.
 	assert.equal(drawerClosedAfterTapping("Plugins"), true, "Plugins left the drawer open");
 	assert.equal(drawerClosedAfterTapping("Automation tasks"), true, "Automation tasks left the drawer open");
-	assert.equal(drawerClosedAfterTapping("Plugins", { narrow: false }), false, "a desktop sidebar was closed");
-	assert.equal(drawerClosedAfterTapping("Automation tasks", { narrow: false }), false, "a desktop sidebar was closed");
+	assert.equal(drawerClosedAfterTapping("Plugins", { narrow: false, mode: "desktop" }), false, "a desktop sidebar was closed");
+	assert.equal(drawerClosedAfterTapping("Automation tasks", { narrow: false, mode: "desktop" }), false, "a desktop sidebar was closed");
 	// Existing rows keep their behaviour.
 	assert.equal(drawerClosedAfterTapping("New session"), true);
 	assert.equal(drawerClosedAfterTapping("Settings"), false);
@@ -1088,7 +1100,9 @@ test("a route heading is tagged for the FAB inset only on a phone route", () => 
 	assert.equal(chatWrapper.hasAttribute("data-rdsh-route-heading"), false, "a chat H1 was tagged as a route heading");
 	chat.disposeAll();
 
-	// Desktop is untouched.
+	// Desktop is untouched: it builds nothing, so a marker left by the earlier
+	// boot in this process has to be cleared by the test, not by the plugin.
+	wrapper.removeAttribute("data-rdsh-route-heading");
 	const wideFrames = [];
 	const wide = bootClient({
 		narrow: false,
@@ -1110,6 +1124,7 @@ test("a route heading is tagged for the FAB inset only on a phone route", () => 
 test("boot records this page's push origin so a restart cannot double-fan-out", () => {
 	const urls = [];
 	const booted = bootClient({
+		mode: "mobile",
 		fetchImpl: (url) => {
 			urls.push(String(url));
 			return Promise.resolve(stub());

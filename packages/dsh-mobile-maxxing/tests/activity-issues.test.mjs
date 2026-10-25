@@ -561,7 +561,9 @@ function boot({
 	};
 	plugin.apply(ctx);
 	const api = sandbox.__RDSH_MOBILE_UX__;
-	assert.ok(api !== undefined, "the diagnostics surface exists");
+	// Desktop builds no plugin, so there is no diagnostics surface at all.
+	if (mode !== "mobile") assert.equal(api, undefined, "a desktop boot published mobile diagnostics");
+	else assert.ok(api !== undefined, "the diagnostics surface exists");
 	return {
 		sandbox,
 		ctx,
@@ -623,7 +625,8 @@ function decorateChips(booted, chips) {
 		if (chip.parentElement === null) booted.document.body.append(chip);
 	}
 	booted.document.headerButtons = chips;
-	booted.api.decorate();
+	// A desktop boot has no decorator: that IS the assertion in the #40 test.
+	booted.api?.decorate?.();
 	booted.runFrames();
 }
 
@@ -1210,10 +1213,13 @@ test("#41 panel controls are not chips and keep their own click", () => {
 });
 
 test("#41 the desktop window is untouched", () => {
+	// Desktop builds no plugin: it installs no click listener, so the app's own
+	// chip handler is never intercepted or cancelled.
 	const booted = boot({ narrow: false });
+	assert.equal(booted.api, undefined, "a desktop booted the activity half");
+	const entries = booted.document.listeners.get("click") ?? [];
+	assert.deepEqual(entries, [], "a desktop installed a capture click listener");
 	const open = chip("2 subagents", { expanded: true });
 	open.setAttribute("data-rdsh-activity-chip", "subagent");
-	const event = documentClick(booted, open);
-	assert.equal(event.prevented, false, "a wide window keeps the stock chip");
-	assert.equal(event.stopped, false);
+	assert.equal(open.hasAttribute("data-rdsh-activity-chip"), true, "a desktop stripped the app's chip attribute");
 });

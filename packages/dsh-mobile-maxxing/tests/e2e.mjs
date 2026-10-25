@@ -223,7 +223,9 @@ async function checkRuntime() {
 			hideSettings: document.documentElement.hasAttribute('data-rdsh-hide-settings'),
 			hidden: document.querySelectorAll('[data-rdsh-hidden], [data-rdsh-setting-hidden]').length,
 		}))()`);
-		const expected = view.mode === "desktop" && view.phone === false && view.hideSettings === false && view.hidden === 0;
+		// A desktop is a hard no-op: no diagnostics object at all, and no mobile
+		// hook may be written into the page.
+		const expected = view.mode === "desktop" && view.phone === null && view.hideSettings === false && view.hidden === 0;
 		check(
 			`a ${width}x900 desktop window stays PC`,
 			expected,

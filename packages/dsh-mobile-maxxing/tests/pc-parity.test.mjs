@@ -109,15 +109,26 @@ test("the mobile-only settings cards follow the device mode", () => {
 	assert.match(body, /t\("mux\.hidden\.title"\)/, "the hidden-controls card disappeared entirely");
 });
 
-test("a desktop stays stock unless it opts into mobile notifications", () => {
+test("a desktop is a hard no-op, opt-ins included", () => {
+	// The user's contract is "a PC is not changed at all": the only desktop
+	// path is the early no-op return, so no part, slot, style, listener or
+	// storage read happens and a saved opt-in cannot wake anything.
+	const gate = 'if (DEVICE_MODE !== "mobile") return { apply() {} };';
+	const at = CLIENT.indexOf(gate);
+	assert.notEqual(at, -1, "the desktop no-op gate is missing");
+	assert.ok(
+		CLIENT.indexOf("const DEVICE_MODE = readDeviceMode();") < at,
+		"the gate runs before the mode is resolved",
+	);
+	// Nothing that builds or touches a page may appear before the gate.
+	for (const call of ['require("react")', "document.createElement", "document.head", "document.addEventListener", "localStorage.getItem", "fetch("]) {
+		const first = CLIENT.indexOf(call);
+		assert.ok(first === -1 || first > at, `${call} runs before the desktop gate`);
+	}
+	// The host default (mobile-only turns) is unchanged; the desktop opt-in
+	// settings still exist for a mobile browser that later uses this profile.
 	assert.match(HOST, /onlyMobileTurns: true/, "the host default must stay mobile-only");
-	assert.match(CLIENT, /const NOTIFY_DEVICE_TURNS_KEY = "rdsh-mobile-ux:notify-device-turns";/);
 	assert.match(functionBody("readNotifyDeviceTurns"), /NOTIFY_DEVICE_TURNS_KEY/);
-	const mark = functionBody("markMobileSession");
-	assert.match(mark, /if \(!phone\(\) && !notifyDeviceTurns\(\)\) return;/, "markMobileSession ignores the opt-in");
-	assert.match(functionBody("onKeyDownCapture"), /const finger = phone\(\);/, "Enter no longer follows the device mode");
-	assert.match(functionBody("onKeyDownCapture"), /if \(!finger && !notifyDeviceTurns\(\)\) return;/, "Enter ignores the desktop opt-in");
-	assert.match(functionBody("onClickCapture"), /if \(phone\(\) \|\| notifyDeviceTurns\(\)\)/, "button sends are not marked on a desktop");
 	assert.match(functionBody("MobileSection"), /writeNotifyDeviceTurns\(event\.target\.checked\)/, "the setting has no control");
 });
 

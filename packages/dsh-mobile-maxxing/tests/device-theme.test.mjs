@@ -277,7 +277,7 @@ test("a desktop never applies the mobile palette", () => {
 	// A desktop keeps upstream's palette. The choice stays in storage for a
 	// later mobile visit, but nothing is painted in desktop mode.
 	const snapshot = { preference: "light", active: { colorScheme: "light", tokens: {} } };
-	const { api, body, documentElement } = boot({
+	const { api, body, documentElement, sandbox } = boot({
 		theme: { getTheme: () => snapshot },
 		seed: { "dsh-mobile-maxxing:device-theme": "dark" },
 		mode: "desktop",
@@ -285,7 +285,9 @@ test("a desktop never applies the mobile palette", () => {
 	});
 	assert.equal(body.hasAttribute("data-ds-dark-theme"), false, "a desktop got the phone palette");
 	assert.equal(documentElement.getAttribute("data-rdsh-device-theme"), null);
-	assert.equal(api.state.deviceTheme, "dark", "the stored choice was discarded instead of kept");
+	// Desktop builds no plugin: the saved choice is neither read nor applied.
+	assert.equal(api, undefined, "a desktop booted the theme half");
+	assert.equal(sandbox.localStorage.getItem("dsh-mobile-maxxing:device-theme"), "dark", "the saved choice was rewritten on desktop");
 });
 
 test("an empty store reads as the shared theme", () => {

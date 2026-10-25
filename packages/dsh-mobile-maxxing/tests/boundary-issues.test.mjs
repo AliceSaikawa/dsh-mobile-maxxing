@@ -465,7 +465,9 @@ function bootBoundary({ mode = null, narrow = true, seed = {}, safeTop = 0 } = {
 	};
 	plugin.apply(ctx);
 	const api = sandbox.__RDSH_MOBILE_UX__;
-	assert.ok(api !== undefined, "the diagnostics surface is live");
+	// Desktop builds no plugin: there is no diagnostics object to read.
+	if (deviceMode !== "mobile") assert.equal(api, undefined, "a desktop boot published mobile diagnostics");
+	else assert.ok(api !== undefined, "the diagnostics surface is live");
 	return {
 		api,
 		document,
@@ -478,7 +480,8 @@ function bootBoundary({ mode = null, narrow = true, seed = {}, safeTop = 0 } = {
 		body: document.body,
 		setWidth(next) {
 			viewport.narrow = next;
-			api.syncWidth();
+			// A desktop has no geometry readout: the no-op has no syncWidth.
+			api?.syncWidth?.();
 		},
 		/** Run every queued frame, including ones queued while flushing. */
 		flushFrames() {
@@ -539,13 +542,13 @@ test("a narrow desktop stays desktop: no mobile surface and no width entry", () 
 	assert.equal(booted.meta.getAttribute("content"), "width=device-width, initial-scale=1", "a narrow desktop touched the viewport");
 	assert.equal(booted.html.hasAttribute("data-rdsh-anim"), false, "a narrow desktop wrote the animation attribute");
 	assert.equal(booted.body.hasAttribute("data-ds-dark-theme"), false, "a narrow desktop got the mobile palette");
-	assert.equal(booted.api.phone(), false, "phone() is true on a desktop");
-	assert.equal(booted.api.state.narrow, true, "the geometry readout still sees 390px");
+	assert.equal(booted.api, undefined, "a narrow desktop built the mobile half");
 
 	booted.setWidth(false);
 	assert.equal(booted.body.querySelectorAll(".rdsh-mux-fab").length, 0, "widening a desktop installed mobile chrome");
 	assert.equal(booted.document.head.querySelectorAll("[data-rdsh-mux-style=\"phone\"]").length, 0, "widening a desktop added the mobile stylesheet");
-	assert.equal(booted.api.state.narrow, false, "the geometry readout did not follow the width");
+	booted.setWidth(true);
+	assert.equal(booted.document.head.querySelectorAll("[data-rdsh-mux-style=\"phone\"]").length, 0, "narrowing a desktop added the mobile stylesheet");
 	assert.deepEqual(booted.dispose(), [], "dispose threw");
 });
 
@@ -617,6 +620,21 @@ test("a mobile viewport with no content attribute gets that absence back", () =>
 	assert.match(booted.meta.getAttribute("content"), /maximum-scale=1/, "the mobile lock was not applied");
 	booted.dispose();
 	assert.equal(booted.meta.hasAttribute("content"), false, "the mobile lock content survived as an attribute");
+});
+
+test("the mobile viewport merges the keyboard token without duplicating a key", () => {
+	const mobile = bootBoundary({ mode: "mobile", narrow: false });
+	mobile.flushFrames();
+	const content = mobile.meta.getAttribute("content");
+	assert.match(content, /interactive-widget=resizes-content/, "the mobile viewport lost the keyboard token");
+	assert.match(content, /maximum-scale=1/, "the mobile viewport lost the zoom lock");
+	assert.match(content, /viewport-fit=cover/, "the mobile viewport lost edge-to-edge coverage");
+	// The shipped tokens survive, and no key is emitted twice by the merge.
+	assert.match(content, /width=device-width/);
+	const keys = content.split(",").map((token) => token.trim().split("=")[0].toLowerCase());
+	assert.equal(new Set(keys).size, keys.length, `a viewport key is duplicated: ${content}`);
+	mobile.dispose();
+	assert.equal(mobile.meta.getAttribute("content"), "width=device-width, initial-scale=1", "the shipped value was not restored");
 });
 
 test("safe-area root padding and style follow the device mode", () => {

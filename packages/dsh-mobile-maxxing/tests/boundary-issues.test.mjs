@@ -103,7 +103,11 @@ test("#46 keeps the header in flow and lifts the panel's column", () => {
 	const panel = phone.slice(phone.indexOf("[data-rdsh-rightpanel] {"), phone.indexOf("[data-rdsh-rightpanel] table"));
 	assert.match(panel, /isolation: isolate;/, "the panel layer has no stacking context");
 	assert.equal(/position:/.test(panel), false, "the panel layer overrides upstream's own position");
-	assert.match(phone, /html\[data-rdsh-rightpanel-open\] \.rdsh-mux-fab \{ display: none !important; \}/, "the FAB still sits over the open panel");
+	// The hamburger is no longer hidden when the panel opens: the panel column
+	// and the upstream root now overlay it (60 vs 40). A hide rule coming back
+	// would mean the stacking order regressed.
+	assert.match(CLIENT, /\.rdsh-mux-fab \{[^}]*z-index: 40;/, "the FAB is no longer below the open panel");
+	assert.equal(/html\[data-rdsh-rightpanel-open\] \.rdsh-mux-fab/.test(phone), false, "the FAB hide rule is back");
 });
 
 /* ------------------------------------------------------------------ */

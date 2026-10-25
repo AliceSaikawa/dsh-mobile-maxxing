@@ -206,15 +206,15 @@ test("the context meter reads the public Session list snapshot", () => {
 	assert.match(read, /projectionsBySession\?\.[^;]*values\?\.contextPressure/, "unhinted rows read the same value face");
 });
 
-test("the transcript keeps its column tag and the reference 349px measure", () => {
+test("the transcript keeps its column tag and the full-width measure", () => {
 	// #14: the tag itself sets the 16px gutters, so the "24px or more"
 	// heuristic can never hold again — a second decorate dropped the column.
 	const body = helperBody("decorateTranscript");
 	assert.match(body, /hasAttribute\("data-rdsh-transcript"\)/, "an already tagged node short-circuits the heuristic");
 	assert.match(body, /data-rdsh-transcript-column/);
-	// The reference column is a fixed, centred 349px reading measure. The
-	// 100% conversation rules may not erase it.
-	assert.match(CLIENT, /\[data-rdsh-transcript-column\] \{\s*\n\s*width: 349px !important;/, "the 349px column is gone");
+	// #69: the fixed 349px reading measure was replaced by the available
+	// conversation width. The column keeps the tag and stays centred.
+	assert.match(CLIENT, /\[data-rdsh-transcript-column\] \{\s*\n\s*width: 100% !important;/, "the column no longer uses the available width");
 	assert.match(CLIENT, /\[data-rdsh-transcript-column\] \{[^}]*max-width: 100% !important;/, "a narrow viewport can overflow");
 	assert.match(CLIENT, /\[data-rdsh-transcript-column\] \{[^}]*margin-left: auto !important;/, "the column is not centred");
 });

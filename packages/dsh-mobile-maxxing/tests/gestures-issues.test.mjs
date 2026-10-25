@@ -593,7 +593,9 @@ test("sideways movement pans the strip and cancels the hold; vertical does not p
 	const sideways = pointerEvent(target, 80, 52);
 	move(sideways);
 	assert.equal(sideways.stopped, 1, "a cancelling move is still blocked from upstream");
-	assert.equal(strip.scrollLeft, 120, "the strip pans by the finger delta");
+	// The browser owns the strip's scrolling: the plugin must not write
+	// scrollLeft, or a native pan would be applied a second time.
+	assert.equal(strip.scrollLeft, 100, "the plugin wrote scrollLeft over a native pan");
 	booted.runTimers(450);
 	assert.equal(tab.hasAttribute("data-rdsh-tab-hold"), false, "movement cancels the hold");
 	up(pointerEvent(target, 80, 52));
@@ -647,14 +649,14 @@ test("a touch pan that starts on the strip gutter or fill scrolls without arming
 	assert.equal(hasTimer(booted, 450), false, "the gutter does not arm a tab hold");
 	const sideways = pointerEvent(gutter, 280, 52);
 	move(sideways);
-	assert.equal(strip.scrollLeft, 120, "the gutter pan did not move the strip");
+	assert.equal(strip.scrollLeft, 100, "the gutter pan was applied a second time");
 	up(pointerEvent(gutter, 280, 52));
 	assert.equal(hasTimer(booted, 250), false, "the gutter pan was replayed as a tap");
 
 	strip.scrollLeft = 100;
 	down(pointerEvent(fill, 300, 50));
 	move(pointerEvent(fill, 270, 51));
-	assert.equal(strip.scrollLeft, 130, "the strip-fill pan did not move the strip");
+	assert.equal(strip.scrollLeft, 100, "the strip-fill pan was applied a second time");
 	up(pointerEvent(fill, 270, 51));
 
 	strip.scrollLeft = 100;
@@ -739,10 +741,11 @@ test("a new primary strip pan drops a stale tab replay, stale pan and secondary 
 	strip.style.scrollBehavior = "smooth";
 	down(pointerEvent(gutter, 300, 50));
 	move(pointerEvent(gutter, 290, 50));
-	assert.equal(strip.scrollLeft, 110, "the primary pan did not start");
+	assert.equal(strip.style.scrollBehavior, "auto", "the primary pan did not start");
+	assert.equal(strip.scrollLeft, 100, "the plugin panned the strip itself");
 	cancel(pointerEvent(gutter, 290, 50, { id: 9, primary: false }));
 	move(pointerEvent(gutter, 280, 50));
-	assert.equal(strip.scrollLeft, 120, "a secondary cancel stopped the primary pan");
+	assert.equal(strip.style.scrollBehavior, "auto", "a secondary cancel stopped the primary pan");
 	up(pointerEvent(gutter, 280, 50));
 	assert.equal(strip.style.scrollBehavior, "smooth");
 	booted.disposeAll();
@@ -1014,14 +1017,15 @@ test("a closed panel or a desktop width clears the terminal fit", () => {
 	tablet.disposeAll();
 });
 
-test("the phone stylesheet reopens the vertical axis on every dockkit tab layer", () => {
+test("every dockkit tab layer lets the browser pan natively", () => {
 	// touch-action is the intersection of the hit tab, its strip and the
-	// scroller up to the scroll container; leaving the tab at `none` keeps
-	// vertical scrolling blocked even when the two strip layers are reopened.
+	// scroller up to the scroll container. The horizontal pan now belongs to
+	// the browser, so all four layers must be opened: a leftover `none` (or
+	// pan-y only) blocks the native swipe and the strip stops scrolling.
 	assert.match(
 		CLIENT,
-		/\[data-sidebar-right-panel\] \[data-dockkit-strip\],\s*\n\s*\[data-sidebar-right-panel\] \[data-dockkit-strip-tabs\],\s*\n\s*\[data-sidebar-right-panel\] \[data-dockkit-strip-fill\],\s*\n\s*\[data-sidebar-right-panel\] \[data-dockkit-tab\] \{ touch-action: pan-y; \}/,
-		"the tab layer is still touch-action: none",
+		/\[data-sidebar-right-panel\] \[data-dockkit-strip\],\s*\n\s*\[data-sidebar-right-panel\] \[data-dockkit-strip-tabs\],\s*\n\s*\[data-sidebar-right-panel\] \[data-dockkit-strip-fill\],\s*\n\s*\[data-sidebar-right-panel\] \[data-dockkit-tab\] \{ touch-action: pan-x pan-y; \}/,
+		"a dockkit tab layer still blocks native panning",
 	);
 });
 

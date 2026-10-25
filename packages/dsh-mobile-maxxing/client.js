@@ -988,7 +988,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     // ---------------------------------------------------------------------
-    // rdsh-mobile-ux — phone-width UX: drawer, settings, composer, in-app banners.
+    // rdsh-mobile-ux — mobile-device UX: drawer, settings, composer, in-app banners.
     // ---------------------------------------------------------------------
     function mobilePart() {
 
@@ -1310,9 +1310,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      */
     function applyDeviceTheme() {
       if (typeof document === "undefined" || document.body === null) return;
-      // #44: the per-device palette is part of the phone surface. A wide
-      // window paints upstream's palette from the shared setting, so a phone
-      // choice made in this browser cannot change a desktop screenshot.
+      // #44: the per-device palette belongs to the mobile surface. A desktop
+      // paints upstream's palette from the shared setting, so a mobile choice
+      // made in this browser cannot change a desktop screenshot.
       if (!phone()) {
         releaseDeviceTheme();
         return;
@@ -1678,8 +1678,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     function applyHideList(disabled) {
       const labels = hideLabels();
       const hidden = new Set();
-      // The legacy hide list is a width rule, not a device rule: a narrow
-      // window gets it even with a mouse. A wide desktop keeps every control.
+      // Hide the controls that dead-end on a mobile device. Desktop mode
+      // keeps every control, whatever the window width.
       const hideOnThisDevice = !disabled && phone();
       for (const element of document.querySelectorAll("button[aria-label], [role='menuitem']")) {
         const label = labelOf(element);
@@ -1692,8 +1692,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         }
       }
       const modal = document.querySelector('[data-shortcut-modal="settings"]');
-      // The tab merge is the phone layout: `MobileSection` inlines the PWA and
-      // Input sections there, so the separate tabs vanish with them.
+      // The tab merge belongs to mobile mode: `MobileSection` inlines the PWA
+      // and Input sections there, so the separate tabs vanish with them.
       if (modal !== null && phone()) {
         for (const button of modal.querySelectorAll("nav button")) {
           const label = (button.textContent || "").trim();
@@ -1814,8 +1814,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     function decorateSessionRows() {
       // #44: every session-row hook, including the colour frame, dresses the
-      // phone sidebar. A wide window keeps upstream's rows untouched; the
-      // frame rule itself lives in the phone stylesheet.
+      // mobile sidebar. Desktop keeps upstream's rows untouched; the frame
+      // rule itself lives in the mobile stylesheet.
       if (!phone()) {
         if (rowHooksActive) clearSessionRowHooks();
         return;
@@ -1872,12 +1872,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     /**
      * Strip every session-row hook.
      *
-     * Reached when the window widens (or a rotation leaves the phone layout):
-     * the styling is inside the phone query, so the attributes are inert, but
-     * leaving them behind means a later narrow pass starts from another
+     * Reached from the desktop guard and from dispose: the styling lives in
+     * the mobile stylesheet, so a desktop never applies it, but leaving the
+     * attributes behind means a later mobile pass starts from another
      * layout's leftovers, and `[data-rdsh-running]` on a desktop row is a lie
      * to anything that reads the DOM. The colour frame is stripped here too:
-     * it is a phone feature under #44.
+     * it is a mobile feature under #44.
      */
     function clearSessionRowHooks() {
       rowHooksActive = false;
@@ -1897,12 +1897,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     /**
-     * Every attribute the phone layout writes onto DOM.
+     * Every attribute the mobile surface writes onto DOM.
      *
      * Kept in one place so `clearPhoneHooks()` is exhaustive: a hook added to
      * a decorate function without being listed here is caught by
-     * `tests/boundary-issues.test.mjs`, which walks the live DOM after a
-     * 767→768 transition. Device/PWA attributes are deliberately absent:
+     * `tests/boundary-issues.test.mjs`, which walks the live DOM after dispose
+     * and a desktop boot. Device/PWA attributes are deliberately absent:
      * `data-dsh-mobile-maxxing`, the notification diagnostics
      * (`data-rdsh-badge-hook`, `-sessions-hook`, `-running-subagents`),
      * `data-rdsh-notice-host` and the style markers. The safe-area attributes
@@ -2006,9 +2006,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     /**
-     * Strip the other phone-only hooks whose styling lives in the phone query.
+     * Strip the other mobile-only hooks whose styling lives in the mobile
+     * stylesheet.
      *
-     * Also the single cleanup path for a 767→768 transition and for dispose.
+     * Also the single cleanup path for dispose and the defensive desktop boot.
      * It restores what this module changed (attributes, injected nodes, inline
      * styles, viewport meta, device palette) and leaves upstream's own state
      * alone: no upstream attribute or style is touched unless this module wrote
@@ -2047,8 +2048,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         element.removeAttribute("data-rdsh-edit-header");
         element.removeAttribute("data-rdsh-edit-row");
       }
-      // The tighter edit summary is a phone layout rule; the scan itself is
-      // expensive, so a wide window only clears what a previous pass wrote.
+      // The tighter edit summary is a mobile layout rule; the scan itself is
+      // expensive, so desktop only clears what a previous pass wrote.
       if (!phone()) return;
       for (const element of document.querySelectorAll("span, div")) {
         if (element.children.length !== 0) continue;
@@ -2128,7 +2129,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      *
      * The panel node is replaced when the route or the pane changes, and the
      * old tag has to go with it: two tagged nodes at once apply the panel's
-     * phone layout (max-width, overflow, padding) to the whole app.
+     * mobile layout (max-width, overflow, padding) to the whole app.
      */
     function forgetRightPanel() {
       for (const node of document.querySelectorAll("[data-rdsh-rightpanel]")) node.removeAttribute("data-rdsh-rightpanel");
@@ -2210,9 +2211,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     function decorateRightPanel() {
-      // #44: the panel hooks and the open marker are phone layout. A wide
-      // window drops the observer and both attributes instead of keeping a
-      // stale state that #46's stacking rule could apply to a desktop.
+      // #44: the panel hooks and the open marker belong to mobile mode.
+      // Desktop drops the observer and both attributes instead of keeping a
+      // stale state that #46's stacking rule could apply there.
       if (!phone()) {
         forgetRightPanel();
         return;
@@ -2377,8 +2378,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     /**
      * Remove the settings arrows and every listener/observer that came with
-     * them. Reached on a 767→768 transition and on dispose, so a desktop gets
-     * neither the nodes nor a listener that keeps scrolling an invisible list.
+     * them. Reached on dispose and the defensive desktop boot, so a desktop
+     * gets neither the nodes nor a listener that keeps scrolling an invisible list.
      */
     function clearSettingsNavArrows() {
       const state = settingsArrows;
@@ -2517,8 +2518,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     /**
      * The model-search field and the pointerdown listener this module added to
-     * its row. Kept so a 767→768 transition can remove the listener and put
-     * `disabled` back; a wide desktop must not inherit the phone's disabled
+     * its row. Kept so dispose and the desktop boot can remove the listener
+     * and put `disabled` back; a desktop must not inherit the mobile disabled
      * search.
      */
     let modelSearchState = null;
@@ -2811,7 +2812,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     /**
-     * Give a full-screen route heading a phone-only inset for the FAB.
+     * Give a full-screen route heading a mobile-only inset for the FAB.
      *
      * Plugins and Automation tasks render their own H1 near the left edge. On
      * a phone the floating drawer button sits over x8..48, so the heading row
@@ -2954,7 +2955,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * gesture only moves the element out of sight; its timer retires it as
      * usual. Nothing here touches React's tree.
      */
-    /** Swipe listeners per toast, so a wide window can remove them again. */
+    /** Swipe listeners per toast, so desktop/dispose can remove them again. */
     const toastSwipeState = new WeakMap();
 
     function clearToastHooks() {
@@ -3260,13 +3261,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     function decorateSidebarSettingsRow() {
-      // #17: the replacement row belongs to the phone drawer. In a narrow
-      // desktop window the stock account row is still reachable, and swapping
-      // it there only loses the stock menu.
+      // #17: the replacement row belongs to the mobile drawer. Desktop keeps
+      // the stock account row, and swapping it there only loses the stock menu.
       if (!phone()) {
-        // A resize out of the phone layout must undo the swap, or the tagged
-        // account row stays hidden by the phone stylesheet (its rule is inside
-        // the width query) and Settings becomes unreachable.
+        // Desktop mode and dispose must undo the swap, or the tagged account
+        // row stays hidden by the mobile stylesheet and Settings becomes
+        // unreachable.
         for (const tagged of document.querySelectorAll("[data-rdsh-more-row]")) tagged.removeAttribute("data-rdsh-more-row");
         for (const injected of document.querySelectorAll("[data-rdsh-settings-row]")) injected.remove();
         return;
@@ -3329,14 +3329,14 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     /**
-     * Tag the drawer's own header toggle for the phone stylesheet.
+     * Tag the drawer's own header toggle for the mobile stylesheet.
      *
      * The reference styled that button through an upstream hash class. This
      * package never names a hash: the sidebar slot bounds the search and the
      * action label identifies the button, with the drag-header structure as
      * the fallback for a localised label. Scoping to the sidebar keeps close,
-     * right-panel and composer buttons on their stock paint. A wide window
-     * drops the tag, so the stock control and its tooltip come back.
+     * right-panel and composer buttons on their stock paint. Desktop drops
+     * the tag, so the stock control and its tooltip come back.
      */
     function decorateSidebarToggle() {
       if (!phone()) {
@@ -3456,9 +3456,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     let lastSlowAt = 0;
 
     function decorateFast() {
-      // One width decision per pass. Every tag below is part of the phone
-      // layout; on a wide window the same pass only removes leftovers, so a
-      // MutationObserver firing before the media event cannot re-create a hook.
+      // One mode decision per pass. Every tag below belongs to the mobile
+      // surface; on desktop the same pass only removes leftovers, so a
+      // MutationObserver firing between frames cannot re-create a hook.
       const onPhone = phone();
       const root = frame();
       if (root !== null) {
@@ -3539,7 +3539,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // nothing. The dock strip is the real signal: it sits on-screen only
       // while the panel is open.
       const hideListDisabled = hideDisabled();
-      // The hidden-rows attribute follows the same width contract as the list
+      // The hidden-rows attribute follows the same mode contract as the list
       // itself, so the JS writer and the stylesheet scope cannot drift apart.
       if (onPhone !== state.phone) emit({ phone: onPhone });
       document.documentElement.toggleAttribute("data-rdsh-hide-settings", onPhone && !hideListDisabled);
@@ -3676,7 +3676,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      *
      * A phone send is marked automatically. On a desktop that is the #15
      * opt-in: without it the host's `onlyMobileTurns` default means a PC send
-     * is never notified, and a narrow window silently changing that would be
+     * is never notified, and a desktop window silently changing that would be
      * the same width-based behaviour #17 removes.
      */
     function markMobileSession(sessionId = currentSessionId) {
@@ -3756,8 +3756,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     /**
-     * The drawer's floating button and backdrop, created only in the phone
-     * layout (#44): a wide desktop has no injected nodes to leave behind.
+     * The drawer's floating button and backdrop, created only in mobile mode
+     * (#44): a desktop has no injected nodes to leave behind.
      */
     function installDrawer() {
       if (fab !== null) return;
@@ -4425,8 +4425,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
     function onEdgeSwipeMove(event) {
       if (edgeSwipe === null || event.touches.length !== 1) return;
-      // A rotation can end the phone layout in the middle of a gesture; the
-      // stored start point then belongs to a layout that no longer exists.
+      // The mode is fixed, but a gesture can outlive the layout it started
+      // in; a desktop page must not continue it.
       if (!phone()) {
         edgeSwipe = null;
         return;
@@ -4475,8 +4475,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * A rotation (or the keyboard opening) can swallow the `touchend` that
      * would have cleared these, and a stale start point turns the next
      * touchmove into a jump-sized swipe: the drawer opens or the preview
-     * closes without a gesture. Also called when the phone layout turns off,
-     * so coordinates from the old layout cannot fire in the new one.
+     * closes without a gesture. Also called on dispose and the desktop boot,
+     * so coordinates from a previous mount cannot fire in the next one.
      */
     function resetGestures() {
       cancelQueuePress();
@@ -4861,8 +4861,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
       // Workspace picker: remember that the next visible menu is the
       // new-session workspace chooser, then decorate it with search. The
-      // search row is a phone affordance, so a wide window only opens the
-      // stock menu.
+      // search row is a mobile affordance, so desktop only opens the stock
+      // menu.
       if (phone() && target.closest && target.closest('[aria-label="Choose workspace"]') !== null) {
         const trigger = target.closest('[data-rdsh-workspace-trigger], [aria-label="Choose workspace"]');
         if (trigger !== null) trigger.setAttribute("data-rdsh-workspace-trigger", "");
@@ -4948,7 +4948,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // Plugins / Automation tasks open a full-screen route. Close the drawer
       // after the app has handled the click, so the route is not left under an
       // open drawer (and the FAB comes back). A desktop sidebar is never
-      // touched: this branch is width-gated.
+      // touched: this branch is mode-gated.
       if (phone() && isPanelRouteButton(target)) {
         setTimeout(closeDrawer, 0);
         return;
@@ -5183,9 +5183,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const menuState = typeof props.useMenuOpenState === "function" ? props.useMenuOpenState() : null;
       const setMenuOpen = Array.isArray(menuState) ? menuState[1] : null;
       if (typeof sessionId !== "string") return null;
-      // The frame is painted by the phone stylesheet, so the row that sets it
-      // is a phone affordance too (#44). A wide desktop menu keeps upstream's
-      // rows exactly as they were.
+      // The frame is painted by the mobile stylesheet, so the row that sets it
+      // is a mobile affordance too (#44). A desktop menu keeps upstream's rows
+      // exactly as they were.
       if (!phone()) return null;
       return h("button", {
         type: "button",
@@ -5224,8 +5224,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     /**
      * Dialogs whose swipe listeners were attached. A WeakSet, not the
-     * attribute: `clearLightboxHooks()` removes the attribute on a wide window,
-     * and re-entering the phone layout must not add a second set of listeners.
+     * attribute: `clearLightboxHooks()` removes the attribute on desktop, and
+     * re-entering mobile mode must not add a second set of listeners.
      */
     const lightboxSwipeAttached = new WeakSet();
 
@@ -6114,8 +6114,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     function MobileSection() {
       const s = useStore();
-      // #15: the phone-only rows and the "hidden controls" card are decided by
-      // the device, not the window width, so a desktop never reads "this is
+      // #15: the mobile-only rows and the "hidden controls" card are decided
+      // by the device, not the window width, so a desktop never reads "this is
       // what we hide from you" about controls that are all visible.
       const onPhone = s.phone === true;
       const [message, setMessage] = useState("");
@@ -6644,8 +6644,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     const CSS_PHONE = `
 /* Controls the hide list matched. The attribute these selectors key off is
-   written only while the phone predicate holds (see applyHideList), and the
-   rules sit in the phone half as well: a wide desktop keeps every control. */
+   written only while phone() holds (see applyHideList), and the rules sit in
+   the mobile sheet as well: a desktop keeps every control. */
 html[data-rdsh-hide-settings] [data-rdsh-hidden],
 html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !important; }
 
@@ -6708,8 +6708,6 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
   display: none; pointer-events: none;
 }
 .rdsh-mux-fab-badge[data-visible] { display: block; }
-/* The session colour frame is part of the plugin's desktop surface too: the
-   legacy build painted it outside the phone query. */
 
 .rdsh-mux-backdrop {
   position: fixed; inset: 0; z-index: 45; display: none;
@@ -7152,10 +7150,9 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
      inside the panel list, so the original row is hidden. */
   [data-rdsh-more-row] { display: none !important; }
 
-  /* The phone layout merges the App and Input tabs into Mobile (the section
-     inlines them). This attribute is only written under the same
-     narrow-and-phone condition, so a narrow desktop window keeps all three
-     tabs. */
+  /* Mobile mode merges the App and Input tabs into Mobile (the section
+     inlines them). This attribute is only written under phone(), so a
+     desktop keeps all three tabs. */
   [data-rdsh-settings-tab-hidden] { display: none !important; }
 
   [data-rdsh-settings-nav-arrow] {
@@ -7446,7 +7443,7 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
      "Open configuration file" (a desktop action). Collapse it so the content
      begins directly at the tab strip. Tied to the hide list: with "stop
      hiding" the header (and that action) comes back, which is also how the
-     debug switch can be checked. A narrow desktop window has no
+     debug switch can be checked. A desktop has no
      data-rdsh-hide-settings, so it keeps the stock header (#17). */
   html[data-rdsh-hide-settings] [data-shortcut-modal="settings"] > nav + div > div:first-child {
     height: 0 !important; min-height: 0 !important; padding: 0 !important;
@@ -7752,7 +7749,7 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   html[data-rdsh-native-gap] [data-shortcut-modal="settings"] { padding-bottom: 0 !important; }
 
 /* Safe-area insets measured at runtime: the attributes/style this module
-   writes are phone-only (#44) and releaseSafeArea() strips them at 768px.
+   writes are mobile-only (#44) and releaseSafeArea() strips them on dispose.
    The values themselves come from env() so a notched phone still draws under
    the status bar. */
 html[data-rdsh-safe-top] #root { box-sizing: border-box; padding-top: env(safe-area-inset-top, 0px); }
@@ -7838,11 +7835,10 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         // and decorate twice: once now (so the drawer/button state follows the
         // new width) and once after the transition has settled.
         //
-        // Gestures are dropped only when the width really changed, on
-        // orientationchange, or when the phone layout is left. A keyboard or a
-        // collapsing URL bar changes the height alone and must not cancel a
-        // swipe that is already in flight; the legacy handler did not reset at
-        // all.
+        // Gestures are dropped only when the width really changed or on
+        // orientationchange; a desktop has none. A keyboard or a collapsing
+        // URL bar changes the height alone and must not cancel a swipe that is
+        // already in flight; the legacy handler did not reset at all.
         let rotationTimer = 0;
         let gestureWidth = window.innerWidth;
         // Geometry/keyboard work belongs to the mobile surface. A desktop

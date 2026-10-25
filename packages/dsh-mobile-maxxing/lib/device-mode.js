@@ -6,7 +6,9 @@
  * mode is decided inside the document at the top of `<head>`, before the module
  * loader and the app bundle run. This module *is* that decision:
  * {@link classifyDevice} is serialized by {@link earlyModeScript} into a single
- * inline script, and the browser half only reads the resulting global.
+ * inline script. The browser half gives a valid `__RDSH_DEVICE_MODE__` priority,
+ * falls back to a valid `data-rdsh-device-mode` attribute, and uses
+ * `"desktop"` when neither signal is valid.
  *
  * Width is deliberately absent. A narrow desktop window stays desktop, a wide
  * phone or tablet stays mobile; responsive breakpoints remain layout-only.
@@ -17,7 +19,7 @@
 /** `<html>` attribute carrying the decided mode. */
 export const MODE_ATTRIBUTE = "data-rdsh-device-mode";
 
-/** Global carrying the same string; the browser half reads only this. */
+/** Global carrying the decided mode; the browser half's first choice before the attribute fallback. */
 export const MODE_GLOBAL = "__RDSH_DEVICE_MODE__";
 
 /**
@@ -78,9 +80,10 @@ export function classifyDevice(nav) {
  * A classic (not module) script, so it runs while `<head>` is parsed: the app
  * bundle is a deferred module and the loader script comes later in the same
  * head, so no mode-dependent style or hook can be applied before this has run.
- * Every failure path leaves `"desktop"`, and a failure while writing the
- * attribute or the global is contained: the document keeps upstream's layout
- * rather than half-applying the phone surface.
+ * The classifier decides first; if it throws, the script's initial
+ * `"desktop"` stands. A failure while writing the attribute or the global is
+ * contained: the other signal and the browser half's fallback order still
+ * resolve, so the document never half-applies the mobile surface.
  *
  * @returns {string} one `<script>` element carrying the classifier.
  */

@@ -229,6 +229,15 @@ is resolved from `config.notifications.subject`, then the `https` origin of the 
 subscription, then `mailto:dsh@example.com` — Apple rejects `mailto:root@localhost` with
 `403 BadJwtToken`.
 
+Delivery is scoped per origin. An event that carries an origin (a phone-started turn, a test
+push) goes to that app's subscription only; otherwise the newest origin this host has learned
+that still has a subscription is used. When no origin is known the push is dropped and logged
+as `push skipped: no app origin has talked to this host yet` instead of being sent to every
+stored subscription, which would notify both installed apps for one event. Opening an app
+once teaches the host its origin (after a restart, `webServer.getOrigin()` is adopted too
+when it matches a stored subscription). A subscription answered with 404/410 is removed from
+the store on the spot.
+
 Every stored endpoint is validated on subscribe: it must be `https` and must not resolve
 to loopback, a private range or a link-local address. The host POSTs to whatever is stored,
 so an unvalidated endpoint would be a way to park an internal URL in the store.

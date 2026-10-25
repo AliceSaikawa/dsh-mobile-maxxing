@@ -8620,12 +8620,13 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     /**
      * Tell the push host which deployed origin this page is.
      *
-     * The host keeps a separate subscription store for every origin that has
-     * talked to it. After a process restart that set is empty, and an empty
-     * origin filter means "every stored subscription" (the old 8444 and the
-     * current 8446 devices would both receive the same question). A boot-time
-     * `/config` request is enough: its guard records `location.origin` without
-     * changing any notification setting.
+     * The host delivers each event to one origin only: the app that started
+     * the turn, or the newest origin that has talked to it, and never to every
+     * stored subscription (#27). After a process restart it has to learn that
+     * origin again, so a boot-time `/config` request is enough: its guard
+     * records the request origin from the Origin/Referer headers without
+     * changing any notification setting, and without one the host logs
+     * `push skipped` instead of guessing.
      */
     let pushOriginNoted = false;
     function notePushOrigin() {
@@ -8671,7 +8672,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           await fetch(`${PUSH_API}/unsubscribe`, {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ endpoint: subscription.endpoint }),
+            // The host scopes the delete to this app's origin, so a shared
+            // store (the other installed app) keeps its own subscription.
+            body: JSON.stringify({ endpoint: subscription.endpoint, origin: location.origin }),
           });
         } catch {
           /* the browser-side unsubscribe below still removes the endpoint */
@@ -8691,8 +8694,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           method: "POST",
           headers: { "content-type": "application/json" },
           // Carrying the id makes the test banner tappable: it opens the same
-          // session a real notification would.
-          body: JSON.stringify({ sessionId: currentSessionId ?? "" }),
+          // session a real notification would. The origin tells the host which
+          // installed app is asking, so the push cannot reach the other one.
+          body: JSON.stringify({ sessionId: currentSessionId ?? "", origin: location.origin }),
         });
         if (response.status !== 404 && response.status !== 405) {
           pushed = await response.json();

@@ -455,6 +455,30 @@ function rejectEndpoint(endpoint) {
 	return undefined;
 }
 
+/**
+ * One entry per endpoint.
+ *
+ * An endpoint is one browser registration, so pushing to it twice is two
+ * system notifications on one device. `PushStore.add` already replaces an
+ * endpoint, but a store written by an older host (or by two processes that
+ * interleaved a write) can still hold the same endpoint twice; the fan-out
+ * must not trust the store to be free of duplicates (#28).
+ *
+ * @param {object[]} subscriptions - stored entries, newest first.
+ * @returns {object[]} the first entry for each endpoint.
+ */
+function uniqueByEndpoint(subscriptions) {
+	const seen = new Set();
+	const unique = [];
+	for (const item of subscriptions) {
+		const endpoint = typeof item?.endpoint === "string" ? item.endpoint : "";
+		if (endpoint === "" || seen.has(endpoint)) continue;
+		seen.add(endpoint);
+		unique.push(item);
+	}
+	return unique;
+}
+
 /** Subscriptions and the VAPID pair, persisted together. */
 export class PushStore {
 	/**
@@ -507,10 +531,14 @@ export class PushStore {
 		this.reload();
 		const origins = filter?.origins;
 		if (!Array.isArray(origins) || origins.length === 0) return this.state.subscriptions;
+		// Compare through `sameOrigin`, not string equality: an entry written
+		// before origins were normalized can carry a trailing slash or an
+		// explicit `:443` and must still route to its own app.
+		const requested = (item) => origins.some((origin) => sameOrigin(item.origin, origin));
 		if (filter?.exactOrigins === true) {
-			return this.state.subscriptions.filter((item) => typeof item.origin === "string" && origins.includes(item.origin));
+			return this.state.subscriptions.filter((item) => typeof item.origin === "string" && requested(item));
 		}
-		return this.state.subscriptions.filter((item) => typeof item.origin !== "string" || item.origin === "" || origins.includes(item.origin));
+		return this.state.subscriptions.filter((item) => typeof item.origin !== "string" || item.origin === "" || requested(item));
 	}
 
 	/**
@@ -673,7 +701,7 @@ export function applyNotify(ctx, config) {
 	const lastTurnOrigin = new Map();
 
 	/**
-	 * The public origins this process has served.
+	 * The public origins this process has served, most recently seen first.
 	 *
 	 * Profiles share `DSH_HOME`, so one `push.json` can hold subscriptions
 	 * created through several instances. Only the instance the browser
@@ -681,14 +709,52 @@ export function applyNotify(ctx, config) {
 	 * event is pushed twice (once per installed origin) and a tap can land on
 	 * the other instance. A request's referer is the page that made it, so its
 	 * origin is exactly the deployment this process is serving.
+	 *
+	 * Ordered rather than a Set because the newest origin is the only fallback
+	 * target (#27): a phone can have both the legacy and the unified app
+	 * installed, and notifying both is the double notification this list
+	 * exists to prevent (#28).
 	 */
-	const ownOrigins = new Set();
+	const ownOrigins = [];
 
-	/** The first usable origin on a request: Origin, body.origin, then Referer. */
+	/** Enough remembered origins for two apps plus a proxy and a stale tab. */
+	const MAX_OWN_ORIGINS = 8;
+
+	/** Record one origin as the most recently served. */
+	function learnOrigin(value) {
+		const text = typeof value === "string" ? value.trim() : "";
+		if (text === "") return;
+		let origin;
+		try {
+			origin = new URL(text).origin;
+		} catch {
+			/* not an origin (a bare host, a path): not something a request had */
+			return;
+		}
+		if (origin === "" || origin === "null") return;
+		const existing = ownOrigins.indexOf(origin);
+		if (existing !== -1) ownOrigins.splice(existing, 1);
+		ownOrigins.unshift(origin);
+		if (ownOrigins.length > MAX_OWN_ORIGINS) ownOrigins.length = MAX_OWN_ORIGINS;
+	}
+
+	/**
+	 * The first usable origin on a request: body.origin, Origin, then Referer.
+	 *
+	 * The page's own claim wins because a reverse proxy (or the host's
+	 * `--public-url` setup) can present an inner http origin in the headers
+	 * while the browser still reports the public origin in the body. Every
+	 * client in this package sends `origin`, so a header is only the fallback
+	 * for a hand-rolled request.
+	 *
+	 * @param {object} req - the HTTP request.
+	 * @param {object} [body] - the parsed JSON body, when the route has one.
+	 * @returns {string} the normalized origin, or "".
+	 */
 	function requestOrigin(req, body) {
 		const candidates = [
-			req?.headers?.origin,
 			typeof body?.origin === "string" ? body.origin : undefined,
+			req?.headers?.origin,
 			req?.headers?.referer,
 		];
 		for (const candidate of candidates) {
@@ -703,55 +769,80 @@ export function applyNotify(ctx, config) {
 		return "";
 	}
 
-	/** Remember every origin a request came from. */
+	/** Remember the app origin a request came from; one origin per request. */
 	function noteOrigin(req, body) {
-		const candidates = [
-			req?.headers?.origin,
-			typeof body?.origin === "string" ? body.origin : undefined,
-			req?.headers?.referer,
-		];
-		for (const candidate of candidates) {
-			if (typeof candidate !== "string" || candidate === "") continue;
-			try {
-				const origin = new URL(candidate).origin;
-				if (origin !== "null") ownOrigins.add(origin);
-			} catch {
-				/* a malformed header is not worth failing the request over */
-			}
+		const origin = requestOrigin(req, body);
+		if (origin !== "") learnOrigin(origin);
+	}
+
+	/**
+	 * The single origin a payload may be delivered to.
+	 *
+	 * 1. an explicit target (the app that started the turn, or asked for the
+	 *    test) — exact match only;
+	 * 2. the most recently learned origin that still has a subscription;
+	 * 3. "" — the caller sends nothing.
+	 *
+	 * There is deliberately no all-subscriptions fallback (#27). With both the
+	 * legacy and the unified app installed, that fallback delivered one turn
+	 * twice, once per app (#28); a background notification that cannot be
+	 * attributed is dropped and logged instead of guessed at.
+	 *
+	 * @param {string} [explicit] - the event's own origin, when it has one.
+	 * @returns {string} the target origin, or "" when none is usable.
+	 */
+	function resolveOrigin(explicit) {
+		const requested = normalizeOrigin(explicit);
+		if (requested !== "") return requested;
+		if (ownOrigins.length === 0) return "";
+		const stored = store.subscriptions();
+		for (const origin of ownOrigins) {
+			// A learned origin with no subscription (the inner side of a proxy,
+			// or an app whose notification permission was revoked) would make
+			// the push vanish; the newest origin that can actually be reached
+			// is still "the app that talked to this host last".
+			if (stored.some((item) => sameOrigin(item.origin, origin))) return origin;
 		}
+		return "";
 	}
 
 	/**
 	 * Send one payload to the subscriptions this event belongs to.
 	 *
-	 * Priority:
-	 *   1. an explicit target origin (the app that started the turn or asked
-	 *      for the test) — exact match only;
-	 *   2. otherwise the origins this process has learned from requests;
-	 *   3. otherwise the historical all-subscriptions fallback.
-	 *
 	 * @param {object} payload - push payload.
 	 * @param {object} [target] - `{ origin }` for an exact origin.
-	 * @returns {Promise<object>} per-subscription results.
+	 * @returns {Promise<object>} per-subscription results, plus `targetOrigin`
+	 *   and, when nothing was sent, a `reason` (`no-origin` or
+	 *   `no-subscription`).
 	 */
 	async function fanOut(payload, target = {}) {
-		const requestedOrigin = typeof target.origin === "string" ? target.origin.trim() : "";
-		const subscriptions = requestedOrigin !== ""
-			? store.subscriptions({ origins: [requestedOrigin], exactOrigins: true })
-			: store.subscriptions({ origins: [...ownOrigins] });
-		if (subscriptions.length === 0) return { ok: true, results: [], targetOrigin: requestedOrigin };
+		const targetOrigin = resolveOrigin(target.origin);
+		if (targetOrigin === "") {
+			// The only observable signal for a dropped push, so it is explicit.
+			console.warn("[dsh-mobile-maxxing] push skipped: no app origin has talked to this host yet");
+			return { ok: false, reason: "no-origin", results: [], targetOrigin: "" };
+		}
+		// One endpoint is one browser registration; a duplicate would show the
+		// same notification twice on one device (#28).
+		const subscriptions = uniqueByEndpoint(store.subscriptions({ origins: [targetOrigin], exactOrigins: true }));
+		if (subscriptions.length === 0) {
+			console.warn(`[dsh-mobile-maxxing] push skipped: ${targetOrigin} has no push subscription`);
+			return { ok: false, reason: "no-subscription", results: [], targetOrigin };
+		}
 		const subject = store.subject(copy.subject);
 		const results = [];
 		for (const subscription of subscriptions) {
 			try {
 				const result = await sendWebPush(subscription, payload, { keys: store.keys(), subject });
 				results.push({ status: result.status, ok: result.ok });
+				// 404/410 is how a push service retires a registration; an app
+				// deleted without /unsubscribe is only discoverable this way.
 				if (result.gone) store.remove(subscription.endpoint);
 			} catch (error) {
 				results.push({ status: 0, ok: false, error: String(error?.message ?? error) });
 			}
 		}
-		return { ok: results.some((item) => item.ok), subject, results, targetOrigin: requestedOrigin };
+		return { ok: results.some((item) => item.ok), subject, results, targetOrigin };
 	}
 
 	ctx.inject(["agents"], (agentCtx) => {
@@ -790,7 +881,8 @@ export function applyNotify(ctx, config) {
 			if (agent !== undefined && agents.roots().includes(agent)) {
 				const asking = request?.agent?.session;
 				// Prefer the origin that most recently started a turn in this
-				// session; otherwise fanOut falls back to ownOrigins and then all.
+				// session; otherwise fanOut uses the newest origin this host
+				// learned, and sends nothing when it has learned none (#27).
 				const origin = typeof id === "string" ? (lastTurnOrigin.get(id) || "") : "";
 				void fanOut(buildQuestionPayload(request, {
 					copy,
@@ -807,13 +899,15 @@ export function applyNotify(ctx, config) {
 	ctx.inject(["connection", "webServer"], (routeCtx) => {
 		const connection = routeCtx.connection;
 		// A restart has not seen a request yet. Adopt webServer.getOrigin()
-		// only when it exactly matches an already stored subscription origin;
-		// an internal origin behind --public-url would otherwise filter every
-		// push out. No guess is made when it does not match.
+		// only when it matches an already stored subscription origin; an
+		// internal origin behind --public-url would otherwise filter every
+		// push out. No guess is made when it does not match. Adopting a
+		// matching origin is what keeps background pushes working across a
+		// restart without falling back to every stored subscription (#27).
 		try {
 			const serverOrigin = new URL(routeCtx.webServer.getOrigin()).origin;
-			if (serverOrigin !== "null" && store.subscriptions().some((item) => item.origin === serverOrigin)) {
-				ownOrigins.add(serverOrigin);
+			if (serverOrigin !== "null" && store.subscriptions().some((item) => sameOrigin(item.origin, serverOrigin))) {
+				learnOrigin(serverOrigin);
 			}
 		} catch {
 			/* no getOrigin or an unusable value: keep request-derived origins */
@@ -827,12 +921,17 @@ export function applyNotify(ctx, config) {
 		};
 		/** Refuse anyone the Web server would not have served anyway. */
 		const guard = (req, res, body) => {
-			noteOrigin(req, body);
 			const rejection = connection.requestRejection(req);
-			if (rejection === undefined) return true;
-			res.writeHead(rejection);
-			res.end(rejection === 401 ? "unauthorized" : "forbidden");
-			return false;
+			if (rejection !== undefined) {
+				res.writeHead(rejection);
+				res.end(rejection === 401 ? "unauthorized" : "forbidden");
+				return false;
+			}
+			// Learn the origin only from a request the Web server accepted: an
+			// unauthenticated caller must not be able to redirect this host's
+			// pushes by claiming an origin.
+			noteOrigin(req, body);
+			return true;
 		};
 
 		const routes = [
@@ -867,17 +966,13 @@ export function applyNotify(ctx, config) {
 					const body = await readJsonBody(req);
 					noteOrigin(req, body);
 					try {
-						// Keep the page's explicit origin: behind a proxy the
-						// request's Origin/Referer can be the inner http origin
-						// while the browser still reports the public origin in
-						// the body, and overwriting it would misroute the push.
-						// Only when the body omits the origin (a caller outside
-						// the current client, or a hand-rolled request) fall
-						// back to the request headers. This is defensive: every
-						// known client sends `body.origin` today.
-						const origin = typeof body.origin === "string" && body.origin !== ""
-							? body.origin
-							: requestOrigin(req, body);
+						// `requestOrigin` prefers the page's explicit
+						// `body.origin`: behind a proxy the request's
+						// Origin/Referer can be the inner http origin while the
+						// browser still reports the public origin in the body,
+						// and overwriting it would misroute the push. The
+						// headers remain the fallback for a hand-rolled request.
+						const origin = requestOrigin(req, body);
 						const count = store.add(body.subscription, { label: body.label, origin });
 						json(res, 200, { ok: true, count, subject: store.subject(copy.subject) });
 					} catch (error) {
@@ -896,6 +991,7 @@ export function applyNotify(ctx, config) {
 						return;
 					}
 					const body = await readJsonBody(req);
+					noteOrigin(req, body);
 					const endpoint = typeof body.endpoint === "string" ? body.endpoint : body.subscription?.endpoint;
 					// Scope the delete to the app that asked: the shared store
 					// also holds the other installed origin's subscription.
@@ -914,6 +1010,7 @@ export function applyNotify(ctx, config) {
 						return;
 					}
 					const body = await readJsonBody(req);
+					noteOrigin(req, body);
 					if (typeof body.sessionId === "string" && body.sessionId !== "") {
 						mobileSendAt.set(body.sessionId, { at: Date.now(), origin: requestOrigin(req, body) });
 					}
@@ -960,6 +1057,7 @@ export function applyNotify(ctx, config) {
 						return;
 					}
 					const body = await readJsonBody(req);
+					noteOrigin(req, body);
 					const sessionId = typeof body.sessionId === "string" ? body.sessionId : "";
 					const strings = copyFor(copy.lang);
 					const result = await fanOut(makePayload(
@@ -968,7 +1066,17 @@ export function applyNotify(ctx, config) {
 						strings["notify.testTitle"],
 						strings["notify.testPayloadBody"],
 					), { origin: requestOrigin(req, body) });
-					json(res, 200, { ok: result.ok, ...result, count: store.subscriptions().length });
+					// A skipped push must not look like a delivered one: the
+					// Settings button reads `ok` to decide between "sent" and an
+					// error, and a silently empty fan-out used to report success.
+					const error = result.ok
+						? undefined
+						: result.reason === "no-origin"
+							? "no app origin has talked to this host yet; reload the app once"
+							: result.reason === "no-subscription"
+								? `no push subscription for ${result.targetOrigin}`
+								: "no push was delivered";
+					json(res, 200, { ok: result.ok, ...result, error, count: store.subscriptions().length });
 				},
 			},
 		];

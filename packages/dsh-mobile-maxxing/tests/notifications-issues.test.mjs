@@ -13,15 +13,16 @@
  * to pin the assumptions behind "the two apps' caches cannot interfere":
  * CacheStorage is per origin, and the worker only touches its own origin.
  *
- * No test here changes notification policy. The unknown-origin fallback is
- * asserted exactly as it is intended today (send to every stored
- * subscription) because suppressing it would drop background notifications;
- * #27 is a product-policy decision, not something a test may quietly decide.
+ * #27 settled the unknown-origin question in favour of dropping the push:
+ * an event with no origin of its own goes to the newest origin this process
+ * has learned, and nowhere when it has learned none. The tests pin that,
+ * including the explicit log that makes the drop observable, and cover #28's
+ * requirement that a session opened in both apps is notified once.
  */
 
 import assert from "node:assert/strict";
 import { createECDH, randomBytes } from "node:crypto";
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { Readable } from "node:stream";
@@ -94,10 +95,10 @@ function seed(file, endpoint, origin) {
 }
 
 /**
- * One plugin process: its own routes, listeners and `ownOrigins` set, all
+ * One plugin process: its own routes, listeners and learned-origin list, all
  * reading the shared state file through `DSH_HOME`.
  */
-function makeInstance({ getOrigin = INTERNAL_ORIGIN } = {}) {
+function makeInstance({ getOrigin = INTERNAL_ORIGIN, config = {}, rejection = undefined } = {}) {
 	const listeners = new Map();
 	const routes = new Map();
 	const agentsById = new Map();
@@ -108,7 +109,7 @@ function makeInstance({ getOrigin = INTERNAL_ORIGIN } = {}) {
 	};
 	const services = {
 		agents,
-		connection: { requestRejection: () => undefined },
+		connection: { requestRejection: () => rejection },
 		webServer: {
 			register(route) {
 				routes.set(route.path, route);
@@ -143,7 +144,7 @@ function makeInstance({ getOrigin = INTERNAL_ORIGIN } = {}) {
 		},
 		effect: (fn) => scope.effect(fn),
 	};
-	applyNotify(ctx, { onlyMobileTurns: true });
+	applyNotify(ctx, { onlyMobileTurns: true, ...config });
 	return {
 		listeners,
 		routes,
@@ -304,15 +305,18 @@ test("a subscribe without body.origin falls back to the request origin", withHom
 		await settle();
 		assert.deepEqual(fetchRecorder.calls, [old.endpoint], "the old app's test push reached the wrong app or none");
 
-		// No usable origin and no request-derived origin either: the historical
-		// all-subscriptions fallback must stay, or a background notification is
-		// dropped (#27). Use a third process that has seen no request, because
-		// `newApp` already learned its origin above.
+		// A process that has seen no request has no origin to target. Since #27
+		// it must not fan out to every stored subscription: that is the double
+		// notification both installed apps would show. It reports the drop
+		// instead of pretending the push was delivered.
 		const coldApp = makeInstance();
 		fetchRecorder.calls.length = 0;
-		assert.equal((await request(coldApp, "/api/dsh-mobile-maxxing/push/test", { body: {} })).status, 200);
+		const coldPush = await request(coldApp, "/api/dsh-mobile-maxxing/push/test", { body: {} });
 		await settle();
-		assert.deepEqual(fetchRecorder.calls.sort(), [phone.endpoint, old.endpoint].sort(), "the unknown-origin fallback was silently suppressed");
+		assert.equal(coldPush.status, 200);
+		assert.equal(coldPush.json.ok, false, "an undeliverable test push reported success");
+		assert.equal(coldPush.json.reason, "no-origin", "the drop did not name its reason");
+		assert.deepEqual(fetchRecorder.calls, [], "an unknown origin was fanned out to every subscription");
 	} finally {
 		fetchRecorder.restore();
 	}
@@ -408,60 +412,74 @@ test("a new subscription with a non-canonical origin still receives exact-origin
 }));
 
 // ---------------------------------------------------------------------------
-// #27: startup before config, known origins, unknown fallback
+// #27: startup before config, learned origins, no all-subscriptions fallback
 // ---------------------------------------------------------------------------
 
-test("before any page talks to a process, a question keeps the all-subscriptions fallback", withHome(async (home, file) => {
+test("an event with no origin of its own reaches only the newest app, never all of them", withHome(async (home, file) => {
 	mkdirSync(dirname(file), { recursive: true });
 	const phone = subscription("https://web.push.apple.com/phone");
 	const old = subscription("https://web.push.apple.com/old");
 	seed(file, phone.endpoint, NEW_ORIGIN);
 	seed(file, old.endpoint, OLD_ORIGIN);
 
-	const newApp = makeInstance();
-	const oldApp = makeInstance();
-	newApp.addRoot("session-1");
-	oldApp.addRoot("session-1");
-
+	const app = makeInstance();
+	app.addRoot("session-1");
+	const warnings = [];
+	const previousWarn = console.warn;
+	console.warn = (...args) => warnings.push(args.map(String).join(" "));
 	const fetchRecorder = withFetch(() => ({ status: 201, ok: true }));
 	try {
-		// No /config, /vapid, /test or mobile-send has arrived yet: neither
-		// process knows its own origin. Today both subscriptions receive the
-		// question. That is the hole issue #27 describes; the test pins the
-		// current intention instead of turning it into a silent drop.
-		question(newApp, "session-1");
+		// Nothing has told this process which app it serves: the question is
+		// dropped (#27), and the log is the only signal that it happened.
+		question(app, "session-1");
 		await settle();
-		assert.deepEqual(
-			fetchRecorder.calls.sort(),
-			[phone.endpoint, old.endpoint].sort(),
-			"the startup fallback changed without a product decision",
-		);
+		assert.deepEqual(fetchRecorder.calls, [], "an unknown origin was fanned out to every app");
+		assert.match(warnings.join("\n"), /push skipped: no app origin/, "the drop was silent");
 
-		// A boot-time /config is what fixes it for the requesting process.
-		assert.equal((await request(newApp, "/api/dsh-mobile-maxxing/push/config", { method: "GET", origin: NEW_ORIGIN })).status, 200);
+		// The first app to talk to the process becomes the target.
+		assert.equal((await request(app, "/api/dsh-mobile-maxxing/push/config", { method: "GET", origin: NEW_ORIGIN })).status, 200);
 		fetchRecorder.calls.length = 0;
-		question(newApp, "session-1");
+		question(app, "session-1");
 		await settle();
 		assert.deepEqual(fetchRecorder.calls, [phone.endpoint], "the learned origin did not scope the question");
 
-		// The other process has still seen no request, so its own question
-		// keeps the fallback. Origins must not leak between processes that
-		// share DSH_HOME.
+		// Opening the other app on the same phone makes it the newest origin.
+		// The question must go to that one app only: sending to both is the
+		// duplicate system notification #28 is about.
+		assert.equal((await request(app, "/api/dsh-mobile-maxxing/push/config", { method: "GET", origin: OLD_ORIGIN })).status, 200);
 		fetchRecorder.calls.length = 0;
-		question(oldApp, "session-1");
+		question(app, "session-1");
 		await settle();
-		assert.deepEqual(
-			fetchRecorder.calls.sort(),
-			[phone.endpoint, old.endpoint].sort(),
-			"one process adopted the other process's origin",
-		);
+		assert.deepEqual(fetchRecorder.calls, [old.endpoint], "the older learned origin also received the question");
 
-		assert.equal((await request(oldApp, "/api/dsh-mobile-maxxing/push/config", { method: "GET", origin: OLD_ORIGIN })).status, 200);
+		// Back to the unified app: the target follows the newest request, not
+		// the order the subscriptions were stored in.
+		assert.equal((await request(app, "/api/dsh-mobile-maxxing/push/config", { method: "GET", origin: NEW_ORIGIN })).status, 200);
 		fetchRecorder.calls.length = 0;
-		question(oldApp, "session-1");
+		question(app, "session-1");
 		await settle();
-		assert.deepEqual(fetchRecorder.calls, [old.endpoint], "the second process's learned origin is not honoured");
+		assert.deepEqual(fetchRecorder.calls, [phone.endpoint], "the newest origin did not win");
+
+		// The desktop browser talks to the same process but has no push
+		// subscription. It must not become a dead target: the newest origin
+		// that can actually receive the push is used instead.
+		assert.equal((await request(app, "/api/dsh-mobile-maxxing/push/config", { method: "GET", origin: "http://127.0.0.1:3080" })).status, 200);
+		fetchRecorder.calls.length = 0;
+		question(app, "session-1");
+		await settle();
+		assert.deepEqual(fetchRecorder.calls, [phone.endpoint], "an origin without a subscription swallowed the push");
+
+		// Origins are per process: a second process sharing DSH_HOME must not
+		// inherit the first one's learned origins, and must not fall back to
+		// every subscription either.
+		const other = makeInstance();
+		other.addRoot("session-1");
+		fetchRecorder.calls.length = 0;
+		question(other, "session-1");
+		await settle();
+		assert.deepEqual(fetchRecorder.calls, [], "one process adopted another process's origin");
 	} finally {
+		console.warn = previousWarn;
 		fetchRecorder.restore();
 	}
 	assert.equal(home, process.env.DSH_HOME);
@@ -626,6 +644,193 @@ test("unsubscribe drops only that endpoint; 404/410 prune retired ones", withHom
 		});
 		assert.equal(crossSlash.json.removed, false, "normalizing a trailing slash crossed the origin boundary");
 		assert.equal(new PushStore(file).subscriptions().some((item) => item.endpoint === otherSlash.endpoint), true);
+	} finally {
+		fetchRecorder.restore();
+	}
+	assert.equal(home, process.env.DSH_HOME);
+}));
+
+// ---------------------------------------------------------------------------
+// #27/#28: one phone, two installed apps, one notification
+// ---------------------------------------------------------------------------
+
+test("a session opened in both apps is notified once per event", withHome(async (home, file) => {
+	mkdirSync(dirname(file), { recursive: true });
+	const phone = subscription("https://web.push.apple.com/phone");
+	const old = subscription("https://web.push.apple.com/old");
+	seed(file, phone.endpoint, NEW_ORIGIN);
+	seed(file, old.endpoint, OLD_ORIGIN);
+
+	// `onlyMobileTurns: false` is the profile that also notifies desktop
+	// turns, so an event with no phone origin of its own is exactly where a
+	// duplicate notification used to appear.
+	const app = makeInstance({ config: { onlyMobileTurns: false } });
+	app.addRoot("session-1");
+
+	const fetchRecorder = withFetch(() => ({ status: 201, ok: true }));
+	try {
+		// One phone, two installed origins, both talking to this process.
+		assert.equal((await request(app, "/api/dsh-mobile-maxxing/push/config", { method: "GET", origin: NEW_ORIGIN })).status, 200);
+		assert.equal((await request(app, "/api/dsh-mobile-maxxing/push/config", { method: "GET", origin: OLD_ORIGIN })).status, 200);
+
+		// A desktop-originated turn has no origin of its own. Two subscriptions
+		// for one phone must still mean one notification.
+		turn(app, "session-1", "turn/start");
+		turn(app, "session-1", "turn/end");
+		await settle();
+		assert.deepEqual(fetchRecorder.calls, [old.endpoint], "one desktop turn was pushed to both apps");
+
+		// The same session is opened in the unified app and a phone send starts
+		// a turn: exactly that app's subscription is targeted.
+		fetchRecorder.calls.length = 0;
+		assert.equal(
+			(await request(app, "/api/dsh-mobile-maxxing/push/mobile-send", { body: { sessionId: "session-1" }, origin: NEW_ORIGIN })).status,
+			200,
+		);
+		turn(app, "session-1", "turn/start");
+		turn(app, "session-1", "turn/end");
+		await settle();
+		assert.deepEqual(fetchRecorder.calls, [phone.endpoint], "the turn reached the wrong app or both apps");
+
+		// A question in the same session follows the turn's origin: the
+		// specific signal beats the newest learned origin.
+		fetchRecorder.calls.length = 0;
+		question(app, "session-1");
+		await settle();
+		assert.deepEqual(fetchRecorder.calls, [phone.endpoint], "the question did not follow the turn origin");
+	} finally {
+		fetchRecorder.restore();
+	}
+	assert.equal(home, process.env.DSH_HOME);
+}));
+
+test("one endpoint stored twice is pushed to only once", withHome(async (home, file) => {
+	mkdirSync(dirname(file), { recursive: true });
+	seed(file, "https://web.push.apple.com/phone", NEW_ORIGIN);
+	// An older host (or an interleaved write) can leave one registration in
+	// the file twice. `PushStore.add` would collapse it, so write the duplicate
+	// past the store to model that file.
+	const state = JSON.parse(readFileSync(file, "utf8"));
+	state.subscriptions = [
+		state.subscriptions[0],
+		{ ...state.subscriptions[0], addedAt: state.subscriptions[0].addedAt - 1000 },
+	];
+	writeFileSync(file, JSON.stringify(state, null, "\t"));
+
+	const app = makeInstance();
+	app.addRoot("session-1");
+	const fetchRecorder = withFetch(() => ({ status: 201, ok: true }));
+	try {
+		assert.equal((await request(app, "/api/dsh-mobile-maxxing/push/config", { method: "GET", origin: NEW_ORIGIN })).status, 200);
+		const push = await request(app, "/api/dsh-mobile-maxxing/push/test", { body: {}, origin: NEW_ORIGIN });
+		await settle();
+		assert.equal(push.status, 200);
+		assert.deepEqual(fetchRecorder.calls, ["https://web.push.apple.com/phone"], "the duplicate endpoint was pushed twice");
+		assert.equal((push.json.results ?? []).length, 1, "the duplicate endpoint was counted twice");
+	} finally {
+		fetchRecorder.restore();
+	}
+	assert.equal(home, process.env.DSH_HOME);
+}));
+
+test("a retired subscription is pruned while the other app keeps its own", withHome(async (home, file) => {
+	mkdirSync(dirname(file), { recursive: true });
+	const phone = subscription("https://web.push.apple.com/phone");
+	const gone = subscription("https://web.push.apple.com/gone");
+	const old = subscription("https://web.push.apple.com/old");
+	seed(file, phone.endpoint, NEW_ORIGIN);
+	seed(file, gone.endpoint, NEW_ORIGIN);
+	seed(file, old.endpoint, OLD_ORIGIN);
+
+	const app = makeInstance();
+	app.addRoot("session-1");
+	const previousWarn = console.warn;
+	console.warn = () => {};
+	const fetchRecorder = withFetch((url) => (url.endsWith("/gone") ? { status: 410, ok: false } : { status: 201, ok: true }));
+	try {
+		// The newest learned app is the unified one; its dead registration is
+		// discovered by an ordinary event, not by an explicit test push.
+		assert.equal((await request(app, "/api/dsh-mobile-maxxing/push/config", { method: "GET", origin: NEW_ORIGIN })).status, 200);
+		question(app, "session-1");
+		await settle();
+		assert.deepEqual(
+			fetchRecorder.calls.sort(),
+			[gone.endpoint, phone.endpoint].sort(),
+			"the retired endpoint of the learned app was skipped",
+		);
+		assert.deepEqual(
+			new PushStore(file).subscriptions().map((item) => item.endpoint).sort(),
+			[old.endpoint, phone.endpoint].sort(),
+			"the 410 registration was not pruned, or the other app's subscription was touched",
+		);
+
+		// The next event goes to the live subscription only.
+		fetchRecorder.calls.length = 0;
+		question(app, "session-1");
+		await settle();
+		assert.deepEqual(fetchRecorder.calls, [phone.endpoint], "the pruned endpoint was still pushed to");
+	} finally {
+		console.warn = previousWarn;
+		fetchRecorder.restore();
+	}
+	assert.equal(home, process.env.DSH_HOME);
+}));
+
+test("a legacy entry with a non-canonical origin still matches its own app", withHome(async (home, file) => {
+	mkdirSync(dirname(file), { recursive: true });
+	const phone = subscription("https://web.push.apple.com/phone");
+	seed(file, phone.endpoint, NEW_ORIGIN);
+	// Simulate an entry written before `PushStore.add` normalized origins: a
+	// trailing slash must not make the app's own subscription unroutable.
+	const state = JSON.parse(readFileSync(file, "utf8"));
+	state.subscriptions[0].origin = `${NEW_ORIGIN}/`;
+	writeFileSync(file, JSON.stringify(state, null, "\t"));
+
+	const app = makeInstance();
+	app.addRoot("session-1");
+	const fetchRecorder = withFetch(() => ({ status: 201, ok: true }));
+	try {
+		assert.equal((await request(app, "/api/dsh-mobile-maxxing/push/config", { method: "GET", origin: NEW_ORIGIN })).status, 200);
+		question(app, "session-1");
+		await settle();
+		assert.deepEqual(fetchRecorder.calls, [phone.endpoint], "a trailing-slash origin missed its own subscription");
+	} finally {
+		fetchRecorder.restore();
+	}
+	assert.equal(home, process.env.DSH_HOME);
+}));
+
+test("a rejected request cannot teach the host a target origin", withHome(async (home, file) => {
+	mkdirSync(dirname(file), { recursive: true });
+	const phone = subscription("https://web.push.apple.com/phone");
+	const old = subscription("https://web.push.apple.com/old");
+	seed(file, phone.endpoint, NEW_ORIGIN);
+	seed(file, old.endpoint, OLD_ORIGIN);
+
+	const refused = makeInstance({ rejection: 403 });
+	refused.addRoot("session-1");
+	const fetchRecorder = withFetch(() => ({ status: 201, ok: true }));
+	try {
+		// A request the Web server refuses must not become the push target: the
+		// guard learns origins only after the rejection check.
+		assert.equal(
+			(await request(refused, "/api/dsh-mobile-maxxing/push/config", { method: "GET", origin: OLD_ORIGIN })).status,
+			403,
+		);
+		question(refused, "session-1");
+		await settle();
+		assert.deepEqual(fetchRecorder.calls, [], "a rejected request taught the host an origin");
+
+		// An accepted request from the same process still routes normally.
+		const accepted = makeInstance();
+		accepted.addRoot("session-1");
+		assert.equal(
+			(await request(accepted, "/api/dsh-mobile-maxxing/push/config", { method: "GET", origin: NEW_ORIGIN })).status,
+			200,
+		);
+		question(accepted, "session-1");
+		await settle();
+		assert.deepEqual(fetchRecorder.calls, [phone.endpoint], "an accepted origin did not route the question");
 	} finally {
 		fetchRecorder.restore();
 	}

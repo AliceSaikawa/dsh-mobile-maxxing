@@ -33,6 +33,15 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * The language chosen for this device's mobile UI, or "" when this device
+     * follows the shared/browser locale. Set only after the desktop gate in the
+     * mobile half; the copy lookup above must see it before the host global.
+     */
+    let localDisplayLanguage = "";
+    /** The shared DSH locale, tracked so "System" copy follows the shell. */
+    let localDisplayHostLanguage = "";
+
+    /**
      * The language host injected for this page, then the document language,
      * then English.
      *
@@ -44,6 +53,18 @@ window.__ModuleLoader__.load({
      * inject the global.
      */
     function currentLang() {
+      // A device-local display language wins. If the selected DSH locale has
+      // no copy pack in this package (for example zh), render English rather
+      // than inventing a partial translation; the DSH UI itself still follows
+      // the selected locale.
+      const local = knownLang(localDisplayLanguage);
+      if (local !== "") return local;
+      if (localDisplayLanguage !== "") return "en";
+      // With a locale service, "System" means the shared DSH UI language, not
+      // the host's independent ja-by-default copy global.
+      const host = knownLang(localDisplayHostLanguage);
+      if (host !== "") return host;
+      if (localDisplayHostLanguage !== "") return "en";
       return knownLang(globalThis.__RDSH_PWA_LANG__)
         || knownLang(document.documentElement.lang)
         || "en";
@@ -1079,12 +1100,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           id: "pwa-install",
           order: 40,
         }, InstallFooterAction));
-        ctx.slots.inject("settings.section", () => ctx.slots.register({
-          name: "settings.section",
-          id: "pwa",
-          order: 80,
-          label: () => t("tab.pwa"),
-        }, PwaSettingsSection));
       },
     };
     }
@@ -1125,8 +1140,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     // ---------------------------------------------------------------------
     // rdsh-mobile-ux — device-mode UX: drawer, settings, composer, in-app banners.
     // ---------------------------------------------------------------------
-    const HIDE_OVERRIDE_KEY = "rdsh-mobile-ux:hide-disabled";
-    const HIDE_EXTRA_KEY = "rdsh-mobile-ux:hide-extra";
     const NOTIFY_DEVICE_TURNS_KEY = "rdsh-mobile-ux:notify-device-turns";
     const ENTER_TO_SEND_KEY = "rdsh-mobile-ux:enter-to-send";
     const CONFIG = globalThis.__RDSH_MOBILE_UX_CONFIG__ && typeof globalThis.__RDSH_MOBILE_UX_CONFIG__ === "object"
@@ -1198,6 +1211,15 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     /** Browser-local theme choice; also read while the store initialises. */
     const DEVICE_THEME_KEY = "dsh-mobile-maxxing:device-theme";
+    /** Browser-local display choices. Never a Host setting and never synced. */
+    const LOCAL_DISPLAY_KEY = "rdsh-mobile-ux:local-display";
+    /** The three published theme font roles and their accepted integer ranges. */
+    const LOCAL_FONT_SPECS = {
+      text: { min: 10, max: 22, default: 14, variable: "--dsh-content-font-size" },
+      code: { min: 10, max: 16, default: 11, variable: "--dsh-code-font-size" },
+      terminal: { min: 10, max: 20, default: 13, variable: "--dsh-terminal-font-size" },
+    };
+    const LOCAL_FONT_ROLES = ["text", "code", "terminal"];
     const DEVICE_THEME_MODES = ["", "light", "dark", "system"];
     // The device-theme choices are rendered through the copy table so a future
     // Japanese pack can translate them without touching this file.
@@ -1218,8 +1240,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       mode: DEVICE_MODE,
       phone: phone(),
       drawerOpen: false,
-      hidden: [],
-      hideDisabled: false,
       notifications: { supported: false, permission: "default", subscribed: false, ready: false },
       notice: "",
       bootError: "",
@@ -1227,6 +1247,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       notifyDeviceTurns: readNotifyDeviceTurns(),
       deviceTheme: readDeviceTheme(),
       deviceThemeNote: "",
+      localPermission: readLocalPermission(),
+      permissionOptions: [],
+      permissionSharedDefault: "",
+      permissionError: "",
+      localDisplay: readLocalDisplaySettings(),
     };
     const subscribers = new Set();
     function emit(patch) {
@@ -1320,6 +1345,131 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     /** The live value of the #15 opt-in (the store copy only drives the UI). */
     function notifyDeviceTurns() {
       return readNotifyDeviceTurns();
+    }
+
+    // ---------------------------------------------------------------------
+    // Per-device default permission preset
+    //
+    // The shared General row writes the Host's `defaultPreset`, which seeds
+    // every device's new sessions. A phone that wants another default must not
+    // write that value, so the choice lives in localStorage and is applied to
+    // the blank session this device is about to open, with the same
+    // `/permission <preset>` command the in-session switcher sends. The
+    // session's own log records it; nothing outside this browser changes.
+    // ---------------------------------------------------------------------
+    const LOCAL_PERMISSION_KEY = "rdsh-mobile-ux:local-permission";
+    const PERMISSION_VALUE_LABELS = {
+      "read-only": "localPermission.readOnly",
+      "workspace-write": "localPermission.workspaceWrite",
+      "danger-full-access": "localPermission.fullAccess",
+      auto: "localPermission.auto",
+    };
+    // The upstream row's English labels, so a host-renamed preset keeps its
+    // own name while a built-in one uses our copy.
+    const PERMISSION_ENGLISH_NAMES = {
+      "read-only": "Read Only",
+      "workspace-write": "Workspace Write",
+      "danger-full-access": "Full access",
+      auto: "Auto review",
+    };
+
+    function readLocalPermission() {
+      try {
+        const value = localStorage.getItem(LOCAL_PERMISSION_KEY);
+        return typeof value === "string" && value !== "" ? value : null;
+      } catch {
+        return null;
+      }
+    }
+
+    function writeLocalPermission(value) {
+      const next = typeof value === "string" && value !== "" ? value : null;
+      try {
+        if (next === null) localStorage.removeItem(LOCAL_PERMISSION_KEY);
+        else localStorage.setItem(LOCAL_PERMISSION_KEY, next);
+      } catch {
+        /* private mode: the choice lasts for this page */
+      }
+      emit({ localPermission: next });
+    }
+
+    /** One preset's label, preferring this package's copy for built-in keys. */
+    function permissionOptionLabel(option) {
+      const key = PERMISSION_VALUE_LABELS[option.value];
+      if (key !== undefined && (option.name === option.value || option.name === PERMISSION_ENGLISH_NAMES[option.value])) return t(key);
+      return option.name;
+    }
+
+    /** Read the permission catalog once for the Mobile card. */
+    async function loadPermissionCatalog(remote) {
+      if (remote === undefined || remote === null || remote.permissionPresets === undefined) {
+        emit({ permissionError: t("localPermission.unavailable") });
+        return;
+      }
+      try {
+        const result = await remote.permissionPresets.catalog();
+        if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`);
+        const catalog = result.value;
+        emit({
+          permissionOptions: catalog.options.map((option) => ({
+            value: option.value,
+            name: option.name,
+            description: typeof option.description === "string" ? option.description : "",
+          })),
+          permissionSharedDefault: catalog.defaultPreset,
+          permissionError: "",
+        });
+      } catch (error) {
+        emit({ permissionError: t("localPermission.unavailableDetail", { error: String((error && error.message) || error) }) });
+      }
+    }
+
+    /**
+     * Apply this browser's preset to one freshly opened blank session.
+     *
+     * shortcut: the command runs right after the blank session opens, so a
+     * prompt sent in the same instant could run once under the shared default;
+     * gate the first send if that ever matters.
+     */
+    async function applyLocalPermissionToSession(sessions, sessionId) {
+      const preset = readLocalPermission();
+      if (preset === null || typeof sessionId !== "string" || sessionId === "") return;
+      if (sessions === undefined || sessions === null) return;
+      try {
+        await sessions.using(sessionId, { source: "mobilePermissionDefault" }, async (reference) => {
+          const live = reference.binding.session;
+          const result = await live.command(`/permission ${preset}`);
+          if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`);
+          if (!result.value.matched) throw new Error(t("localPermission.unsupported"));
+        });
+      } catch (error) {
+        console.warn("[rdsh-mobile-ux] local default permission failed", error);
+        emit({ permissionError: t("localPermission.applyFailed", { error: String((error && error.message) || error) }) });
+      }
+    }
+
+    /**
+     * Wrap the one navigation entry point every new-session flow uses
+     * (`startSession` and `openWorkspace` both reach it through `this`), so the
+     * preset lands on the blank session before it is shown. The wrapper is an
+     * instance property restored on disposal; the shared service and the Host
+     * see no change.
+     */
+    function installLocalPermissionDefault(scope, workspace, sessions) {
+      if (workspace === undefined || workspace === null) return;
+      const original = workspace.openWorkspaceSession;
+      if (typeof original !== "function" || Object.hasOwn(workspace, "openWorkspaceSession")) return;
+      const wrapper = function (workspaceId, beforeOpen, reuse) {
+        const open = typeof beforeOpen === "function" ? beforeOpen : null;
+        return original.call(this, workspaceId, (sessionId) => {
+          if (open !== null) open(sessionId);
+          void applyLocalPermissionToSession(sessions, sessionId);
+        }, reuse);
+      };
+      workspace.openWorkspaceSession = wrapper;
+      scope.effect(() => () => {
+        if (workspace.openWorkspaceSession === wrapper) delete workspace.openWorkspaceSession;
+      });
     }
 
     // ---------------------------------------------------------------------
@@ -1571,6 +1721,342 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       }, "rdsh-mobile-ux: device theme");
     }
 
+    // ---------------------------------------------------------------------
+    // Device-local display: font sizes and UI language.
+    //
+    // Both controls are deliberately browser-local. The theme and locale
+    // services expose only shared writers (`setFontSize` / `setLocale`), so
+    // this block never calls them: it projects a local snapshot onto each
+    // service for the lifetime of the mobile page and restores the Host
+    // snapshot on dispose. `theme.getTheme()` / `locale.getSnapshot()` remain
+    // the public read API; the local projection is a runtime/DOM override, not
+    // a durable setting and not a remote call.
+    // ---------------------------------------------------------------------
+    let localDisplayRuntime = null;
+
+    /** Read only this browser's display choices; malformed data means "follow Host". */
+    function readLocalDisplaySettings() {
+      const empty = {
+        fonts: null,
+        fontsLocal: false,
+        language: "",
+        languages: [],
+        available: { fonts: true, language: true },
+        reason: { fonts: "", language: "" },
+      };
+      try {
+        const raw = JSON.parse(localStorage.getItem(LOCAL_DISPLAY_KEY) || "null");
+        if (raw === null || typeof raw !== "object") return empty;
+        const fonts = raw.fonts;
+        const validFonts = fonts !== null && fonts !== undefined && typeof fonts === "object"
+          && LOCAL_FONT_ROLES.every((role) => {
+            const value = Number(fonts[role]);
+            const spec = LOCAL_FONT_SPECS[role];
+            return Number.isInteger(value) && value >= spec.min && value <= spec.max;
+          });
+        return {
+          fonts: validFonts ? {
+            text: Number(fonts.text),
+            code: Number(fonts.code),
+            terminal: Number(fonts.terminal),
+          } : null,
+          fontsLocal: validFonts,
+          language: typeof raw.language === "string" ? raw.language : "",
+          languages: [],
+          available: { fonts: true, language: true },
+          reason: { fonts: "", language: "" },
+        };
+      } catch (error) {
+        return empty;
+      }
+    }
+
+    /** Persist only this browser's choices. Never a settings/remote write. */
+    function writeLocalDisplaySettings(display) {
+      try {
+        localStorage.setItem(LOCAL_DISPLAY_KEY, JSON.stringify({
+          fonts: display.fontsLocal ? display.fonts : null,
+          language: display.language,
+        }));
+      } catch (error) {
+        /* private mode: the choice lasts for this page */
+      }
+    }
+
+    function clampLocalFont(role, value) {
+      const spec = LOCAL_FONT_SPECS[role];
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed)) return spec.default;
+      return Math.max(spec.min, Math.min(spec.max, Math.round(parsed)));
+    }
+
+    /** Apply one-step font changes to the local state and the local projection. */
+    function setLocalDisplayFont(role, delta) {
+      if (!LOCAL_FONT_SPECS[role] || state.localDisplay.available.fonts === false) return;
+      const current = state.localDisplay.fonts;
+      if (current === null || current === undefined) return;
+      const next = {
+        ...current,
+        [role]: clampLocalFont(role, current[role] + delta),
+      };
+      if (next[role] === current[role]) return;
+      const display = { ...state.localDisplay, fonts: next, fontsLocal: true };
+      writeLocalDisplaySettings(display);
+      emit({ localDisplay: display });
+      localDisplayRuntime?.applyTheme();
+    }
+
+    /** Select a supported locale for this browser only; "" follows the Host. */
+    function setLocalDisplayLanguage(id) {
+      const display = state.localDisplay;
+      if (display.available.language === false) return;
+      const next = typeof id === "string" ? id : "";
+      const supported = next === "" || display.languages.some((entry) => entry.id === next);
+      if (!supported) return;
+      const updated = { ...display, language: next };
+      localDisplayLanguage = next;
+      writeLocalDisplaySettings(updated);
+      emit({ localDisplay: updated });
+      localDisplayRuntime?.applyLocale();
+    }
+
+    /**
+     * Local-only projection of the theme and locale services.
+     *
+     * Public API evidence: reads use `theme.getTheme()` and
+     * `locale.getSnapshot()`; no `setFontSize`, `setFontSize` shortcut,
+     * `setLocale`, `ctx.settings`, `configForms`, `remote` or `fetch` is used.
+     * The snapshots are replaced on the service object only for this mobile
+     * page and restored by the effect cleanup. Locale listeners are notified
+     * directly (not through `locale/change`) so the native shell bridge never
+     * observes the device-local choice.
+     */
+    function attachLocalDisplay(ctx) {
+      let theme;
+      let locale;
+      try {
+        theme = typeof ctx.get === "function" ? ctx.get("theme") : undefined;
+      } catch (error) {
+        theme = undefined;
+      }
+      try {
+        locale = typeof ctx.get === "function" ? ctx.get("locale") : undefined;
+      } catch (error) {
+        locale = undefined;
+      }
+      const themeService = theme !== null && theme !== undefined && typeof theme.getTheme === "function" ? theme : null;
+      const localeService = locale !== null && locale !== undefined && typeof locale.getSnapshot === "function" ? locale : null;
+      let hostTheme = null;
+      let hostLocale = null;
+      try {
+        hostTheme = themeService?.getTheme() ?? null;
+      } catch (error) {
+        hostTheme = null;
+      }
+      try {
+        hostLocale = localeService?.getSnapshot() ?? null;
+      } catch (error) {
+        hostLocale = null;
+      }
+      const hostFonts = hostTheme?.fontSizes;
+      const themeUsable = themeService !== null
+        && hostFonts !== null && hostFonts !== undefined && typeof hostFonts === "object"
+        && LOCAL_FONT_ROLES.every((role) => Number.isInteger(hostFonts[role]))
+        && "snapshot" in themeService;
+      const themeReason = themeService === null
+        ? "theme-missing"
+        : (!themeUsable ? "theme-shape" : "");
+      const localeShape = localeService !== null
+        && hostLocale !== null && hostLocale !== undefined
+        && typeof hostLocale.active === "string"
+        && Array.isArray(hostLocale.locales)
+        && "snapshot" in localeService
+        && localeService.listeners !== null && localeService.listeners !== undefined
+        && typeof localeService.listeners[Symbol.iterator] === "function";
+      const options = localeShape ? localeOptionsFrom(hostLocale) : [];
+      const localeUsable = localeShape && options.length > 0;
+      const localeReason = localeService === null
+        ? "locale-missing"
+        : (!localeShape ? "locale-shape" : (options.length === 0 ? "no-locales" : ""));
+      const stored = readLocalDisplaySettings();
+      const language = localeUsable && stored.language !== "" && options.some((entry) => entry.id === stored.language)
+        ? stored.language
+        : "";
+      const fonts = stored.fonts ?? (themeUsable ? hostFonts : {
+        text: 14,
+        code: 11,
+        terminal: 13,
+      });
+      state.localDisplay = {
+        fonts,
+        fontsLocal: themeUsable && stored.fonts !== null,
+        language,
+        languages: options,
+        available: { fonts: themeUsable, language: localeUsable },
+        reason: { fonts: themeReason, language: localeReason },
+      };
+      localDisplayLanguage = language;
+      localDisplayHostLanguage = typeof hostLocale?.active === "string" ? hostLocale.active : "";
+      localDisplayRuntime = {
+        applyTheme: () => {},
+        applyLocale: () => {},
+      };
+
+      const themeEpoch = { value: 0 };
+      const localeEpoch = { value: 0 };
+      let projectingTheme = false;
+      let disposed = false;
+      const baseDocumentLang = document.documentElement.lang;
+
+      const emitTheme = (snapshot) => {
+        projectingTheme = true;
+        try {
+          ctx.emit("theme/change", snapshot);
+        } finally {
+          projectingTheme = false;
+        }
+      };
+
+      const notifyLocale = () => {
+        const listeners = localeService?.listeners;
+        if (listeners === null || listeners === undefined || typeof listeners[Symbol.iterator] !== "function") return;
+        for (const listener of [...listeners]) {
+          try {
+            listener();
+          } catch (error) {
+            /* one broken LocaleFace must not stop the rest */
+          }
+        }
+      };
+
+      const applyTheme = () => {
+        if (state.localDisplay.available.fonts !== true || themeService === null || hostTheme === null) return;
+        if (!state.localDisplay.fontsLocal) {
+          if (themeService.snapshot !== hostTheme) themeService.snapshot = hostTheme;
+          return;
+        }
+        themeEpoch.value += 1;
+        const revision = hostTheme.revision + 1000 + themeEpoch.value;
+        themeService.snapshot = Object.freeze({
+          ...hostTheme,
+          fontSizes: Object.freeze({ ...state.localDisplay.fonts }),
+          revision,
+        });
+        emitTheme(themeService.snapshot);
+      };
+
+      const applyLocale = () => {
+        if (state.localDisplay.available.language !== true || localeService === null || hostLocale === null) return;
+        const chosen = state.localDisplay.language;
+        if (chosen === "" || !state.localDisplay.languages.some((entry) => entry.id === chosen)) {
+          if (localeService.snapshot !== hostLocale) localeService.snapshot = hostLocale;
+          if (document.documentElement.lang !== baseDocumentLang) document.documentElement.lang = baseDocumentLang;
+          notifyLocale();
+          return;
+        }
+        localeEpoch.value += 1;
+        const revision = hostLocale.revision + 1000 + localeEpoch.value;
+        localeService.snapshot = Object.freeze({
+          ...hostLocale,
+          active: chosen,
+          revision,
+        });
+        document.documentElement.lang = chosen === "zh" ? "zh-CN" : chosen;
+        notifyLocale();
+      };
+
+      localDisplayRuntime = { applyTheme, applyLocale };
+      emit({ localDisplay: state.localDisplay });
+
+      ctx.effect(() => {
+        const offTheme = ctx.on("theme/change", (snapshot) => {
+          if (projectingTheme || disposed || snapshot === null || snapshot === undefined) return;
+          if (state.localDisplay.available.fonts !== true) return;
+          hostTheme = snapshot;
+          if (!state.localDisplay.fontsLocal) {
+            emit({
+              localDisplay: {
+                ...state.localDisplay,
+                fonts: snapshot.fontSizes,
+              },
+            });
+          }
+          queueMicrotask(() => {
+            if (!disposed) applyTheme();
+          });
+        });
+        const offLocale = ctx.on("locale/change", (snapshot) => {
+          if (disposed || snapshot === null || snapshot === undefined) return;
+          if (state.localDisplay.available.language !== true) return;
+          hostLocale = snapshot;
+          localDisplayHostLanguage = typeof snapshot.active === "string" ? snapshot.active : "";
+          const nextOptions = localeOptionsFrom(snapshot);
+          const chosen = state.localDisplay.language;
+          const valid = chosen === "" || nextOptions.some((entry) => entry.id === chosen);
+          if (nextOptions.length !== state.localDisplay.languages.length
+            || nextOptions.some((entry, index) => entry.id !== state.localDisplay.languages[index]?.id)) {
+            emit({ localDisplay: { ...state.localDisplay, languages: nextOptions, language: valid ? chosen : "" } });
+          }
+          if (!valid) {
+            localDisplayLanguage = "";
+            writeLocalDisplaySettings({ ...state.localDisplay, language: "" });
+          }
+          queueMicrotask(() => {
+            if (!disposed) applyLocale();
+          });
+        });
+        try {
+          applyTheme();
+          applyLocale();
+        } catch (error) {
+          console.error("[rdsh-mobile-ux] local display failed", error);
+        }
+        return () => {
+          disposed = true;
+          offTheme?.();
+          offLocale?.();
+          try {
+            if (state.localDisplay.available.fonts === true && themeService !== null && hostTheme !== null) {
+              themeService.snapshot = hostTheme;
+              emitTheme(hostTheme);
+            }
+          } catch (error) {
+            /* the theme fiber may already be gone */
+          }
+          try {
+            if (state.localDisplay.available.language === true && localeService !== null && hostLocale !== null) {
+              localeService.snapshot = hostLocale;
+              notifyLocale();
+            }
+            if (document.documentElement.lang !== baseDocumentLang) document.documentElement.lang = baseDocumentLang;
+          } catch (error) {
+            /* the locale fiber may already be gone */
+          }
+          localDisplayLanguage = "";
+          localDisplayHostLanguage = "";
+          localDisplayRuntime = null;
+        };
+      }, "rdsh-mobile-ux: local display");
+    }
+
+    /** The locale definitions the shared service currently exposes. */
+    function localeOptions(localeService) {
+      let snapshot;
+      try {
+        snapshot = localeService?.getSnapshot?.();
+      } catch (error) {
+        return [];
+      }
+      return localeOptionsFrom(snapshot);
+    }
+
+    function localeOptionsFrom(snapshot) {
+      const list = Array.isArray(snapshot?.locales) ? snapshot.locales : [];
+      return list
+        .filter((entry) => entry !== null && entry !== undefined && typeof entry.id === "string" && entry.id !== "")
+        .map((entry) => ({ id: entry.id, label: typeof entry.label === "string" && entry.label !== "" ? entry.label : entry.id }));
+    }
+
     /**
      * Some client bundles register a slash command with a plain string where
      * the runtime calls `description()` / `label()`. That single bad row makes
@@ -1658,107 +2144,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       root.style.setProperty("--rdsh-native-gap-px", `${nativeGap ? Math.max(0, Math.round(screenHeight - window.innerHeight)) : 0}px`);
     }
 
-    function readHideExtra() {
-      try {
-        const value = JSON.parse(localStorage.getItem(HIDE_EXTRA_KEY) || "[]");
-        return Array.isArray(value) ? value.filter((item) => typeof item === "string" && item.trim() !== "") : [];
-      } catch {
-        return [];
-      }
-    }
-
+    /** The host can still turn the standard hide list off; the browser cannot. */
     function hideDisabled() {
-      if (CONFIG.showHiddenControls === true) return true;
-      try {
-        return localStorage.getItem(HIDE_OVERRIDE_KEY) === "1";
-      } catch {
-        return false;
-      }
-    }
-
-    // ---------------------------------------------------------------------
-    // Scroll diagnostics (devtools): which element actually moves?
-    //
-    // Restored with the Settings cards. Nothing here hard-codes a device or a
-    // host: every value is read from the live DOM / window at call time.
-    // ---------------------------------------------------------------------
-    const lastScrolls = [];
-
-    function recordScroll(event) {
-      const target = event.target;
-      if (!(target instanceof Element)) return;
-      const style = getComputedStyle(target);
-      lastScrolls.push({
-        at: Date.now(),
-        tag: target.tagName,
-        cls: String(target.className).slice(0, 120),
-        id: target.id,
-        scrollTop: Math.round(target.scrollTop),
-        scrollHeight: target.scrollHeight,
-        clientHeight: target.clientHeight,
-        overflowY: style.overflowY,
-      });
-      if (lastScrolls.length > 12) lastScrolls.shift();
-    }
-
-    function scrollables() {
-      const list = [];
-      for (const element of document.querySelectorAll("*")) {
-        if (element.scrollHeight <= element.clientHeight + 2) continue;
-        const style = getComputedStyle(element);
-        if (style.overflowY !== "auto" && style.overflowY !== "scroll") continue;
-        list.push({
-          tag: element.tagName,
-          cls: String(element.className).slice(0, 120),
-          id: element.id,
-          scrollTop: Math.round(element.scrollTop),
-          scrollHeight: element.scrollHeight,
-          clientHeight: element.clientHeight,
-          overflowY: style.overflowY,
-          position: style.position,
-        });
-      }
-      return list;
-    }
-
-    function scrollChain() {
-      const list = [];
-      let node = document.querySelector("[data-composer-input]") || document.querySelector('[class*="scrollBody"]');
-      while (node !== null && node !== document.documentElement) {
-        const style = getComputedStyle(node);
-        if (node.scrollHeight > node.clientHeight + 2 || style.overflowY === "auto" || style.overflowY === "scroll") {
-          list.push({
-            tag: node.tagName,
-            cls: String(node.className).slice(0, 120),
-            scrollTop: Math.round(node.scrollTop),
-            scrollHeight: node.scrollHeight,
-            clientHeight: node.clientHeight,
-            overflowY: style.overflowY,
-          });
-        }
-        node = node.parentElement;
-      }
-      return list;
-    }
-
-    /** Numbers that distinguish the iOS native gap from the safe-area chin. */
-    function readViewportMetrics() {
-      const viewport = window.visualViewport;
-      const screenHeight = window.screen && Number.isFinite(window.screen.height) ? Math.round(window.screen.height) : 0;
-      const innerHeight = Math.round(window.innerHeight);
-      const rootStyle = getComputedStyle(document.documentElement);
-      return {
-        screenHeight,
-        innerHeight,
-        clientHeight: document.documentElement.clientHeight,
-        visualHeight: viewport ? Math.round(viewport.height) : 0,
-        visualOffset: viewport ? Math.round(viewport.offsetTop) : 0,
-        gap: screenHeight > 0 ? screenHeight - innerHeight : null,
-        standalone: window.navigator.standalone === true || window.matchMedia("(display-mode: standalone)").matches,
-        nativeGap: document.documentElement.hasAttribute("data-rdsh-native-gap"),
-        safeTop: rootStyle.getPropertyValue("--rdsh-safe-top").trim() || "0px",
-        safeBottom: rootStyle.getPropertyValue("--rdsh-safe-bottom").trim() || "0px",
-      };
+      return CONFIG.showHiddenControls === true;
     }
 
     // ---------------------------------------------------------------------
@@ -1783,7 +2171,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     function hideLabels() {
-      return [...HIDE_DEFAULT, ...(Array.isArray(CONFIG.hideLabels) ? CONFIG.hideLabels : []), ...readHideExtra()];
+      return [...HIDE_DEFAULT, ...(Array.isArray(CONFIG.hideLabels) ? CONFIG.hideLabels : [])];
     }
 
     function shouldHide(label, labels) {
@@ -1794,9 +2182,27 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       });
     }
 
+    let readGeneralSettingsLabel = () => "General";
+
+    function decorateMobileSettingsTabs(modal) {
+      if (!phone() || modal === null) return;
+      const generalLabel = readGeneralSettingsLabel();
+      const tabs = [...modal.querySelectorAll("nav button")];
+      const mobile = tabs.find((button) => labelOf(button) === t("tab.mobile"));
+      let generalActive = false;
+      for (const button of tabs) {
+        const general = labelOf(button) === generalLabel;
+        button.toggleAttribute("data-rdsh-settings-tab-hidden", general);
+        if (general && button.getAttribute("aria-current") === "true") generalActive = true;
+      }
+      if (generalActive && mobile !== undefined) {
+        mobile.click();
+        mobile.focus();
+      }
+    }
+
     function applyHideList(disabled) {
       const labels = hideLabels();
-      const hidden = new Set();
       // Hide the controls that dead-end on a mobile device. Desktop mode
       // keeps every control, whatever the window width.
       const hideOnThisDevice = !disabled && phone();
@@ -1805,27 +2211,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         if (label === "" || label.length > 48) continue;
         if (hideOnThisDevice && shouldHide(label, labels)) {
           element.setAttribute("data-rdsh-hidden", "");
-          hidden.add(label);
         } else {
           element.removeAttribute("data-rdsh-hidden");
         }
       }
       const modal = document.querySelector('[data-shortcut-modal="settings"]');
-      // The tab merge belongs to mobile mode: `MobileSection` inlines the PWA
-      // and Input sections there, so the separate tabs vanish with them.
-      if (modal !== null && phone()) {
-        for (const button of modal.querySelectorAll("nav button")) {
-          const label = (button.textContent || "").trim();
-          const merged = label === t("tab.pwa") || label === t("tab.input");
-          const hideTab = merged || (hideOnThisDevice && shouldHide(label, labels));
-          button.toggleAttribute("data-rdsh-settings-tab-hidden", hideTab);
-          if (hideTab) hidden.add(label);
-        }
-      } else if (modal !== null) {
-        for (const button of modal.querySelectorAll("[data-rdsh-settings-tab-hidden]")) {
-          button.removeAttribute("data-rdsh-settings-tab-hidden");
-        }
-      }
+      decorateMobileSettingsTabs(modal);
       // PC-only settings rows and action buttons. Matched by their label, not
       // by an upstream class: the row container is found through structure,
       // and a bare action button ("Open configuration file") is hidden as the
@@ -1844,7 +2235,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
             if (isRow || isButton) {
               row.setAttribute("data-rdsh-setting-hidden", "");
               rowHidden.add(row);
-              hidden.add(text);
               break;
             }
             row = row.parentElement;
@@ -1867,11 +2257,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         const stock = items.find((item) => /^Copy Session ID$/i.test(labelOf(item)));
         if (localised !== undefined && stock !== undefined) {
           stock.setAttribute("data-rdsh-hidden", "");
-          hidden.add("Copy Session ID");
         }
       }
-      const list = [...hidden].sort();
-      if (list.join("|") !== state.hidden.join("|")) emit({ hidden: list });
     }
 
     function unringSessionTitle(title) {
@@ -8258,46 +8645,59 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     // ---------------------------------------------------------------------
     // UI: Settings section
     // ---------------------------------------------------------------------
-    function PermissionLabel(status) {
-      if (!status.supported) return t("notify.permission.unsupported");
-      if (status.permission === "granted") return status.subscribed ? t("notify.permission.granted") : t("notify.permission.allowed");
-      if (status.permission === "denied") return t("notify.permission.blocked");
-      return t("notify.permission.default");
+    function LocalPermissionSection() {
+      const s = useStore();
+      const [message, setMessage] = useState("");
+      const options = Array.isArray(s.permissionOptions) ? s.permissionOptions : [];
+      const chosen = typeof s.localPermission === "string" && s.localPermission !== "" ? s.localPermission : "";
+      const shared = typeof s.permissionSharedDefault === "string" ? s.permissionSharedDefault : "";
+      const sharedOption = options.find((option) => option.value === shared);
+      const sharedLabel = sharedOption === undefined ? shared : permissionOptionLabel(sharedOption);
+
+      return h(
+        "div",
+        { className: "rdsh-mux-card" },
+        h("h3", { className: "rdsh-mux-title" }, t("localPermission.title")),
+        h("p", { className: "rdsh-mux-desc" }, t("localPermission.desc")),
+        h(
+          "label",
+          { className: "rdsh-mux-slider" },
+          h("span", null, t("localPermission.label")),
+          h(
+            "select",
+            {
+              className: "rdsh-mux-select",
+              value: chosen,
+              onChange: (event) => {
+                writeLocalPermission(event.target.value);
+                setMessage(t("localPermission.saved"));
+              },
+            },
+            h("option", { value: "" }, t("localPermission.follow")),
+            options.map((option) => h("option", { key: option.value, value: option.value }, permissionOptionLabel(option))),
+          ),
+        ),
+        shared === ""
+          ? null
+          : h("p", { className: "rdsh-mux-note" }, t("localPermission.shared", { preset: sharedLabel })),
+        h("p", { className: "rdsh-mux-note" }, t("localPermission.hostNote")),
+        s.permissionError === "" ? null : h("p", { className: "rdsh-mux-note" }, s.permissionError),
+        message === "" ? null : h("p", { className: "rdsh-mux-note" }, message),
+      );
     }
 
     function MobileSection() {
       const s = useStore();
-      // #15: the mobile-only rows and the "hidden controls" card are decided
-      // by the device, not the window width, so a desktop never reads "this is
-      // what we hide from you" about controls that are all visible.
+      // The rows this section keeps are decided by the device, not the window
+      // width, so a desktop never reads mobile-only copy.
       const onPhone = s.phone === true;
       const [message, setMessage] = useState("");
       const [busy, setBusy] = useState(false);
-      const [disabled, setDisabled] = useState(hideDisabled());
-      const [extra, setExtra] = useState(readHideExtra().join("\n"));
       const [sound, setSound] = useState(readSoundPreset);
       const [volume, setVolume] = useState(readSoundVolume);
-      const [metrics, setMetrics] = useState(readViewportMetrics);
-      const [scrollTick, setScrollTick] = useState(0);
 
       useEffect(() => {
         void refreshNotificationStatus();
-      }, []);
-
-      useEffect(() => {
-        const refresh = () => setMetrics(readViewportMetrics());
-        const viewport = window.visualViewport;
-        viewport?.addEventListener("resize", refresh);
-        viewport?.addEventListener("scroll", refresh);
-        window.addEventListener("resize", refresh);
-        window.addEventListener("orientationchange", refresh);
-        refresh();
-        return () => {
-          viewport?.removeEventListener("resize", refresh);
-          viewport?.removeEventListener("scroll", refresh);
-          window.removeEventListener("resize", refresh);
-          window.removeEventListener("orientationchange", refresh);
-        };
       }, []);
 
       const run = async (action, success) => {
@@ -8312,28 +8712,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           setBusy(false);
           scheduleDecorate();
         }
-      };
-
-      const saveExtra = () => {
-        const labels = extra.split("\n").map((line) => line.trim()).filter((line) => line !== "");
-        try {
-          localStorage.setItem(HIDE_EXTRA_KEY, JSON.stringify(labels));
-        } catch {
-          /* private mode: the list only lives for this page */
-        }
-        scheduleDecorate();
-        setMessage(t("notify.hideListSaved"));
-      };
-
-      const toggleDisabled = (value) => {
-        setDisabled(value);
-        try {
-          if (value) localStorage.setItem(HIDE_OVERRIDE_KEY, "1");
-          else localStorage.removeItem(HIDE_OVERRIDE_KEY);
-        } catch {
-          /* ignore */
-        }
-        scheduleDecorate();
       };
 
       return h(
@@ -8366,6 +8744,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
             ? h("p", { className: "rdsh-mux-note" }, t("mux.deviceTheme.unsupported"))
             : null,
         ),
+        onPhone ? h(LocalPermissionSection) : null,
         h(
           "div",
           { className: "rdsh-mux-card" },
@@ -8375,24 +8754,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           // notification controls below stay: they are useful everywhere.
           h("p", { className: "rdsh-mux-desc" }, onPhone ? t("mux.section.desc") : t("mux.section.desc.desktop")),
           onPhone ? h("p", { className: "rdsh-mux-note" }, t("mux.section.plusNote")) : null,
-          h(
-            "dl",
-            { className: "rdsh-mux-rows" },
-            onPhone
-              ? h(
-                React.Fragment,
-                null,
-                h("dt", null, t("mux.row.layout")),
-                h("dd", null, s.narrow ? t("mux.row.layout.narrow") : t("mux.row.layout.wide")),
-              )
-              : null,
-            h("dt", null, t("mux.row.sessions")),
-            h("dd", null, s.drawerOpen ? t("mux.row.sessions.open") : t("mux.row.sessions.closed")),
-            h("dt", null, t("mux.row.notifications")),
-            h("dd", null, PermissionLabel(s.notifications)),
-            h("dt", null, t("mux.row.build")),
-            h("dd", null, BUILD),
-          ),
           h(
             "div",
             { className: "rdsh-mux-actions" },
@@ -8488,123 +8849,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           h("p", { className: "rdsh-mux-note" }, t("mux.note.notifyScope")),
           message !== "" ? h("p", { className: "rdsh-mux-note" }, message) : null,
         ),
-        h(
-          "div",
-          { className: "rdsh-mux-card" },
-          h("h3", { className: "rdsh-mux-title" }, t("mux.diag.height.title")),
-          h("p", { className: "rdsh-mux-desc" }, t("mux.diag.height.desc")),
-          h(
-            "dl",
-            { className: "rdsh-mux-rows" },
-            h("dt", null, t("mux.diag.screenHeight")),
-            h("dd", null, String(metrics.screenHeight)),
-            h("dt", null, t("mux.diag.innerHeight")),
-            h("dd", null, String(metrics.innerHeight)),
-            h("dt", null, t("mux.diag.clientHeight")),
-            h("dd", null, String(metrics.clientHeight)),
-            h("dt", null, t("mux.diag.visualViewport")),
-            h("dd", null, t("mux.diag.visualValue", { height: metrics.visualHeight, offset: metrics.visualOffset })),
-            h("dt", null, t("mux.diag.gap")),
-            h("dd", null, metrics.gap === null ? "—" : `${metrics.gap}px`),
-            h("dt", null, t("mux.diag.standalone")),
-            h("dd", null, metrics.standalone ? t("mux.diag.yes") : t("mux.diag.no")),
-            h("dt", null, t("mux.diag.safeArea")),
-            h("dd", null, t("mux.diag.safeValue", { top: metrics.safeTop, bottom: metrics.safeBottom })),
-            h("dt", null, t("mux.diag.nativeGap")),
-            h("dd", null, metrics.nativeGap ? t("mux.diag.nativeGap.yes") : t("mux.diag.nativeGap.no")),
-          ),
-          h("p", { className: "rdsh-mux-note" }, t("mux.diag.height.note")),
-          h(
-            "div",
-            { className: "rdsh-mux-actions" },
-            h("button", { type: "button", onClick: () => setMetrics(readViewportMetrics()) }, t("mux.diag.reMeasure")),
-          ),
-        ),
-        h(
-          "div",
-          { className: "rdsh-mux-card", "data-scroll-tick": scrollTick },
-          h("h3", { className: "rdsh-mux-title" }, t("mux.diag.scroll.title")),
-          h("p", { className: "rdsh-mux-desc" }, t("mux.diag.scroll.desc")),
-          h(
-            "div",
-            { className: "rdsh-mux-actions" },
-            h("button", {
-              type: "button",
-              onClick: () => {
-                lastScrolls.length = 0;
-                setScrollTick((value) => value + 1);
-              },
-            }, t("mux.diag.scroll.clear")),
-            h("button", { type: "button", onClick: () => setScrollTick((value) => value + 1) }, t("mux.diag.scroll.refresh")),
-          ),
-          h("p", { className: "rdsh-mux-label" }, t("mux.diag.scroll.last")),
-          lastScrolls.length === 0
-            ? h("p", { className: "rdsh-mux-note" }, t("mux.diag.scroll.empty"))
-            : h("ul", { className: "rdsh-mux-scroll-list" },
-              lastScrolls.slice(-6).reverse().map((entry, index) => h(
-                "li",
-                { key: `${entry.at}:${index}` },
-                t("mux.diag.scroll.lastItem", {
-                  tag: entry.tag,
-                  cls: entry.cls || t("mux.diag.noClass"),
-                  top: entry.scrollTop,
-                  overflow: entry.overflowY,
-                }),
-              )),
-            ),
-          h("p", { className: "rdsh-mux-label" }, t("mux.diag.scroll.scrollable")),
-          h("ul", { className: "rdsh-mux-scroll-list" },
-            scrollables().slice(0, 8).map((entry, index) => h(
-              "li",
-              { key: `${entry.cls}:${index}` },
-              t("mux.diag.scroll.scrollableItem", {
-                tag: entry.tag,
-                cls: entry.cls || t("mux.diag.noClass"),
-                top: entry.scrollTop,
-                height: entry.scrollHeight,
-                overflow: entry.overflowY,
-              }),
-            )),
-          ),
-        ),
-        onPhone
-          ? h(
-            "div",
-            { className: "rdsh-mux-card" },
-            h("h3", { className: "rdsh-mux-title" }, t("mux.hidden.title")),
-            h("p", { className: "rdsh-mux-desc" }, t("mux.hidden.desc")),
-            h(
-              "div",
-              { className: "rdsh-mux-chips" },
-              s.hidden.length === 0
-                ? h("span", { className: "rdsh-mux-chip" }, t("mux.hidden.none"))
-                : s.hidden.map((label) => h("span", { className: "rdsh-mux-chip", key: label }, label)),
-            ),
-            h(
-              "label",
-              { className: "rdsh-mux-check" },
-              h("input", { type: "checkbox", checked: disabled, onChange: (event) => toggleDisabled(event.target.checked) }),
-              t("mux.hidden.disable"),
-            ),
-            h("div", null,
-              h("div", { className: "rdsh-mux-label" }, t("mux.hidden.extra")),
-              h("textarea", {
-                value: extra,
-                rows: 3,
-                spellCheck: false,
-                onChange: (event) => setExtra(event.target.value),
-                className: "rdsh-mux-textarea",
-              }),
-            ),
-            h("div", { className: "rdsh-mux-actions" },
-              h("button", { type: "button", onClick: saveExtra }, t("mux.hidden.save")),
-            ),
-          )
-          : null,
-        // #15: the PWA and Input sections are registered as their own tabs.
-        // Inlining them into "Mobile" as well duplicated every heading on a
-        // desktop, where none of the three tabs are merged. Both halves of the
-        // merge must agree: `applyHideList` hides those tabs under `phone()`.
+        // One Mobile tab carries both sections inline; the separate tabs are
+        // no longer registered.
+        onPhone ? h(LocalDisplaySettingsSection) : null,
         onPhone ? h(InputSection) : null,
         onPhone && typeof globalThis.__RDSH_PWA_SETTINGS_SECTION__ === "function"
           ? h(globalThis.__RDSH_PWA_SETTINGS_SECTION__)
@@ -8636,6 +8883,96 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           h("p", { className: "rdsh-mux-note" }, s.enterToSend
             ? t("mux.input.current.enterSends")
             : t("mux.input.current.enterNewline")),
+        ),
+      );
+    }
+
+    /**
+     * Device-local font size and language controls.
+     *
+     * Kept as its own component (not folded into the Mobile card) so another
+     * unrelated Settings block can be cherry-picked beside it. All writes go
+     * to localStorage and the local projections above; no Host setting is
+     * touched.
+     */
+    function LocalDisplaySettingsSection() {
+      const s = useStore();
+      const display = s.localDisplay;
+      const fonts = display.fonts ?? { text: 14, code: 11, terminal: 13 };
+      const languages = display.languages ?? [];
+      const available = display.available ?? { fonts: true, language: true };
+      const reasons = display.reason ?? {};
+      const reasonText = (kind) => {
+        const reason = String(reasons[kind] ?? "");
+        const key = {
+          "theme-missing": "localDisplay.reason.themeMissing",
+          "theme-shape": "localDisplay.reason.themeShape",
+          "locale-missing": "localDisplay.reason.localeMissing",
+          "locale-shape": "localDisplay.reason.localeShape",
+          "no-locales": "localDisplay.reason.noLocales",
+        }[reason];
+        return key === undefined ? reason : t(key);
+      };
+      return h(
+        "section",
+        { className: "rdsh-mux-section" },
+        h(
+          "div",
+          { className: "rdsh-mux-card" },
+          h("h3", { className: "rdsh-mux-title" }, t("localDisplay.title")),
+          h("p", { className: "rdsh-mux-desc" }, t("localDisplay.desc")),
+          ...LOCAL_FONT_ROLES.map((role) => {
+            const spec = LOCAL_FONT_SPECS[role];
+            const value = fonts[role];
+            const label = t(`localDisplay.${role}`);
+            return h(
+              "div",
+              { className: "rdsh-mux-font-row", key: role },
+              h("span", { className: "rdsh-mux-font-label" }, label),
+              h(
+                "div",
+                { className: "rdsh-mux-font-control" },
+                h("button", {
+                  type: "button",
+                  className: "rdsh-mux-step",
+                  "aria-label": `${label} −`,
+                  disabled: available.fonts === false || value <= spec.min,
+                  onClick: () => setLocalDisplayFont(role, -1),
+                }, "−"),
+                h("span", { className: "rdsh-mux-font-value" }, `${value}px`),
+                h("button", {
+                  type: "button",
+                  className: "rdsh-mux-step",
+                  "aria-label": `${label} +`,
+                  disabled: available.fonts === false || value >= spec.max,
+                  onClick: () => setLocalDisplayFont(role, 1),
+                }, "+"),
+              ),
+            );
+          }),
+          available.fonts === false
+            ? h("p", { className: "rdsh-mux-note" }, t("localDisplay.unavailable", { reason: reasonText("fonts") }))
+            : null,
+          h(
+            "label",
+            { className: "rdsh-mux-slider" },
+            h("span", null, t("localDisplay.language")),
+            h(
+              "select",
+              {
+                className: "rdsh-mux-select",
+                value: display.language,
+                disabled: available.language === false,
+                onChange: (event) => setLocalDisplayLanguage(event.target.value),
+              },
+              h("option", { value: "" }, t("localDisplay.language.system")),
+              languages.map((entry) => h("option", { key: entry.id, value: entry.id }, entry.label)),
+            ),
+          ),
+          available.language === false
+            ? h("p", { className: "rdsh-mux-note" }, t("localDisplay.unavailable", { reason: reasonText("language") }))
+            : h("p", { className: "rdsh-mux-note" }, t("localDisplay.language.note")),
+          h("p", { className: "rdsh-mux-note" }, t("localDisplay.note")),
         ),
       );
     }
@@ -8727,9 +9064,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 }
 .rdsh-mux-title { margin: 0; font-size: 16px; font-weight: 500; }
 .rdsh-mux-desc { margin: 0; font-size: 13px; line-height: 1.6; color: var(--dsw-alias-label-tertiary, #adb2b8); }
-.rdsh-mux-rows { display: grid; grid-template-columns: max-content minmax(0,1fr); gap: 6px 14px; margin: 0; font-size: 13px; }
-.rdsh-mux-rows dt { color: var(--dsw-alias-label-secondary, #cfd3d6); }
-.rdsh-mux-rows dd { margin: 0; overflow-wrap: anywhere; }
 .rdsh-mux-secondary {
   flex: 0 0 auto; padding: 8px 12px; border-radius: 9px;
   font: inherit; font-size: 13px; cursor: pointer;
@@ -8774,24 +9108,19 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 }
 .rdsh-mux-actions button:disabled { opacity: .45; cursor: default; }
 .rdsh-mux-note { margin: 0; font-size: 12px; line-height: 1.6; color: var(--dsw-alias-label-tertiary, #adb2b8); }
-.rdsh-mux-chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.rdsh-mux-chip { font-size: 12px; padding: 3px 9px; border-radius: 999px; background: var(--dsw-alias-bg-module-platform, #353638); color: var(--dsw-alias-label-secondary, #cfd3d6); }
 .rdsh-mux-check { display: flex; align-items: center; gap: 8px; font-size: 13px; }
-.rdsh-mux-label { font-size: 12px; font-weight: 600; margin-bottom: 4px; color: var(--dsw-alias-label-secondary, #cfd3d6); }
-.rdsh-mux-scroll-list {
-  margin: 0; padding-left: 16px;
-  display: flex; flex-direction: column; gap: 3px;
-  font-size: 12px; line-height: 1.5;
-  color: var(--dsw-alias-label-secondary, #cfd3d6);
-}
-.rdsh-mux-scroll-list li { overflow-wrap: anywhere; }
-.rdsh-mux-textarea {
-  box-sizing: border-box; width: 100%; font: inherit; font-size: 13px; padding: 6px 8px;
-  border-radius: 8px; resize: vertical;
-  background: var(--dsw-alias-bg-module-platform, #353638);
+.rdsh-mux-font-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 13px; color: var(--dsw-alias-label-secondary, #cfd3d6); }
+.rdsh-mux-font-label { min-width: 0; }
+.rdsh-mux-font-control { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.rdsh-mux-font-value { min-width: 40px; text-align: center; font-variant-numeric: tabular-nums; color: var(--dsw-alias-label-primary, #f9fafb); }
+.rdsh-mux-step {
+  width: 30px; height: 30px; padding: 0; border-radius: 8px;
+  font: inherit; font-size: 16px; line-height: 1; cursor: pointer;
   color: var(--dsw-alias-label-primary, #f9fafb);
+  background: var(--dsw-alias-bg-layer-2, #26262a);
   border: .5px solid var(--dsw-alias-border-l3, rgba(255,255,255,.16));
 }
+.rdsh-mux-step:disabled { opacity: .4; cursor: default; }
 
 `;
 
@@ -9359,10 +9688,9 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
     padding-left: 16px !important;
     padding-right: 16px !important;
   }
-  /* The legacy transcript column: a fixed 349px reading measure, centred.
-     max-width: 100% keeps it inside viewports narrower than 349px. */
+  /* Use the available conversation width, including on tablets. */
   [data-rdsh-transcript-column] {
-    width: 349px !important;
+    width: 100% !important;
     max-width: 100% !important;
     margin-left: auto !important;
     margin-right: auto !important;
@@ -9399,9 +9727,7 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   /* Overlay UI belongs on top of the drawer's own chrome, not across it. */
   html[data-rdsh-drawer="open"] .dsh-mobile-maxxing-install,
   html[data-rdsh-drawer="open"] .dsh-mobile-maxxing-card { display: none; }
-  /* The right sidebar menu owns the screen; the floating hamburger would sit
-     on top of it (and keep its hover state). */
-  html[data-rdsh-rightpanel-open] .rdsh-mux-fab { display: none !important; }
+  /* Keep the hamburger in place at z-index 40; the right panel overlays it at 60. */
 
   /* Sessions: give the label the room the row actions used to take. */
   [data-rdsh-session] { padding-inline: 6px !important; }
@@ -10159,7 +10485,6 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         if (bootSession !== "") requestSession(bootSession);
         document.addEventListener("touchstart", onTouchStart, { capture: true, passive: true });
         document.addEventListener("touchmove", onTouchMove, { capture: true, passive: false });
-        document.addEventListener("scroll", recordScroll, true);
         measureSafeArea();
         // A rotation changes both the query and the geometry, and iOS reports
         // the new safe-area insets a frame or two after the event. Re-measure
@@ -10258,10 +10583,6 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           applyDeviceTheme,
           build: BUILD,
           lang: currentLang(),
-          get lastScrolls() { return [...lastScrolls]; },
-          scrollables,
-          scrollChain,
-          readViewportMetrics,
           autoSettings: true,
           decorate: scheduleDecorate,
           // Re-reads the window width for the Settings readout and re-measures
@@ -10297,7 +10618,6 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             window.removeEventListener("keydown", onKeyDownCapture, true);
             document.removeEventListener("touchstart", onTouchStart, true);
             document.removeEventListener("touchmove", onTouchMove, true);
-            document.removeEventListener("scroll", recordScroll, true);
             window.removeEventListener("resize", onResize);
             window.removeEventListener("orientationchange", onOrientation);
             window.visualViewport?.removeEventListener("resize", onLayoutResize);
@@ -10380,14 +10700,31 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
     return {
       inject: ["slots"],
       apply(ctx) {
+        readGeneralSettingsLabel = () => {
+          const label = ctx.slots.entries?.("settings.section")?.find((entry) => entry.options.id === "general")?.options.label;
+          return (typeof label === "function" ? label() : label) ?? "General";
+        };
         // Session selection needs the workspace service, which arrives on its
         // own schedule; without it a notification tap can only raise a banner.
-        ctx.inject(["uiWorkspace"], (scope) => attachSessionOpener(scope));
+        ctx.inject(["uiWorkspace", "sessions"], (scope) => {
+          attachSessionOpener(scope);
+          if (phone()) installLocalPermissionDefault(scope, scope.uiWorkspace, scope.sessions);
+        });
+        ctx.inject(["remote", "remote.permissionPresets"], (scope) => {
+          if (phone()) void loadPermissionCatalog(scope.remote);
+        });
         try {
           attachDeviceTheme(ctx);
         } catch (error) {
           console.error("[rdsh-mobile-ux] device theme failed", error);
         }
+        ctx.inject(["theme", "locale"], (scope) => {
+          try {
+            attachLocalDisplay(scope);
+          } catch (error) {
+            console.error("[rdsh-mobile-ux] local display failed", error);
+          }
+        });
         try {
           boot(ctx);
         } catch (error) {
@@ -10413,15 +10750,9 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         ctx.slots.inject("settings.section", () => ctx.slots.register({
           name: "settings.section",
           id: "mobile-ux",
-          order: 81,
+          order: -1,
           label: () => t("tab.mobile"),
         }, MobileSection));
-        ctx.slots.inject("settings.section", () => ctx.slots.register({
-          name: "settings.section",
-          id: "mobile-ux-input",
-          order: 82,
-          label: () => t("tab.input"),
-        }, InputSection));
       },
     };
     }
@@ -10439,9 +10770,9 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
     const ENTRY_ID = "rdsh-session-id-copy";
     // After the shipped rows (pin 100 / rename 200 / fork 300 / archive 400).
     const ORDER = 500;
-    const LABEL = t("sessionId.label");
-    const COPIED = t("sessionId.copied");
-    const MANUAL_PROMPT = t("sessionId.manualPrompt");
+    // Resolved at render time so the device-local display language reaches
+    // this row too; the registration label is likewise a getter.
+    const label = () => t("sessionId.label");
 
     /** One "..." menu row: copy this Session's ID, then close the menu. */
     function CopySessionIdMenuItem({ sessionId, useMenuOpenState }) {
@@ -10455,16 +10786,16 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           setMenuOpen(false);
           void copyText(id).then((copied) => {
             if (copied) {
-              notify(COPIED);
+              notify(t("sessionId.copied"));
               return;
             }
             // 自動コピーが両方とも塞がれている環境では、選択済みの ID を見せる。
             if (typeof window === "object" && window !== null && typeof window.prompt === "function") {
-              window.prompt(MANUAL_PROMPT, id);
+              window.prompt(t("sessionId.manualPrompt"), id);
             }
           });
         },
-        children: LABEL,
+        children: label(),
       });
     }
 
@@ -10473,7 +10804,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
       apply(ctx) {
         // Wait for ui-workspace's declaration before contributing to it.
         ctx.slots.inject(SLOT, () =>
-          ctx.slots.register({ name: SLOT, id: ENTRY_ID, order: ORDER, label: LABEL }, CopySessionIdMenuItem),
+          ctx.slots.register({ name: SLOT, id: ENTRY_ID, order: ORDER, label }, CopySessionIdMenuItem),
         );
       },
     };

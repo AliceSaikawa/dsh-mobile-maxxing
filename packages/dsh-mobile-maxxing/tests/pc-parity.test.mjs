@@ -36,7 +36,8 @@ test("hiding follows the device mode, not the window width", () => {
 	const body = functionBody("applyHideList");
 	assert.match(body, /const hideOnThisDevice = !disabled && phone\(\);/, "the hide decision ignores the mode");
 	assert.match(body, /if \(hideOnThisDevice && shouldHide\(label, labels\)\)/, "buttons are hidden without asking the mode");
-	assert.match(body, /modal !== null && phone\(\)/, "the PWA/Input tab merge no longer follows the mode");
+	assert.doesNotMatch(body, /hidden\.add\(/, "the deleted hidden-label report is back");
+	assert.doesNotMatch(body, /tab\.pwa|tab\.input/, "the removed tab merge is back");
 	assert.doesNotMatch(body, /!disabled && narrow\(\)/, "the hide list is width-gated again");
 });
 
@@ -97,16 +98,21 @@ test("the mobile tab inlines the other sections by mode, not by width", () => {
 		"the PWA section is not inlined in mobile mode",
 	);
 	assert.doesNotMatch(body, /s\.narrow && onPhone/, "the inline decision is still width-gated");
-	assert.match(CLIENT, /id: "pwa",/, "the App tab is gone");
-	assert.match(CLIENT, /id: "mobile-ux-input",/, "the Input tab is gone");
+	// One Settings tab: the separate App/Input registrations are gone, and the
+	// single mobile-ux row keeps the label key.
+	const registrations = [...CLIENT.matchAll(/name: "settings\.section",\s*\n\s*id: "([^"]+)"/g)].map((match) => match[1]);
+	assert.deepEqual(registrations, ["mobile-ux"], "a separate App/Input Settings tab is registered again");
+	assert.doesNotMatch(CLIENT, /id: "pwa",/, "the App tab is back");
+	assert.doesNotMatch(CLIENT, /id: "mobile-ux-input",/, "the Input tab is back");
 });
 
 test("the mobile-only settings cards follow the device mode", () => {
 	const body = functionBody("MobileSection");
 	assert.match(body, /onPhone \? t\("mux\.section\.desc"\) : t\("mux\.section\.desc\.desktop"\)/, "the desktop description is missing");
 	assert.match(body, /onPhone \? h\("p", \{ className: "rdsh-mux-note" \}, t\("mux\.section\.plusNote"\)\) : null/, "the + note is shown on a desktop");
-	assert.match(body, /onPhone\s*\n\s*\? h\(/, "the hidden-controls card is not gated on the device");
-	assert.match(body, /t\("mux\.hidden\.title"\)/, "the hidden-controls card disappeared entirely");
+	// The hidden-controls and diagnostics cards were removed by the user.
+	assert.doesNotMatch(body, /t\("mux\.hidden\.title"\)/, "the removed hidden-controls card is back");
+	assert.doesNotMatch(body, /mux\.diag\./, "the removed diagnostics cards are back");
 });
 
 test("a desktop is a hard no-op, opt-ins included", () => {

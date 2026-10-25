@@ -595,9 +595,7 @@ test("representative Japanese copy matches the reference wording", () => {
 	// Not just pack self-consistency: these are the strings a user sees. A
 	// mistranslation or an accidental English fallback has to fail here.
 	const expected = {
-		"tab.pwa": "アプリ",
 		"tab.mobile": "モバイル",
-		"tab.input": "入力",
 		"pwa.section.title": "アプリ（PWA）",
 		"mux.fab.open": "セッション一覧を開く",
 		"mux.fab.openWithCount": "セッション一覧を開く（未読・質問待ち {count}件）",
@@ -615,9 +613,6 @@ test("representative Japanese copy matches the reference wording", () => {
 		"notify.previewQuestion": "このまま進めますか？",
 		"sw.offlineHeading": "オフラインです",
 		"sw.retry": "再試行",
-		"mux.diag.height.title": "画面の高さ",
-		"mux.diag.scroll.title": "スクロール",
-		"mux.diag.scroll.last": "最後にスクロールした要素",
 		// Mixed Japanese/English reference: the turn counter stays English.
 		"mux.stats.turn": "{count} turn",
 		"mux.stats.turns": "{count} turns",
@@ -629,83 +624,34 @@ test("representative Japanese copy matches the reference wording", () => {
 		assert.equal(copyFor("ja")[key], value, `${key} does not match the reference Japanese`);
 	}
 	assert.equal(copyFor("en")["tab.mobile"], "Mobile");
-	assert.equal(copyFor("en")["mux.diag.height.title"], "Screen height");
-	assert.equal(copyFor("en")["mux.diag.scroll.title"], "Scroll");
 });
 
-test("the scrollable scan only runs while the settings card renders", () => {
-	// `scrollables()` walks every element, so it must not sit on a
-	// decorate/mutation path. The scroll *recorder* is event-driven; the full
-	// scan is only the Settings card (and the diagnostics callers).
-	const calls = [...CLIENT.matchAll(/scrollables\(\)/g)]
-		.filter((match) => !CLIENT.slice(0, match.index).endsWith("function "));
-	assert.equal(calls.length, 1, "the full scan is running outside the settings card");
-	const start = CLIENT.indexOf("function MobileSection(");
-	const end = CLIENT.indexOf("function InputSection(", start);
-	assert.ok(start >= 0 && end > start, "MobileSection is missing");
-	assert.match(CLIENT.slice(start, end), /scrollables\(\)\.slice\(0, 8\)/, "the settings card stopped showing the scan");
-	assert.match(CLIENT, /document\.addEventListener\("scroll", recordScroll, true\)/, "scroll records are no longer event-driven");
-	assert.doesNotMatch(helperBody("decorateSlow"), /scrollables/, "the scan joined the slow decorate pass");
-});
-
-test("a right-panel swipe closes it even from the left edge", () => {
-	// The reference checks `panelOpen && !drawerOpen` before the edge rules,
-	// so a rightward swipe from inside the left 36px closes the preview
-	// instead of stacking the session drawer on top of it.
-	const body = helperBody("onEdgeSwipeStart");
-	assert.match(body, /if \(panelOpen && !drawerOpen\) \{/, "the panel close branch is not first");
-	assert.equal(/panelOpen && !drawerOpen && touch\.clientX > 36/.test(body), false, "the left edge still opens the drawer over the panel");
-	assert.match(body, /closesPanel: true/, "the panel gesture is not marked");
-	assert.match(body, /scrolledLeftAncestor\(target\) !== null/, "the horizontal-scroll exclusion is gone");
-	assert.match(body, /target\.closest\("input, textarea, \[contenteditable=true\], \.xterm/, "the input/xterm exclusion is gone");
-});
-
-test("the viewport zoom lock is mobile-only and restorable", () => {
-	// The lock belongs to the mobile surface; a desktop keeps its own viewport.
-	// The value this page shipped with is captured before the first override
-	// and put back on dispose.
-	const body = functionHead("enforceNoZoomViewport", 1600);
-	assert.match(body, /if \(!phone\(\)\) \{\s*\n\s*releaseViewportLock\(\);/, "the lock is applied on a desktop");
-	assert.match(body, /const content = viewportContent\(meta\.getAttribute\("content"\), \{/, "the viewport is not merged over the shipped value");
-	// The mobile value locks zoom, covers the notch and keeps the keyboard layout
-	// in step; merging means no key can be emitted twice.
-	assert.match(body, /"maximum-scale": "maximum-scale=1"/, "the zoom lock is gone");
-	assert.match(body, /"interactive-widget": "interactive-widget=resizes-content"/, "the keyboard layout token is gone");
-	assert.match(CLIENT, /function viewportContent\(current, wanted\)/, "the viewport merger is gone");
-	assert.match(body, /if \(meta\.getAttribute\("content"\) !== content\) meta\.setAttribute\("content", content\);/, "the viewport is not applied");
-	assert.match(CLIENT, /viewportBaseline = \{ content: viewportMetaOwned \? null : meta\.getAttribute\("content"\) \};/, "the original content is not captured");
-	assert.match(CLIENT, /meta\.setAttribute\("content", baseline\.content\)/, "the original content is not restored");
-	assert.match(CLIENT, /if \(viewportMetaOwned\) meta\.remove\(\);/, "a meta this module created is not removed");
-	assert.match(CLIENT, /input, textarea, \[contenteditable="true"\] \{\s*\n\s*font-size: 16px !important;/, "the 16px focus guard is gone");
-});
-
-test("ensureRightPanelFits is restored and cannot loop or click a ghost", () => {
-	const ensure = helperBody("ensureRightPanelFits");
-	assert.match(ensure, /if \(!phone\(\)\)/, "the promotion is not mode-scoped");
-	assert.match(ensure, /visibleFullscreenButton\(\)/, "the button is not resolved through the visibility guard");
-	assert.match(ensure, /rightPanelFitPending/, "there is no one-shot guard");
-	assert.match(ensure, /data-rdsh-auto-fired/, "the same button can be clicked repeatedly");
-	const visible = helperBody("visibleFullscreenButton");
-	assert.match(visible, /rect\.width <= 0 \|\| rect\.height <= 0/, "a 0x0 ghost is accepted");
-	assert.match(visible, /closest\(RIGHT_PANEL_ROOT\) === null/, "a button outside the panel is accepted");
-	assert.match(visible, /closest\("\[hidden\]"\) !== null/, "a hidden panel is accepted");
-	assert.match(visible, /visibility === "hidden"/, "a hidden button is accepted");
-	assert.match(helperBody("decorateSlow"), /ensureRightPanelFits\(\)/, "the slow pass never calls it");
-});
-
-test("the restored diagnostics expose the scroll hooks and cards", () => {
-	const api = CLIENT.slice(CLIENT.indexOf("globalThis.__RDSH_MOBILE_UX__ = {"));
-	assert.match(api, /get lastScrolls\(\) \{ return \[\.\.\.lastScrolls\]; \}/, "lastScrolls is missing");
-	assert.match(api, /scrollables,/, "scrollables is missing");
-	assert.match(api, /scrollChain,/, "scrollChain is missing");
-	assert.match(api, /readViewportMetrics,/, "viewport metrics are missing");
+test("the retired diagnostics and custom hide are gone", () => {
+	// The user removed the height/safe-area/gap and scroll diagnostics plus the
+	// browser-side custom hide list. Nothing may creep back: no helper, no
+	// public export, no listener and no Settings card.
+	for (const gone of [
+		"readViewportMetrics",
+		"lastScrolls",
+		"scrollChain",
+		"recordScroll",
+		"readHideExtra",
+		"hide-extra",
+		"hide-disabled",
+	]) {
+		assert.equal(CLIENT.includes(gone), false, `${gone} is still in the bundle`);
+	}
 	const start = CLIENT.indexOf("function MobileSection(");
 	const end = CLIENT.indexOf("function InputSection(", start);
 	const section = CLIENT.slice(start, end);
-	assert.match(section, /t\("mux\.diag\.height\.title"\)/, "the screen-height card is missing");
-	assert.match(section, /t\("mux\.diag\.scroll\.title"\)/, "the scroll card is missing");
-	assert.match(section, /lastScrolls\.slice\(-6\)\.reverse\(\)/, "the last-scroll list is missing");
-	assert.match(section, /scrollables\(\)\.slice\(0, 8\)/, "the scrollable list is missing");
+	for (const gone of ["mux.diag.", "mux.hidden.", "mux.row."]) {
+		assert.equal(section.includes(gone), false, `the Settings section still renders ${gone}`);
+	}
+	// The standard hide list and the console option survive; the browser-side
+	// overrides do not.
+	assert.match(CLIENT, /const HIDE_DEFAULT = \[/, "the standard hide list is gone");
+	assert.match(CLIENT, /function hideLabels\(\) \{\s*\n\s*return \[\.\.\.HIDE_DEFAULT, \.\.\.\(Array\.isArray\(CONFIG\.hideLabels\)/, "the profile hide list is gone");
+	assert.match(CLIENT, /function hideDisabled\(\) \{\s*\n\s*return CONFIG\.showHiddenControls === true;/, "the console option is gone");
 });
 
 /**

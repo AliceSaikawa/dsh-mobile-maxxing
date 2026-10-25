@@ -100,6 +100,26 @@ The Settings → Mobile cards expose a per-browser opt-in
 (`notifyDeviceTurns`) for receiving desktop-originated turns on a mobile device;
 it is a mobile-side choice and is never read on a PC.
 
+## One settings contribution
+
+Only `mobile-ux` is registered in `settings.section`, labelled Mobile. Input and
+PWA settings are rendered inside that section, without separate tab registration
+or label-based hiding. The section retains theme, notifications/sound, Enter
+behavior and app installation/update/status. Hidden-control list/customisation,
+basic UI readouts, screen-size metrics and scroll diagnostics (including their
+recording listener) are removed. Standard control hiding remains; old browser
+hide overrides are ignored without deleting storage.
+
+Device-local additions live in the same section: font sizes (text/code/terminal), UI
+language from the registered catalog, and a default permission preset. Storage keys are
+`rdsh-mobile-ux:local-permission` and `rdsh-mobile-ux:local-display`; no Host writer is
+called. The permission preset is applied through the opened session's own `/permission`
+command, using the public `uiWorkspace.openWorkspaceSession(beforeOpen)` contract plus
+`ctx.sessions.using`. Theme and locale are projected onto a device snapshot (public
+`getTheme`/`getSnapshot` shape), restored on teardown. The four chat-view preferences are
+absent: the render-erased `slots.entries()` view keeps only id/order, so upstream policy
+stores cannot be reached without a shared Host write.
+
 ## #46 layering
 
 The open panel no longer sets `display: none` (or `visibility`) on the header.

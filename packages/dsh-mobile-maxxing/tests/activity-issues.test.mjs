@@ -945,18 +945,79 @@ test("#40 only count chips are decorated; the child breadcrumb switcher keeps st
 	assert.equal(count.getAttribute("data-rdsh-activity-chip"), "subagent");
 });
 
-test("#40 an SVG left by an older build is replaced by the span ring", () => {
+test("#40 an old generated ring is replaced; an adopted native spinner is preserved", () => {
 	const booted = boot({ services: {} });
-	const shell = chip("1 background job");
-	const adopted = node("svg");
-	adopted.setAttribute("data-rdsh-activity-spinner", "");
-	shell.prepend(adopted);
+
+	// The previous build cloned an upstream spinner into a generated node.
+	const cloneChip = chip("1 background job");
+	const cloned = node("svg");
+	cloned.setAttribute("data-rdsh-activity-spinner", "");
+	cloned.setAttribute("data-rdsh-activity-generated", "");
+	cloneChip.prepend(cloned);
+
+	// ...and also tagged an upstream spinner in place, without the marker.
+	const nativeChip = chip("1 subagent");
+	const native = node("svg");
+	native.setAttribute("data-rdsh-activity-spinner", "");
+	nativeChip.prepend(native);
+
+	decorateChips(booted, [cloneChip, nativeChip]);
+	assert.equal(cloned.parentElement, null, "a ring this plugin cloned is removed");
+	assert.equal(cloneChip.children.includes(cloned), false);
+	const cloneRing = ringOf(cloneChip);
+	assert.notEqual(cloneRing, cloned);
+	assert.equal(cloneRing.tagName, "SPAN");
+	assert.equal(cloneRing.className, "rdsh-activity-ring");
+
+	assert.equal(native.parentElement, nativeChip, "the upstream node keeps its identity");
+	assert.equal(nativeChip.children.includes(native), true);
+	assert.equal(native.hasAttribute("data-rdsh-activity-spinner"), false, "only our marker is removed");
+	const nativeRing = ringOf(nativeChip);
+	assert.notEqual(nativeRing, native, "the ring is a separate node");
+	assert.equal(nativeRing.tagName, "SPAN");
+	assert.equal(nativeRing.className, "rdsh-activity-ring");
+});
+
+test("#40 an adopted native spinner survives reboot/HMR and the 767/768 transition", () => {
+	const native = node("svg");
+	native.setAttribute("data-rdsh-activity-spinner", "");
+	native.setAttribute("class", "abc_spinner");
+	const shell = chip("2 background jobs running", { children: [native] });
+	const harness = createServices();
+	harness.jobsIn("s1", [{ id: "job-1", status: "running" }]);
+
+	// The DOM starts as the previous build left it: a native spinner tagged in
+	// place. Booting here is the reboot/HMR case.
+	const booted = boot({
+		services: harness.services,
+		configureDocument(doc) {
+			doc.headerButtons = [shell];
+			doc.body.append(shell);
+		},
+	});
+	showSession(booted, "s1");
 	decorateChips(booted, [shell]);
-	const ring = ringOf(shell);
-	assert.notEqual(ring, adopted, "the SVG is not kept as the ring");
-	assert.equal(adopted.parentElement, null, "the adopted node is removed");
-	assert.equal(ring.tagName, "SPAN");
-	assert.equal(ring.className, "rdsh-activity-ring");
+	assert.equal(shell.getAttribute("data-rdsh-activity-state"), "running");
+	assert.equal(native.parentElement, shell);
+	assert.equal(native.hasAttribute("data-rdsh-activity-spinner"), false);
+	const firstRing = ringOf(shell);
+	assert.ok(firstRing !== null && firstRing !== native, "767px: a new ring is drawn beside the native node");
+
+	// 768px leaves the phone layout and removes only the plugin's own nodes.
+	booted.setNarrow(false);
+	assert.equal(ringOf(shell), null, "our ring leaves with the phone layout");
+	assert.equal(native.parentElement, shell, "the native node survives the teardown");
+	assert.equal(native.hasAttribute("data-rdsh-activity-spinner"), false);
+	assert.equal(shell.hasAttribute("data-rdsh-activity-chip"), false);
+
+	// Back at 767px the same native node is still there and a fresh ring appears.
+	booted.setNarrow(true);
+	decorateChips(booted, [shell]);
+	assert.equal(native.parentElement, shell);
+	assert.equal(native.hasAttribute("data-rdsh-activity-spinner"), false);
+	const secondRing = ringOf(shell);
+	assert.ok(secondRing !== null && secondRing !== native);
+	assert.equal(shell.children.includes(native), true);
 });
 
 test("#40 only a running chip animates, and the safety poll is under a second", () => {

@@ -3447,13 +3447,36 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       return true;
     }
 
+    /**
+     * Whether a tagged node is the ring this plugin created.
+     *
+     * Older builds set `data-rdsh-activity-generated` on every ring they made
+     * (a fallback span or a clone); the current build marks a self-drawn span
+     * with `rdsh-activity-ring`. A node with only the generic
+     * `data-rdsh-activity-spinner` is an upstream spinner the old build
+     * adopted in place: it belongs to upstream and must keep its identity.
+     */
+    function isOwnedActivityRing(node) {
+      if (node === null || node === undefined) return false;
+      if (node.hasAttribute("data-rdsh-activity-generated")) return true;
+      return node.tagName === "SPAN" && String(node.className || "").split(/\s+/).includes("rdsh-activity-ring");
+    }
+
     /** The ring is ours; never adopt or clone an upstream spinner. */
     function ensureActivityRing(button) {
       let ring = button.querySelector("[data-rdsh-activity-spinner]");
-      if (ring !== null && ring !== undefined && ring.tagName !== "SPAN") {
-        // An older build adopted the upstream SVG spinner; the ring is a span.
-        ring.remove();
-        ring = null;
+      if (ring !== null && ring !== undefined) {
+        if (!isOwnedActivityRing(ring)) {
+          // An older build tagged the upstream spinner in place. Give the node
+          // back to upstream (drop only our marker) and draw a separate ring.
+          ring.removeAttribute("data-rdsh-activity-spinner");
+          ring = null;
+        } else if (ring.tagName !== "SPAN") {
+          // An older build cloned a spinner into a generated SVG; that clone
+          // is ours to replace, unlike the upstream node above.
+          ring.remove();
+          ring = null;
+        }
       }
       if (ring !== null && ring !== undefined) {
         if (!String(ring.className || "").split(/\s+/).includes("rdsh-activity-ring")) {

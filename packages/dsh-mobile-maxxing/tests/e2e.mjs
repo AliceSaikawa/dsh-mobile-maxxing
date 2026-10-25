@@ -115,7 +115,7 @@ async function openTarget(url) {
 
 // ---------------------------------------------------------------- scenarios
 async function checkStatic() {
-	const manifest = await http("/manifest.webmanifest");
+	const manifest = await http("/dsh-mobile-maxxing.webmanifest");
 	check("manifest is served", manifest.status === 200, manifest.status);
 	check("manifest has the manifest content type", /application\/manifest\+json/.test(manifest.headers.get("content-type") || ""));
 	const parsed = JSON.parse(manifest.text);

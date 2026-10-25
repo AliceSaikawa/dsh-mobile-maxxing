@@ -23,6 +23,17 @@ export const MODE_ATTRIBUTE = "data-rdsh-device-mode";
 export const MODE_GLOBAL = "__RDSH_DEVICE_MODE__";
 
 /**
+ * Filename of this plugin's Web App Manifest.
+ *
+ * A root-level name of its own, never the stock `manifest.webmanifest`: the
+ * stock document links that path, so overriding it changed the manifest a
+ * desktop browser would install from. It stays in the same directory as the
+ * stock file — `id`, `start_url` and `scope` are relative to the manifest URL,
+ * so a subdirectory would move the installed app off the site root.
+ */
+export const MANIFEST_FILE = "dsh-mobile-maxxing.webmanifest";
+
+/**
  * Which UI this browser should get.
  *
  * `nav` is a `navigator`-shaped object. Only same-document signals count: the
@@ -124,7 +135,11 @@ export function earlyModeScript(statusBarStyle = "black-translucent") {
 		+ `var d=document.documentElement;if(d)d.setAttribute(${JSON.stringify(MODE_ATTRIBUTE)},"mobile");`
 		+ `${meta}`
 		+ `var i=document.createElement("link");i.setAttribute("rel","apple-touch-icon");`
-		+ `i.setAttribute("href","pwa/apple-touch-icon.png");h.appendChild(i)`
+		+ `i.setAttribute("href","pwa/apple-touch-icon.png");h.appendChild(i);`
+		// First in the head, so the browser reads this manifest and not the
+		// stock one the document links further down. A desktop adds neither.
+		+ `var f=document.createElement("link");f.setAttribute("rel","manifest");`
+		+ `f.setAttribute("href",${scriptJson(MANIFEST_FILE)});h.appendChild(f)`
 		+ `}catch(e){}})()<\/script>`;
 }
 

@@ -12,7 +12,7 @@ import { runInNewContext } from "node:vm";
 import { apply, buildManifest, decorateIndex, normalizeConfig } from "../index.js";
 import { buildTurnEndPayload } from "../notify/host.js";
 import { COPY, PROBES, copyFor } from "../lib/copy.js";
-import { MODE_ATTRIBUTE, MODE_GLOBAL, earlyModeScript } from "../lib/device-mode.js";
+import { MANIFEST_FILE, MODE_ATTRIBUTE, MODE_GLOBAL, earlyModeScript } from "../lib/device-mode.js";
 
 /**
  * A context good enough to mount the plugin.
@@ -389,9 +389,9 @@ test("one shared document answers per browser, so no response varies by user age
 	const phone = decide({ userAgent: "Mozilla/5.0 (Linux; Android 14; Pixel 8) Mobile Safari/537.36", platform: "Linux armv8l", maxTouchPoints: 5 });
 	const ipad = decide({ userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Version/26.0 Safari/605.1.15", platform: "MacIntel", maxTouchPoints: 5 });
 	const laptop = decide({ userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36", platform: "Win32", maxTouchPoints: 10 });
-	assert.deepEqual([phone.attribute, phone.global, phone.head], ["mobile", "mobile", 4],
-		"a phone gets the attribute and the four home-screen nodes");
-	assert.deepEqual([ipad.attribute, ipad.global, ipad.head], ["mobile", "mobile", 4]);
+	assert.deepEqual([phone.attribute, phone.global, phone.head], ["mobile", "mobile", 5],
+		"a phone gets the attribute, the home-screen nodes and its manifest link");
+	assert.deepEqual([ipad.attribute, ipad.global, ipad.head], ["mobile", "mobile", 5]);
 	assert.deepEqual([laptop.attribute, laptop.global, laptop.head], [undefined, "desktop", 0],
 		"a desktop gets the global and no document write");
 	// Nothing in the served document depends on which one asked.
@@ -483,9 +483,39 @@ test("the merged plugin leaves the renderer alone", async () => {
 	assert.match(module, /export function apply\(/, "the standalone module stays usable");
 });
 
+test("the mobile bootstrap links the plugin manifest before the stock one", () => {
+	// The stock document links its own manifest; the decorated copy must put
+	// the plugin's link ahead of it without removing the stock one.
+	const stock = INDEX.replace("</head>", '<link rel="manifest" href="./manifest.webmanifest" /></head>');
+	const html = decorateIndex(stock, {});
+	const bootstrapAt = html.indexOf(`globalThis.${MODE_GLOBAL}=`);
+	const stockLinkAt = html.indexOf('rel="manifest"');
+	assert.ok(bootstrapAt > 0 && stockLinkAt > 0);
+	assert.ok(bootstrapAt < stockLinkAt, "the bootstrap is parsed before the stock link");
+	// The stock document keeps its own link; the bootstrap prepends a link of
+	// its own at head start, so the plugin manifest is first in tree order.
+	assert.ok(html.includes(MANIFEST_FILE), "the dedicated filename travels in the bootstrap");
+	const head = html.slice(0, html.indexOf("</head>"));
+	assert.equal((head.match(/<link[^>]*rel="manifest"/g) ?? []).length, 1,
+		"the served markup still holds exactly the stock link");
+
+	// Root-level placement is what keeps an installed app on the site root.
+	const base = "https://example.test/";
+	for (const file of ["manifest.webmanifest", MANIFEST_FILE]) {
+		const resolved = new URL("./", new URL(file, base));
+		assert.equal(resolved.href, base, `${file} resolves id/start_url/scope to the root`);
+	}
+	const manifest = buildManifest({});
+	assert.equal(manifest.id, "./");
+	assert.equal(manifest.start_url, "./");
+	assert.equal(manifest.scope, "./");
+});
+
 test("routes serve the manifest, the worker and the icons", async () => {
 	const { routes, taps, listeners } = mount({});
-	assert.ok(routes.has("/manifest.webmanifest"));
+	assert.ok(routes.has(`/${MANIFEST_FILE}`), "the plugin manifest has its own path");
+	assert.equal(routes.has("/manifest.webmanifest"), false,
+		"the stock manifest path is not overridden: a desktop install reads the stock file");
 	assert.ok(routes.has("/sw.js"));
 	assert.ok(routes.has("/pwa/icon-192.png"));
 	// The merged plugin mounts the PWA/mode tap and the mobile-ux config tap,
@@ -515,7 +545,7 @@ test("routes serve the manifest, the worker and the icons", async () => {
 		assert.ok(routes.has(path), `missing ${path}`);
 	}
 
-	const manifest = await call(routes.get("/manifest.webmanifest"));
+	const manifest = await call(routes.get(`/${MANIFEST_FILE}`));
 	assert.equal(manifest.status, 200);
 	assert.match(manifest.headers["content-type"], /application\/manifest\+json/);
 	assert.equal(JSON.parse(manifest.text).display, "standalone");
@@ -615,7 +645,7 @@ test("notification copy defaults to the package language and keeps an explicit o
 
 test("routes reject methods they do not own", async () => {
 	const { routes } = mount({});
-	for (const path of ["/manifest.webmanifest", "/sw.js", "/pwa/icon-192.png"]) {
+	for (const path of [`/${MANIFEST_FILE}`, "/sw.js", "/pwa/icon-192.png"]) {
 		const response = await call(routes.get(path), "POST");
 		assert.equal(response.status, 405);
 		assert.equal(response.headers.allow, "GET, HEAD");
@@ -624,7 +654,7 @@ test("routes reject methods they do not own", async () => {
 
 test("HEAD returns headers without a body", async () => {
 	const { routes } = mount({});
-	const response = await call(routes.get("/manifest.webmanifest"), "HEAD");
+	const response = await call(routes.get(`/${MANIFEST_FILE}`), "HEAD");
 	assert.equal(response.status, 200);
 	assert.equal(response.body.length, 0);
 	assert.ok(Number(response.headers["content-length"]) > 10);

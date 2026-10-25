@@ -457,7 +457,7 @@ test("a broken push store does not stop the PWA routes", async () => {
 		if (previous === undefined) delete process.env.DSH_HOME;
 		else process.env.DSH_HOME = previous;
 	}
-	assert.ok(routes.has("/manifest.webmanifest"), "the PWA routes still mounted");
+	assert.ok(routes.has("/dsh-mobile-maxxing.webmanifest"), "the PWA routes still mounted");
 	assert.ok(routes.has("/sw.js"));
 });
 

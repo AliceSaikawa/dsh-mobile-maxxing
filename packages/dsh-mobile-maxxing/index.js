@@ -4,7 +4,8 @@
  * Serves what the browser needs to treat the DSH Web GUI as an installable
  * app, without patching the installed DSH dist:
  *
- *   /manifest.webmanifest   a real manifest (PNG + maskable icons, standalone
+ *   /dsh-mobile-maxxing.webmanifest
+ *                           a real manifest (PNG + maskable icons, standalone
  *                           display, id, theme/background colors, screenshots)
  *   /sw.js                  an app-shell service worker (offline launch, static
  *                           asset caching, never caches /api)
@@ -33,7 +34,7 @@ import { applyNotify, normalizeNotifyConfig } from "./notify/host.js";
 import { apply as applyMobileUx } from "./lib/mobile-ux.js";
 import { apply as applySessionIdCopy } from "./lib/session-id-copy.js";
 import { COPY, PROBES, copyFor, serviceWorkerCopy } from "./lib/copy.js";
-import { MODE_GLOBAL, earlyModeScript } from "./lib/device-mode.js";
+import { MANIFEST_FILE, MODE_GLOBAL, earlyModeScript } from "./lib/device-mode.js";
 import { readFile } from "node:fs/promises";
 
 /** Stable Cordis plugin name. */
@@ -386,7 +387,10 @@ export function apply(ctx, config) {
 
 		disposes.push(webServer.register({
 			kind: "exact",
-			path: "/manifest.webmanifest",
+			// Its own root-level path: `/manifest.webmanifest` stays the stock
+			// file, so a desktop browser installs the stock app instead of ours.
+			// The mobile bootstrap links this one first.
+			path: `/${MANIFEST_FILE}`,
 			handler: readOnly((req, res) => {
 				respond(res, req.method, 200, {
 					"content-type": "application/manifest+json; charset=utf-8",

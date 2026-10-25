@@ -804,7 +804,7 @@ test("install seeds the shell and activate retires only this app's stale builds"
 	const shell = await (await storage.open("dsh-mobile-maxxing-build-a")).keys();
 	assert.deepEqual(
 		shell.map((item) => item.url).sort(),
-		[`${origin}/`, `${origin}/manifest.webmanifest`].sort(),
+		[`${origin}/`, `${origin}/dsh-mobile-maxxing.webmanifest`].sort(),
 		"the offline shell and manifest are not cached under the scope",
 	);
 

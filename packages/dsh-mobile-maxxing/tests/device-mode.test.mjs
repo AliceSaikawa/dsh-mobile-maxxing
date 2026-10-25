@@ -11,7 +11,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { runInNewContext } from "node:vm";
-import { MODE_ATTRIBUTE, MODE_GLOBAL, classifyDevice, earlyModeScript } from "../lib/device-mode.js";
+import { MANIFEST_FILE, MODE_ATTRIBUTE, MODE_GLOBAL, classifyDevice, earlyModeScript } from "../lib/device-mode.js";
 
 const IPHONE = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
 const IPAD_LEGACY = "Mozilla/5.0 (iPad; CPU OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
@@ -153,6 +153,7 @@ const MOBILE_HEAD = [
 	["meta", "name", "apple-mobile-web-app-status-bar-style"],
 	["meta", "name", "format-detection"],
 	["link", "rel", "apple-touch-icon"],
+	["link", "rel", "manifest"],
 ];
 
 /** Assert the four home-screen nodes, in order, with their values. */
@@ -167,6 +168,8 @@ function assertMobileHead(result, label) {
 	assert.equal(result.appended[1].attributes.get("content"), "black-translucent");
 	assert.equal(result.appended[2].attributes.get("content"), "telephone=no");
 	assert.equal(result.appended[3].attributes.get("href"), "pwa/apple-touch-icon.png");
+	assert.equal(result.appended[4].attributes.get("href"), MANIFEST_FILE,
+		"the plugin manifest is linked after the icons");
 }
 
 test("the inline script is one self-contained copy of the classifier", () => {

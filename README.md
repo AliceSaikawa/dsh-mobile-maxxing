@@ -8,8 +8,9 @@ PWA・通知・モバイルUX・CJK表示の修正・セッションIDのコピ�
 
 ## インストール
 
+
 ```sh
-dsh plugin --profile web add https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.3.3/rdsh-pwa-0.3.3.tgz
+dsh plugin --profile web add https://github.com/kuraneko1/dsh-mobile-maxxing
 # DSH を再起動して読み込む（例: systemctl --user restart dsh-web.service）
 ```
 
@@ -48,7 +49,7 @@ node scripts/pack-all.mjs   # dist/ に tarball を作る
 チェックアウトをそのまま使う場合（依存と bundle の両方が入ります）:
 
 ```sh
-dsh plugin --profile web add link:/path/to/dsh-mobile-maxxing/packages/rdsh-pwa
+dsh plugin --profile web add link:/path/to/dsh-mobile-maxxing
 ```
 
 ## リリース
@@ -77,8 +78,9 @@ row. **It installs on a stock DSH** — no other `rdsh-*` plugin and no external
 
 ## Install
 
+
 ```sh
-dsh plugin --profile web add https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.3.3/rdsh-pwa-0.3.3.tgz
+dsh plugin --profile web add https://github.com/kuraneko1/dsh-mobile-maxxing
 # then restart DSH to load it (e.g. systemctl --user restart dsh-web.service)
 ```
 

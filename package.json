@@ -1,14 +1,61 @@
 {
   "name": "dsh-mobile-maxxing",
-  "version": "0.1.0",
-  "private": true,
+  "version": "0.4.0",
+  "type": "module",
   "license": "MIT",
-  "description": "DSH Web GUI の統合プラグイン: PWA、スマホUX、通知、CJK表示、小物",
+  "description": "DSH Web GUI をインストール可能なアプリにし、スマホ幅のUX・通知・小物をまとめて改善する統合プラグイン",
+  "exports": {
+    ".": "./packages/rdsh-pwa/index.js",
+    "./client": "./packages/rdsh-pwa/client.js",
+    "./locale/*.json": "./packages/rdsh-pwa/locale/*.json",
+    "./icon": "./packages/rdsh-pwa/assets/icon-192.png"
+  },
+  "files": [
+    "packages/rdsh-pwa/index.js",
+    "packages/rdsh-pwa/client.js",
+    "packages/rdsh-pwa/sw.js",
+    "packages/rdsh-pwa/notify",
+    "packages/rdsh-pwa/lib",
+    "packages/rdsh-pwa/locale/*.json",
+    "packages/rdsh-pwa/assets/*.png",
+    "packages/rdsh-pwa/assets/*.svg",
+    "packages/rdsh-pwa/docs/*.png",
+    "packages/rdsh-pwa/docs/*.md",
+    "packages/rdsh-pwa/README.md",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
-    "test": "npm --prefix packages/rdsh-pwa test",
+    "test": "node --test packages/rdsh-pwa/tests/*.test.mjs",
+    "e2e": "node packages/rdsh-pwa/tests/e2e.mjs",
     "pack:all": "node scripts/pack-all.mjs"
   },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": []
+    }
+  },
+  "meta": {
+    "title": "dsh-mobile-maxxing",
+    "description": "PWA化、スマホ幅の操作感、通知（アプリ内バナーとWeb Push）、CJK表示の修正、セッションIDのコピーをまとめて提供します。"
+  },
   "author": "kuraneko1",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "cordis",
+    "pwa",
+    "mobile",
+    "ios",
+    "web-push",
+    "japanese"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/kuraneko1/dsh-mobile-maxxing.git"

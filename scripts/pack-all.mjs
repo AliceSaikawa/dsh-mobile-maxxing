@@ -13,27 +13,16 @@ const dist = join(root, "dist");
 rmSync(dist, { recursive: true, force: true });
 mkdirSync(dist, { recursive: true });
 
-const packages = [];
-for (const entry of readdirSync(join(root, "packages"))) {
-	const directory = join(root, "packages", entry);
-	let manifest;
-	try {
-		manifest = JSON.parse(readFileSync(join(directory, "package.json"), "utf8"));
-	} catch {
-		continue;
-	}
-	if (manifest.private === true) {
-		console.log(`skip ${manifest.name} (private)`);
-		continue;
-	}
-	packages.push({
-		directory,
-		name: manifest.name,
-		version: manifest.version,
-		file: `${manifest.name}-${manifest.version}.tgz`,
-		alias: `${manifest.name}.tgz`,
-	});
-}
+// The repository root is the published package; packages/rdsh-pwa/ is the
+// implementation and ships inside it.
+const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+const packages = [{
+	directory: root,
+	name: manifest.name,
+	version: manifest.version,
+	file: `${manifest.name}-${manifest.version}.tgz`,
+	alias: `${manifest.name}.tgz`,
+}];
 
 // Rewrite the READMEs BEFORE packing. `npm pack` snapshots the files, so
 // rewriting afterwards ships the previous version's install URL inside the

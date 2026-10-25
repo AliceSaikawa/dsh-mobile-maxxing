@@ -28,7 +28,7 @@ import { COPY, PROBES, copyFor, serviceWorkerCopy } from "./lib/copy.js";
 import { readFile } from "node:fs/promises";
 
 /** Stable Cordis plugin name. */
-export const name = "rdsh-pwa";
+export const name = "dsh-mobile-maxxing";
 
 /** HTTP routes need `webServer`; mount lazily so headless profiles stay clean. */
 export const inject = [];

@@ -16,13 +16,14 @@ import { fileURLToPath } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 const packageDir = join(here, "..");
 const repo = join(packageDir, "..", "..");
-const manifest = JSON.parse(await readFile(join(packageDir, "package.json"), "utf8"));
+// The repository root is the published package; packages/rdsh-pwa ships inside it.
+const manifest = JSON.parse(await readFile(join(repo, "package.json"), "utf8"));
 
 test("the manifest is a DSH bundle with a client half", async () => {
 	assert.equal(manifest.dsh?.bundle?.patch, "./cordis.patch.yml", "a bundle declares its patch");
 	assert.ok(manifest.exports?.["./client"], "the client half needs the ./client export");
 	assert.equal(manifest.dsh?.client?.platform, "web");
-	await stat(join(packageDir, manifest.dsh.bundle.patch));
+	await stat(join(repo, manifest.dsh.bundle.patch));
 
 	const client = await readFile(join(packageDir, "client.js"), "utf8");
 	assert.match(client, new RegExp(`id: "${manifest.name}"`),
@@ -36,17 +37,17 @@ test("the inventory can read a title, a description and an icon", async () => {
 		assert.ok(locale.meta?.title, `${language}.json needs meta.title`);
 		assert.ok(locale.meta?.description, `${language}.json needs meta.description`);
 	}
-	assert.ok(manifest.files.includes("locale/*.json"), "locale files have to ship");
+	assert.ok(manifest.files.some((entry) => entry.endsWith("locale/*.json")), "locale files have to ship");
 
 	// DSH resolves the icon as the exported `./icon` resource, not through a
 	// top-level `icon` field: package.json is not an exported subpath, so the
 	// manifest never sees that field.
 	const icon = manifest.exports["./icon"];
 	assert.ok(icon, "the icon has to be exported as ./icon");
-	const file = await stat(join(packageDir, icon));
+	const file = await stat(join(repo, icon));
 	assert.ok(file.isFile(), "the exported icon has to exist");
 	assert.ok(file.size <= 256 * 1024, "DSH refuses an icon above 256 KiB");
-	assert.ok(manifest.files.includes("assets/*.png"), "the icon has to ship");
+	assert.ok(manifest.files.some((entry) => entry.endsWith("assets/*.png")), "the icon has to ship");
 });
 
 test("the docs use the plugin command DSH takes", async () => {

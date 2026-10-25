@@ -312,7 +312,7 @@ test("the browser module registers and boots without a ReferenceError", () => {
 	assert.doesNotThrow(() => {
 		booted = bootClient();
 	}, "the module body must evaluate and apply must not throw a ReferenceError");
-	assert.equal(booted.definition.id, "rdsh-pwa");
+	assert.equal(booted.definition.id, "dsh-mobile-maxxing");
 });
 
 /**

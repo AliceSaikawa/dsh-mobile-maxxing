@@ -1142,6 +1142,121 @@ test("a route heading is tagged for the FAB inset only on a phone route", () => 
 	wide.disposeAll();
 });
 
+/**
+ * Boot a phone or a desktop against a full-screen route's detail.
+ *
+ * The stub records the nodes the client creates, so the back button is the
+ * element whose class is `rdsh-mux-route-back` and its click runs the handler
+ * the plugin registered (the plain stub swallows listeners).
+ */
+function detailBoot({ mode = "mobile", narrow = true, container = null, page = null } = {}) {
+	const frames = [];
+	const created = [];
+	const booted = bootClient({
+		mode,
+		narrow,
+		frames,
+		configureDocument(doc) {
+			doc.createElement = () => {
+				const node = element();
+				const listeners = new Map();
+				node.addEventListener = (type, handler) => listeners.set(type, handler);
+				node.click = () => listeners.get("click")?.();
+				created.push(node);
+				return node;
+			};
+			doc.querySelector = (selector) => (selector === '[data-testid="task-manager-page"]' ? page : null);
+			doc.querySelectorAll = (selector) => {
+				if (selector === "[data-plugin-detail], [data-plugin-item-detail]") return container === null ? [] : [container];
+				if (selector === "[data-rdsh-route-detail]") {
+					const marked = [container, page].filter((node) => node !== null && node.hasAttribute("data-rdsh-route-detail"));
+					return marked;
+				}
+				return [];
+			};
+		},
+	});
+	for (let index = 0; index < 10 && frames.length > 0; index += 1) frames.shift()();
+	const back = created.find((node) => node.className === "rdsh-mux-route-back") ?? null;
+	return { booted, back };
+}
+
+/** A laid-out box, so the route predicates see the node as on screen. */
+const laidOutRect = (x, y, width, height) => () => ({ x, y, top: y, left: x, width, height, right: x + width, bottom: y + height });
+
+test("a plugin detail retires the drawer button and leaves its breadcrumb free", () => {
+	const container = element();
+	container.getBoundingClientRect = laidOutRect(24, 0, 342, 667);
+	const { booted, back } = detailBoot({ container });
+	assert.equal(container.getAttribute("data-rdsh-route-detail"), "detail", "the plugin detail was not marked");
+	assert.equal(back?.hasAttribute("data-visible"), false, "a plugin detail got the task detail's back button");
+	booted.disposeAll();
+});
+
+test("a task detail whose list is gone gets a back button that closes it", () => {
+	const page = element();
+	page.getBoundingClientRect = laidOutRect(0, 0, 390, 844);
+	const listPane = element();
+	// Upstream hides the list below 760px: a 0x0 box is the signal.
+	listPane.getBoundingClientRect = laidOutRect(0, 0, 0, 0);
+	const detailPane = element();
+	detailPane.getBoundingClientRect = laidOutRect(0, 0, 390, 844);
+	detailPane.parentElement = page;
+	const close = element();
+	close.setAttribute("aria-label", "Close details");
+	close.getBoundingClientRect = laidOutRect(354, 8, 28, 28);
+	close.parentElement = detailPane;
+	let closes = 0;
+	close.click = () => {
+		closes += 1;
+	};
+	page.children = [listPane, detailPane];
+	page.querySelectorAll = (selector) => (selector === "button[aria-label]" ? [close] : []);
+
+	const { booted, back } = detailBoot({ page });
+	assert.equal(page.getAttribute("data-rdsh-route-detail"), "back", "the task detail was not marked for the back button");
+	assert.equal(back?.hasAttribute("data-visible"), true, "the task detail got no back button");
+	back.click();
+	assert.equal(closes, 1, "the back button did not press the detail's own close control");
+
+	// The detail closes: the marker and the button go with it.
+	page.querySelectorAll = () => [];
+	booted.sandbox.__RDSH_MOBILE_UX__.decorateNow();
+	assert.equal(page.hasAttribute("data-rdsh-route-detail"), false, "the marker outlived the detail");
+	assert.equal(back.hasAttribute("data-visible"), false, "the back button outlived the detail");
+	booted.disposeAll();
+});
+
+test("a task detail with the list still beside it keeps the stock layout", () => {
+	const page = element();
+	page.getBoundingClientRect = laidOutRect(0, 0, 1024, 844);
+	const listPane = element();
+	listPane.getBoundingClientRect = laidOutRect(0, 0, 542, 844);
+	const detailPane = element();
+	detailPane.getBoundingClientRect = laidOutRect(542, 0, 482, 844);
+	detailPane.parentElement = page;
+	const close = element();
+	close.setAttribute("aria-label", "Close details");
+	close.getBoundingClientRect = laidOutRect(988, 8, 28, 28);
+	close.parentElement = detailPane;
+	page.children = [listPane, detailPane];
+	page.querySelectorAll = (selector) => (selector === "button[aria-label]" ? [close] : []);
+
+	const { booted, back } = detailBoot({ page, narrow: false });
+	assert.equal(page.hasAttribute("data-rdsh-route-detail"), false, "a two-pane task page was treated as a detail-only screen");
+	assert.equal(back?.hasAttribute("data-visible"), false, "a two-pane task page got a back button");
+	booted.disposeAll();
+});
+
+test("a desktop boot builds no route back control", () => {
+	const container = element();
+	container.getBoundingClientRect = laidOutRect(24, 0, 342, 667);
+	const { booted, back } = detailBoot({ mode: "desktop", narrow: false, container });
+	assert.equal(back, null, "a desktop boot created the route back button");
+	assert.equal(container.hasAttribute("data-rdsh-route-detail"), false, "a desktop boot wrote the route detail marker");
+	assert.equal(booted.sandbox.__RDSH_MOBILE_UX__, undefined, "a desktop boot built the mobile half");
+});
+
 test("boot records this page's push origin so a restart cannot double-fan-out", () => {
 	const urls = [];
 	const booted = bootClient({

@@ -2494,6 +2494,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       "data-rdsh-edit-row",
       "data-rdsh-scroll",
       "data-rdsh-route-heading",
+      "data-rdsh-route-detail",
       "data-rdsh-sidebar-toggle",
       "data-rdsh-more-row",
       "data-rdsh-settings-row",
@@ -2540,6 +2541,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       disposeWorkspaceTools();
       clearComposerHooks();
       clearTypingAnimations();
+      removeRouteBack();
       removeDrawerNodes();
       // Inline styles this module wrote onto upstream nodes.
       clearQueueDockHooks();
@@ -3905,6 +3907,104 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       }
     }
 
+    /**
+     * Is this element actually laid out?
+     *
+     * A full-screen route keeps the previous screen mounted at 0x0 (the same
+     * ghost the right-panel code guards against), so carrying an attribute is
+     * not the same as being on screen.
+     */
+    function routeLaidOut(element) {
+      const rect = element.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return false;
+      if (element.closest("[hidden]") !== null) return false;
+      return getComputedStyle(element).visibility !== "hidden";
+    }
+
+    /**
+     * The upstream screen that replaced the chat with a route's detail view.
+     *
+     * Plugins render the detail itself: a bundle page marks it
+     * `data-plugin-detail`, a built-in plugin `data-plugin-item-detail`, and
+     * the breadcrumb at its top is the way back.
+     *
+     * Automation tasks keep the list and the detail side by side; upstream
+     * hides the list below 760px, which leaves the detail's own close button
+     * as the only way back. While both panes fit the list is still on screen
+     * and nothing is owed, so that state keeps the normal layout.
+     *
+     * @returns {{container: Element, source: Element|null, back: boolean}|null}
+     */
+    function routeDetailOf() {
+      for (const container of document.querySelectorAll("[data-plugin-detail], [data-plugin-item-detail]")) {
+        if (routeLaidOut(container)) return { container, source: null, back: false };
+      }
+      const page = document.querySelector('[data-testid="task-manager-page"]');
+      if (page === null || !routeLaidOut(page)) return null;
+      const closeLabels = probeValues("closeTaskDetail", ["Close details"]);
+      const close = [...page.querySelectorAll("button[aria-label]")]
+        .find((button) => closeLabels.includes(button.getAttribute("aria-label") || "") && routeLaidOut(button)) ?? null;
+      if (close === null) return null;
+      // Which pane owns the close button, and is the other one gone? Upstream
+      // hides the list with `display:none`, which collapses its box to 0x0.
+      let pane = close;
+      while (pane.parentElement !== null && pane.parentElement !== page) pane = pane.parentElement;
+      const others = [...page.children].filter((child) => child !== pane);
+      const listGone = others.length === 0 || others.some((child) => !routeLaidOut(child));
+      return listGone ? { container: page, source: close, back: true } : null;
+    }
+
+    /** The phone's own way out of a route detail, built once on boot. */
+    let routeBack = null;
+
+    function installRouteBack() {
+      if (routeBack !== null) return;
+      routeBack = document.createElement("button");
+      routeBack.type = "button";
+      routeBack.className = "rdsh-mux-route-back";
+      routeBack.setAttribute("aria-label", t("mux.route.back"));
+      routeBack.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>';
+      routeBack.addEventListener("click", () => {
+        // Re-read the screen: the route may have changed since the last frame.
+        const detail = routeDetailOf();
+        if (detail !== null && detail.source !== null) detail.source.click();
+      });
+      document.body.append(routeBack);
+    }
+
+    function removeRouteBack() {
+      routeBack?.remove();
+      routeBack = null;
+    }
+
+    /**
+     * Mark a full-screen route's detail and hand its top-left slot over.
+     *
+     * That slot is the drawer button's. On a phone it sits exactly over the
+     * Plugins breadcrumb and over the task detail's first tab, so both screens
+     * read as dead ends (#61, #62). The marker retires the drawer button from
+     * the mobile stylesheet; where the only way back is upstream's far-right
+     * close button, the same slot becomes a back button and the detail keeps a
+     * matching top inset so nothing runs underneath it.
+     */
+    function decorateRouteBack() {
+      if (!phone()) {
+        for (const tagged of document.querySelectorAll("[data-rdsh-route-detail]")) tagged.removeAttribute("data-rdsh-route-detail");
+        routeBack?.toggleAttribute("data-visible", false);
+        return;
+      }
+      const detail = routeDetailOf();
+      const container = detail === null ? null : detail.container;
+      for (const tagged of document.querySelectorAll("[data-rdsh-route-detail]")) {
+        if (tagged !== container) tagged.removeAttribute("data-rdsh-route-detail");
+      }
+      if (container !== null) {
+        const marker = detail.back ? "back" : "detail";
+        if (container.getAttribute("data-rdsh-route-detail") !== marker) container.setAttribute("data-rdsh-route-detail", marker);
+      }
+      if (routeBack !== null) routeBack.toggleAttribute("data-visible", detail !== null && detail.back);
+    }
+
     /** Cancel every running title animation and remove its overlay. */
     function clearTypingAnimations() {
       for (const controller of titleAnimations.values()) controller.cancel();
@@ -4803,6 +4903,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // layout (#44); on a desktop it clears leftovers from a narrower pass.
       decorateSessionRows();
       decorateRouteHeading();
+      decorateRouteBack();
       decorateQueueDock();
       decorateWorkspacePicker();
       decorateComposer();
@@ -9195,6 +9296,26 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
 }
 .rdsh-mux-fab-badge[data-visible] { display: block; }
 
+/* A full-screen route's detail replaces the chat, and its first control sits
+   in the corner the drawer button owns: the Plugins breadcrumb and the task
+   detail's first tab were both painted under it (#61, #62). The marker retires
+   the drawer button for as long as the detail is up; where upstream keeps its
+   close button at the far right, the same slot becomes a back button and the
+   detail keeps a matching top inset so its first row stays clear. */
+html:has([data-rdsh-route-detail]) .rdsh-mux-fab { display: none !important; }
+[data-rdsh-route-detail="back"] { padding-top: 56px !important; }
+.rdsh-mux-route-back {
+  position: fixed; left: 8px; top: calc(env(safe-area-inset-top, 0px) + 8px);
+  width: 40px; height: 40px; border: 0; border-radius: 12px; z-index: 40;
+  display: none; align-items: center; justify-content: center;
+  color: var(--dsw-alias-label-primary, #f9fafb);
+  background: var(--dsw-alias-bg-module-platform, #26262a);
+  box-shadow: var(--dsw-shadow-lv2, 0 4px 12px rgba(0,0,0,.08));
+  -webkit-tap-highlight-color: transparent; cursor: pointer;
+}
+.rdsh-mux-route-back[data-visible] { display: flex; }
+.rdsh-mux-route-back:active { transform: scale(.96); }
+
 .rdsh-mux-backdrop {
   position: fixed; inset: 0; z-index: 45; display: none;
   /* The reference dim (rgba(0,0,0,.35)), not a theme token whose alpha can
@@ -10455,6 +10576,9 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         // installs them once and a resize never tears them down.
         if (phone()) {
           installDrawer();
+          // The route-back slot shares the drawer button's corner; created in
+          // the same mobile-only branch so a desktop has no injected node.
+          installRouteBack();
           document.documentElement.setAttribute("data-rdsh-anim", ANIMATION);
         } else {
           clearPhoneHooks();

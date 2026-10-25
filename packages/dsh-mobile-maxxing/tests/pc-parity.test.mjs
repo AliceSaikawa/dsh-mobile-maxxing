@@ -234,6 +234,34 @@ test("preview feature rules live in the mobile stylesheet, never the device shee
 	assert.equal(leaks(`${device}\n${wrapRuleText}`), true, "the negative control did not trip the leak predicate for diff-wrap");
 });
 
+test("the route detail's back affordance lives in the mobile stylesheet only", () => {
+	const device = cssBlock("CSS_DEVICE");
+	const phone = cssBlock("CSS_PHONE");
+	assert.ok(device !== null && phone !== null, "the split stylesheets are missing");
+	// #61 / #62: the drawer button steps aside on a route detail, the task
+	// detail keeps a top inset for the replacement, and that replacement is a
+	// mobile-only node.
+	assert.match(
+		phone,
+		/html:has\(\[data-rdsh-route-detail\]\) \.rdsh-mux-fab \{ display: none !important; \}/,
+		"the drawer button is not retired on a route detail",
+	);
+	assert.match(
+		phone,
+		/\[data-rdsh-route-detail="back"\] \{ padding-top: 56px !important; \}/,
+		"the task detail has no top inset for the back button",
+	);
+	assert.match(phone, /\.rdsh-mux-route-back\[data-visible\] \{ display: flex; \}/, "the back button has no visible state");
+	assert.doesNotMatch(device, /data-rdsh-route-detail|rdsh-mux-route-back/, "a route back rule leaked into the device sheet");
+
+	// The node is built in the same mobile-only branch as the drawer button.
+	assert.match(
+		CLIENT,
+		/if \(phone\(\)\) \{\s*installDrawer\(\);[\s\S]{0,400}?installRouteBack\(\);/,
+		"the back button is not installed beside the drawer button",
+	);
+});
+
 test("preview hides native open targets structurally and keeps the hide list conservative", () => {
 	assert.match(CLIENT, /const OPEN_TARGET_SELECTOR = "\[data-open-target\]";/, "the structural open-target selector is missing");
 	const defaults = arrayLiteral("HIDE_DEFAULT");

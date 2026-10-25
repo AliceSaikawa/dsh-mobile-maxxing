@@ -5411,7 +5411,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       input.setAttribute("data-rdsh-files-search-input", "");
       const button = document.createElement("button");
       button.type = "button";
-      button.textContent = "🔍";
+      button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M9 18H4.5A1.5 1.5 0 0 1 3 16.5v-10A1.5 1.5 0 0 1 4.5 5H9l2 2h8.5A1.5 1.5 0 0 1 21 8.5V10"/><circle cx="15" cy="15" r="3.5"/><path d="m17.5 17.5 3 3"/></svg>';
       button.setAttribute("aria-label", t("files.search.submit"));
       button.title = t("files.search.submit");
       button.setAttribute("data-rdsh-files-search-button", "");

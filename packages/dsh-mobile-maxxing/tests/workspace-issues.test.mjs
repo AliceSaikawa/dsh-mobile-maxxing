@@ -847,6 +847,9 @@ test("#43 button and Enter run the same explicit search, and empty clears", () =
 	const submit = search.querySelector("button");
 	assert.equal(input.getAttribute("data-rdsh-files-search-input"), "", "the input has no stable hook");
 	assert.equal(submit.getAttribute("data-rdsh-files-search-button"), "", "the submit button has no stable hook");
+	assert.match(submit.innerHTML, /^<svg\b[^>]*aria-hidden="true"/, "the search icon must use the hand-drawn SVG");
+	assert.doesNotMatch(submit.textContent + submit.innerHTML, /\p{Extended_Pictographic}/u, "the search button must not use system emoji");
+	assert.equal(submit.getAttribute("aria-label"), COPY.en["files.search.submit"], "the icon button lost its accessible name");
 	assert.equal(tree.root.children.indexOf(search) + 1, tree.root.children.indexOf(tree.body), "the search row is not between header and body");
 
 	input.value = "app";

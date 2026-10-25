@@ -10,14 +10,17 @@
  *                           asset caching, never caches /api)
  *   /pwa/*.png              icons, the Apple touch icon and store screenshots
  *
- * and decorates the served index.html with the iOS/Android metadata the stock
- * page lacks (viewport-fit=cover, apple-touch-icon, standalone title, ...).
+ * and puts the device-mode decision at the top of the served index.html, ahead
+ * of the module loader: the browser classifies itself there and publishes one
+ * global, and the browser half reads it instead of classifying again.
  *
- * It also puts the device-mode decision at the top of `<head>`, ahead of the
- * module loader: the browser classifies itself there and publishes one global,
- * and the browser half reads it instead of classifying again. The document
- * itself stays one shared byte sequence for every client — this is not server
- * negotiation, and no response varies by user agent.
+ * A desktop browser gets no document write from this package: the head keeps
+ * the stock viewport and carries none of the home-screen metadata, because a
+ * shared document cannot be trimmed per client. Only a mobile browser adds the
+ * metadata (from that same inline script), and the viewport stays stock for
+ * both: the mobile bundle merges `viewport-fit=cover` itself. The document is
+ * one shared byte sequence for every client — this is not server negotiation,
+ * and no response varies by user agent.
  *
  * Every route is registered on the Web server's exact-route table, so it wins
  * over the SPA fallback and stays alive across HMR recompositions.
@@ -28,7 +31,6 @@
 import { createHash } from "node:crypto";
 import { applyNotify, normalizeNotifyConfig } from "./notify/host.js";
 import { apply as applyMobileUx } from "./lib/mobile-ux.js";
-import { apply as applyMarkdownCjk } from "./lib/markdown-cjk.js";
 import { apply as applySessionIdCopy } from "./lib/session-id-copy.js";
 import { COPY, PROBES, copyFor, serviceWorkerCopy } from "./lib/copy.js";
 import { MODE_GLOBAL, earlyModeScript } from "./lib/device-mode.js";
@@ -203,37 +205,6 @@ function scriptJson(value) {
 	return JSON.stringify(value).replaceAll("<", "\\u003c");
 }
 
-function escapeAttribute(value) {
-	return String(value)
-		.replaceAll("&", "&amp;")
-		.replaceAll('"', "&quot;")
-		.replaceAll("<", "&lt;")
-		.replaceAll(">", "&gt;");
-}
-
-/**
- * Rewrite the viewport meta so a standalone launch fills the screen while the
- * composer stays above the keyboard.
- */
-function withViewport(html) {
-	const viewport = /<meta\b[^>]*\bname=["']viewport["'][^>]*>/i.exec(html);
-	if (viewport === null) {
-		return html.replace(/<head(\s[^>]*)?>/i, (open) => `${open}<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">`);
-	}
-	const tag = viewport[0];
-	const content = /\bcontent=["']([^"']*)["']/i.exec(tag);
-	const base = content === null ? "width=device-width, initial-scale=1" : content[1];
-	const parts = base
-		.split(",")
-		.map((part) => part.trim())
-		.filter((part) => part !== "")
-		.filter((part) => !/^(?:viewport-fit|interactive-widget)\s*=/i.test(part));
-	parts.push("viewport-fit=cover", "interactive-widget=resizes-content");
-	const value = `content="${escapeAttribute(parts.join(", "))}"`;
-	const next = content === null ? tag.replace(/\s*\/?>$/, (tail) => ` ${value}${tail.trim() === "/>" ? " />" : ">"}`) : tag.replace(content[0], value);
-	return html.replace(tag, next);
-}
-
 /**
  * The inline payload the browser half needs, containing only the globals the
  * document does not already define.
@@ -294,7 +265,7 @@ export function decorateIndex(html, config) {
 		probes: !PROBES_ASSIGNMENT.test(html),
 		lang: LANG_ASSIGNMENT.test(html) ? undefined : cfg.lang,
 	});
-	const mode = MODE_ASSIGNMENT.test(html) ? "" : earlyModeScript();
+	const mode = MODE_ASSIGNMENT.test(html) ? "" : earlyModeScript(cfg.appleStatusBarStyle);
 	if (html.includes(INDEX_MARKER)) {
 		const missing = `${mode}${payload}`;
 		return missing === "" ? html : insertInHead(html, missing);
@@ -302,23 +273,15 @@ export function decorateIndex(html, config) {
 	const head = [
 		INDEX_MARKER,
 		// Decided in the browser, first in the document: nothing mode-dependent
-		// can run before it.
+		// can run before it. On a desktop this writes the global and nothing
+		// else; the phone metadata is added by the same script, mobile only.
 		mode,
 		// The browser half reads its strings from here; nothing else in the
 		// client carries UI copy. PROBES are upstream label vocabularies, not
 		// copy, so they travel separately.
 		payload,
-		// The standard set of "this is a capable app" meta tags, plus
-		// the install manifest, but NOT apple-mobile-web-app-capable/title.
-		// iOS 26 uses a mis-sized legacy frame when the Apple-specific capable
-		// meta is present (status bar height left unpainted at the bottom).
-		'<meta name="mobile-web-app-capable" content="yes">',
-		`<meta name="apple-mobile-web-app-status-bar-style" content="${escapeAttribute(cfg.appleStatusBarStyle)}">`,
-		// Code samples carry numbers; iOS must not turn them into call links.
-		'<meta name="format-detection" content="telephone=no">',
-		'<link rel="apple-touch-icon" href="pwa/apple-touch-icon.png">',
 	].join("");
-	return insertInHead(withViewport(html), head);
+	return insertInHead(html, head);
 }
 
 function respond(res, method, status, headers, body) {
@@ -379,9 +342,12 @@ export function apply(ctx, config) {
 	const notifyConfig = normalizeNotifyConfig(config?.notifications);
 	if (typeof config?.notifications?.lang !== "string") notifyConfig.lang = cfg.lang;
 	mountPart("dsh-mobile-maxxing/notify", [], applyNotify, notifyConfig);
-	// mobile-ux and markdown-cjk inject what they need inside their own apply.
+	// mobile-ux injects what it needs inside its own apply.
 	mountPart("rdsh-mobile-ux", [], applyMobileUx, config?.mobileUx);
-	mountPart("rdsh-markdown-cjk", [], applyMarkdownCjk, config?.markdownCjk);
+	// The CJK renderer patch is NOT mounted here any more: it rewrote the asset
+	// URLs for every client, desktops included. The module (lib/markdown-cjk.js)
+	// keeps its standalone API for the independent rdsh-markdown-cjk plugin; the
+	// merged plugin stays stock for PC and mobile alike.
 	// Registers nothing: its whole contribution is the browser half.
 	mountPart("rdsh-session-id-copy", [], applySessionIdCopy, undefined);
 	// Read once per activation: a deployment restart is what makes new bytes

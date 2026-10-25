@@ -46,8 +46,10 @@ function mount(config) {
 	return { routes, taps };
 }
 
-test('the CJK fix is part of the merged package, not its own plugin', () => {
-	// It ships inside dsh-mobile-maxxing now; index.js mounts it alongside the rest.
+test('the CJK module keeps its standalone API', () => {
+	// The merged plugin no longer mounts it (a shared document cannot rewrite
+	// the renderer for desktops only), so the independent rdsh-markdown-cjk
+	// plugin owns the fix. This module still offers the same apply() for it.
 	assert.equal(typeof apply, 'function');
 });
 

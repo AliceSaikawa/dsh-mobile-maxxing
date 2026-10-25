@@ -81,13 +81,22 @@ export function classifyDevice(nav) {
  * bundle is a deferred module and the loader script comes later in the same
  * head, so no mode-dependent style or hook can be applied before this has run.
  * The classifier decides first; if it throws, the script's initial
- * `"desktop"` stands. A failure while writing the attribute or the global is
- * contained: the other signal and the browser half's fallback order still
- * resolve, so the document never half-applies the mobile surface.
+ * `"desktop"` stands.
  *
+ * Desktop browsers get no document write at all: the decided mode travels as a
+ * JavaScript global, so a PC keeps the stock head exactly — no viewport
+ * rewrite, no home-screen metadata, no attribute. Only a mobile browser gets
+ * the metadata a home-screen launch needs, plus the `data-rdsh-device-mode`
+ * attribute the browser half reads. The viewport is deliberately untouched: a
+ * second viewport meta written this early would race the stock one, and the
+ * mobile bundle already merges `viewport-fit=cover` itself. Any failure while
+ * adding the metadata is contained: the stock head stays rather than a
+ * half-applied phone surface.
+ *
+ * @param {string} [statusBarStyle] - normalized apple status bar style.
  * @returns {string} one `<script>` element carrying the classifier.
  */
-export function earlyModeScript() {
+export function earlyModeScript(statusBarStyle = "black-translucent") {
 	const source = classifyDevice.toString();
 	// Our own source, but it lands inside a script element: a body that could
 	// close the element is a broken build, not something to render. The script
@@ -96,5 +105,30 @@ export function earlyModeScript() {
 	const decide = inline === ""
 		? ""
 		: `try{m=(${inline})(navigator)==="mobile"?"mobile":"desktop"}catch(e){}`;
-	return `<script>(function(){var m="desktop";${decide}try{var d=document.documentElement;if(d)d.setAttribute(${JSON.stringify(MODE_ATTRIBUTE)},m)}catch(e){}try{globalThis.${MODE_GLOBAL}=m}catch(e){}})()<\/script>`;
+	const meta = [
+		["mobile-web-app-capable", "yes"],
+		["apple-mobile-web-app-status-bar-style", String(statusBarStyle)],
+		// Code samples carry numbers; iOS must not turn them into call links.
+		["format-detection", "telephone=no"],
+	].map(([name, content], index) => {
+		const element = `e${index}`;
+		return `var ${element}=document.createElement("meta");`
+			+ `${element}.setAttribute("name",${scriptJson(name)});`
+			+ `${element}.setAttribute("content",${scriptJson(content)});`
+			+ `h.appendChild(${element});`;
+	}).join("");
+	return `<script>(function(){var m="desktop";${decide}`
+		+ `try{globalThis.${MODE_GLOBAL}=m}catch(e){}`
+		+ `if(m!=="mobile")return;`
+		+ `try{var h=document.head||document.documentElement;`
+		+ `var d=document.documentElement;if(d)d.setAttribute(${JSON.stringify(MODE_ATTRIBUTE)},"mobile");`
+		+ `${meta}`
+		+ `var i=document.createElement("link");i.setAttribute("rel","apple-touch-icon");`
+		+ `i.setAttribute("href","pwa/apple-touch-icon.png");h.appendChild(i)`
+		+ `}catch(e){}})()<\/script>`;
+}
+
+/** JSON safe to embed in an inline script (`<` would open a tag). */
+function scriptJson(value) {
+	return JSON.stringify(value).replaceAll("<", "\\u003c");
 }

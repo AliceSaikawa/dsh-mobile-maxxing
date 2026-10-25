@@ -95,33 +95,78 @@ test("width, pointer kind and orientation are never consulted", () => {
 
 /** The script's code, with the element wrapper removed. */
 function scriptBody(script) {
-	assert.match(script, /^<script>[\s\S]*<\/script>$/, "one script element");
+	assert.match(script, /^<script>[\s\S]*<\/script>$/,
+		"one script element");
 	return script.slice("<script>".length, -"</script>".length);
+}
+
+/** A root element that records what the script writes on it. */
+function rootElement({ write = "ok" } = {}) {
+	const attributes = new Map();
+	return {
+		attributes,
+		setAttribute(name, value) {
+			if (write === "throw") throw new Error("blocked");
+			attributes.set(name, String(value));
+		},
+	};
+}
+
+/** A fake document: head records appended nodes, createElement records attrs. */
+function fakeDocument({ root = rootElement(), head = "element", createElement = "ok" } = {}) {
+	const appended = [];
+	return {
+		document: {
+			documentElement: root,
+			head: head === "element" ? { appendChild: (node) => appended.push(node) } : null,
+			createElement(tag) {
+				if (createElement === "throw") throw new Error("blocked");
+				const attributes = new Map();
+				return { tag, attributes, setAttribute: (name, value) => attributes.set(name, String(value)) };
+			},
+		},
+		appended,
+	};
 }
 
 /**
  * Run the emitted script against a fake browser.
  *
  * @param {string} script - the element text.
- * @param {object} [options] - navigator, documentElement behaviour.
- * @returns {{attributes: Map<string, string>, global: unknown}} what it published.
+ * @param {object} [options] - navigator, document behaviour.
+ * @returns {{attributes: Map<string, string>, global: unknown, appended: object[]}} what it did.
  */
-function boot(script, { navigator: browserNavigator = nav({ userAgent: ANDROID_PHONE }), documentElement = "element", setAttribute = "ok" } = {}) {
-	const attributes = new Map();
-	const element = documentElement === "element"
-		? {
-			setAttribute(name, value) {
-				if (setAttribute === "throw") throw new Error("blocked");
-				attributes.set(name, String(value));
-			},
-		}
-		: null;
-	const sandbox = {
-		navigator: browserNavigator,
-		document: { documentElement: element },
-	};
+function boot(script, { navigator: browserNavigator = nav({ userAgent: ANDROID_PHONE }), root, head, createElement } = {}) {
+	const { document, appended } = fakeDocument({ root, head, createElement });
+	const sandbox = { navigator: browserNavigator, document };
 	runInNewContext(scriptBody(script), sandbox, { filename: "early-mode.js" });
-	return { attributes, global: sandbox[MODE_GLOBAL] };
+	return {
+		attributes: document.documentElement === null ? new Map() : document.documentElement.attributes,
+		global: sandbox[MODE_GLOBAL],
+		appended,
+	};
+}
+
+/** The meta/link names a mobile boot adds, in order. */
+const MOBILE_HEAD = [
+	["meta", "name", "mobile-web-app-capable"],
+	["meta", "name", "apple-mobile-web-app-status-bar-style"],
+	["meta", "name", "format-detection"],
+	["link", "rel", "apple-touch-icon"],
+];
+
+/** Assert the four home-screen nodes, in order, with their values. */
+function assertMobileHead(result, label) {
+	assert.equal(result.appended.length, MOBILE_HEAD.length, `${label}: node count`);
+	MOBILE_HEAD.forEach(([tag, key, expected], index) => {
+		const node = result.appended[index];
+		assert.equal(node.tag, tag, `${label}: node ${index} tag`);
+		assert.equal(node.attributes.get(key), expected, `${label}: node ${index} ${key}`);
+	});
+	assert.equal(result.appended[0].attributes.get("content"), "yes");
+	assert.equal(result.appended[1].attributes.get("content"), "black-translucent");
+	assert.equal(result.appended[2].attributes.get("content"), "telephone=no");
+	assert.equal(result.appended[3].attributes.get("href"), "pwa/apple-touch-icon.png");
 }
 
 test("the inline script is one self-contained copy of the classifier", () => {
@@ -132,8 +177,13 @@ test("the inline script is one self-contained copy of the classifier", () => {
 	assert.equal((body.match(/MacIntel/g) ?? []).length, 1, "no second copy of the heuristic");
 	assert.ok(body.includes(MODE_ATTRIBUTE), "the attribute name travels");
 	assert.ok(body.includes(`globalThis.${MODE_GLOBAL}=`), "the canonical global is published");
+	assert.ok(body.includes("mobile-web-app-capable"), "the home-screen metadata travels");
 	// Valid JavaScript on its own: this is what the browser will parse.
 	assert.doesNotThrow(() => new Function(body));
+	// The configured status bar style is carried as data.
+	assert.ok(earlyModeScript("default").includes('"default"'), "the configured style travels");
+	assert.ok(!earlyModeScript('"></script><script>alert(1)').includes("alert(1)</script>"),
+		"the value cannot close the element it lands in");
 });
 
 test("the inline script cannot terminate its own element", () => {
@@ -148,45 +198,97 @@ test("the inline script cannot terminate its own element", () => {
 	assert.ok(!/<\/script|<!--/i.test(classifyDevice.toString()), "the classifier source stays inline-safe");
 });
 
+test("a desktop browser gets the global and no document write at all", () => {
+	const script = earlyModeScript();
+	const desktops = [
+		["windows touch", nav({ userAgent: WINDOWS, platform: "Win32", maxTouchPoints: 10 })],
+		["windows mouse", nav({ userAgent: WINDOWS, platform: "Win32", maxTouchPoints: 0 })],
+		["mac", nav({ userAgent: MAC, platform: "MacIntel", maxTouchPoints: 0 })],
+		["linux touch", nav({ userAgent: LINUX, platform: "Linux x86_64", maxTouchPoints: 10 })],
+		["unknown", nav({ userAgent: "curl/8.5.0", platform: "" })],
+	];
+	for (const [label, fixture] of desktops) {
+		const result = boot(script, { navigator: fixture });
+		assert.equal(result.global, "desktop", `${label}: global`);
+		assert.equal(result.attributes.size, 0, `${label}: the html element is untouched`);
+		assert.equal(result.appended.length, 0, `${label}: the head is untouched`);
+	}
+});
+
+test("a mobile browser gets the home-screen metadata and the mode attribute", () => {
+	const script = earlyModeScript();
+	const phones = [
+		["iphone", nav({ userAgent: IPHONE, platform: "iPhone", maxTouchPoints: 5 })],
+		["android phone", nav({ userAgent: ANDROID_PHONE, platform: "Linux armv8l", maxTouchPoints: 5 })],
+		["android tablet", nav({ userAgent: ANDROID_TABLET, platform: "Linux armv8l", maxTouchPoints: 5 })],
+		["ipad desktop ua", nav({ userAgent: IPAD_DESKTOP, platform: "MacIntel", maxTouchPoints: 5 })],
+	];
+	for (const [label, fixture] of phones) {
+		const result = boot(script, { navigator: fixture });
+		assert.equal(result.global, "mobile", `${label}: global`);
+		assert.equal(result.attributes.get(MODE_ATTRIBUTE), "mobile", `${label}: attribute`);
+		assertMobileHead(result, label);
+	}
+});
+
 test("the same document decides differently in different browsers", () => {
 	// One string, two browsers: this is what a shared (and cached) shell does.
 	const script = earlyModeScript();
 	const phone = boot(script, { navigator: nav({ userAgent: IPHONE, platform: "iPhone", maxTouchPoints: 5 }) });
 	const laptop = boot(script, { navigator: nav({ userAgent: WINDOWS, platform: "Win32", maxTouchPoints: 10 }) });
 	const ipad = boot(script, { navigator: nav({ userAgent: IPAD_DESKTOP, platform: "MacIntel", maxTouchPoints: 5 }) });
-	assert.equal(phone.attributes.get(MODE_ATTRIBUTE), "mobile");
 	assert.equal(phone.global, "mobile");
-	assert.equal(laptop.attributes.get(MODE_ATTRIBUTE), "desktop");
+	assertMobileHead(phone, "phone");
 	assert.equal(laptop.global, "desktop", "a windows touch laptop stays desktop");
-	assert.equal(ipad.attributes.get(MODE_ATTRIBUTE), "mobile");
+	assert.equal(laptop.attributes.size, 0);
+	assert.equal(laptop.appended.length, 0);
 	assert.equal(ipad.global, "mobile");
-	// The attribute and the global can never disagree, in every fixture.
+	assertMobileHead(ipad, "ipad");
+	// Every fixture: the global is the decision, and only a mobile browser is
+	// allowed to touch the document.
 	for (const [label, fixture, expected] of CASES) {
 		const result = boot(script, { navigator: fixture });
-		assert.equal(result.attributes.get(MODE_ATTRIBUTE), expected, label);
 		assert.equal(result.global, expected, `${label}: global`);
+		if (expected === "mobile") {
+			assert.equal(result.attributes.get(MODE_ATTRIBUTE), "mobile", `${label}: attribute`);
+			assertMobileHead(result, label);
+		} else {
+			assert.equal(result.attributes.size, 0, `${label}: no attribute on desktop`);
+			assert.equal(result.appended.length, 0, `${label}: no head write on desktop`);
+		}
 	}
 });
 
 test("the inline script fails closed when the document or the globals misbehave", () => {
-	// No documentElement: the global still carries the decision.
-	const noRoot = boot(earlyModeScript(), { documentElement: null });
+	// No documentElement: the global still carries the decision, and the head
+	// metadata still applies (it does not need the root element).
+	const noRoot = boot(earlyModeScript(), { root: null });
 	assert.equal(noRoot.global, "mobile");
-	assert.equal(noRoot.attributes.size, 0);
+	assert.equal(noRoot.attributes.size, 0, "no root element to tag");
+	assertMobileHead(noRoot, "no documentElement");
 
-	// A blocked attribute write must not lose the global.
-	const blockedWrite = boot(earlyModeScript(), { setAttribute: "throw" });
+	// A blocked attribute write keeps the global and drops the metadata.
+	const blockedWrite = boot(earlyModeScript(), { root: rootElement({ write: "throw" }) });
 	assert.equal(blockedWrite.global, "mobile");
+	assert.equal(blockedWrite.appended.length, 0);
 
-	// A throwing navigator falls back to desktop and still publishes it.
+	// A broken createElement likewise: nothing half-applied.
+	const blockedCreate = boot(earlyModeScript(), { createElement: "throw" });
+	assert.equal(blockedCreate.global, "mobile");
+	assert.equal(blockedCreate.appended.length, 0);
+
+	// A throwing navigator falls back to desktop and writes nothing.
 	const hostile = boot(earlyModeScript(), {
 		navigator: { get userAgent() { throw new Error("blocked"); }, maxTouchPoints: 0 },
 	});
 	assert.equal(hostile.global, "desktop");
-	assert.equal(hostile.attributes.get(MODE_ATTRIBUTE), "desktop");
+	assert.equal(hostile.attributes.size, 0);
+	assert.equal(hostile.appended.length, 0);
 
 	// No navigator at all: upstream layout, never a crash.
-	const sandbox = { document: { documentElement: { setAttribute() {} } } };
+	const { document } = fakeDocument();
+	const sandbox = { document };
 	assert.doesNotThrow(() => runInNewContext(scriptBody(earlyModeScript()), sandbox));
 	assert.equal(sandbox[MODE_GLOBAL], "desktop");
+	assert.equal(document.documentElement.attributes.size, 0);
 });

@@ -12,7 +12,7 @@ import { runInNewContext } from "node:vm";
 import { apply, buildManifest, decorateIndex, normalizeConfig } from "../index.js";
 import { buildTurnEndPayload } from "../notify/host.js";
 import { COPY, PROBES, copyFor } from "../lib/copy.js";
-import { MODE_ATTRIBUTE, MODE_GLOBAL } from "../lib/device-mode.js";
+import { MODE_ATTRIBUTE, MODE_GLOBAL, earlyModeScript } from "../lib/device-mode.js";
 
 /**
  * A context good enough to mount the plugin.
@@ -153,23 +153,41 @@ test("manifest normalizes hostile or partial config", () => {
 	assert.equal(normalizeConfig({ navigationTimeoutMs: -5 }).navigationTimeoutMs, 300);
 });
 
-test("index decoration adds iOS metadata and an edge-to-edge viewport", () => {
+test("a desktop keeps the stock head: no metadata, no viewport rewrite", () => {
 	const html = decorateIndex(INDEX, {});
-	assert.ok(html.includes('name="mobile-web-app-capable"'),
-		"the standard capable meta is used");
-	assert.ok(!html.includes('name="apple-mobile-web-app-capable"'),
-		"the Apple-only capable meta would force the iOS 26 legacy frame");
-	assert.ok(html.includes('rel="apple-touch-icon"'));
-	assert.ok(html.includes('name="format-detection" content="telephone=no"'));
-	assert.ok(html.includes('name="apple-mobile-web-app-status-bar-style" content="black-translucent"'),
-		"the split-plugin status bar default is restored");
-	assert.ok(html.includes("viewport-fit=cover"));
-	assert.ok(html.includes("interactive-widget=resizes-content"));
-	assert.ok(html.includes("width=device-width"));
-	assert.ok(html.includes("initial-scale=1"), "existing viewport parts survive");
-	// A light-only profile can still ask for dark glyphs.
-	const light = decorateIndex(INDEX, { appleStatusBarStyle: "default" });
-	assert.ok(light.includes('name="apple-mobile-web-app-status-bar-style" content="default"'));
+	// Nothing the shared shell adds may show up as markup: the home-screen
+	// metadata belongs to the mobile bootstrap, which adds it in the browser.
+	assert.ok(!/<meta name="mobile-web-app-capable"/.test(html), "no capable meta");
+	assert.ok(!/<meta name="apple-mobile-web-app-capable"/.test(html), "no Apple-only capable meta");
+	assert.ok(!/<link rel="apple-touch-icon"/.test(html), "no touch icon link");
+	assert.ok(!/<meta name="format-detection"/.test(html), "no format detection meta");
+	assert.ok(!/<meta name="apple-mobile-web-app-status-bar-style"/.test(html), "no status bar meta");
+	// The stock viewport is left exactly as it was.
+	assert.ok(html.includes('<meta name="viewport" content="width=device-width, initial-scale=1" />'));
+	assert.ok(!html.includes("viewport-fit=cover, interactive-widget"), "the viewport is not rewritten");
+	assert.ok(!/<meta[^>]*viewport-fit/.test(html));
+	// Strip the marker and this package's two scripts: the document is stock.
+	const stripped = html
+		.replace("<!--dsh-mobile-maxxing-->", "")
+		.replace(/<script>\(function\(\)\{var m="desktop"[\s\S]*?<\/script>/, "")
+		.replace(/<script>globalThis\.__RDSH_PWA_COPY__[\s\S]*?<\/script>/, "");
+	assert.equal(stripped, INDEX, "the served document is the stock document plus inert scripts");
+});
+
+test("the mobile bootstrap carries the metadata the shell no longer writes", () => {
+	const script = earlyModeScript("default");
+	for (const name of ["mobile-web-app-capable", "apple-mobile-web-app-status-bar-style", "format-detection"]) {
+		assert.ok(script.includes(name), `${name} travels in the bootstrap`);
+	}
+	assert.ok(script.includes("apple-touch-icon"));
+	assert.ok(script.includes('"default"'), "the configured status bar style is used");
+	assert.ok(!script.includes("apple-mobile-web-app-capable"), "iOS 26 keeps the legacy frame out");
+	// And the decorated document really carries that script, before the bundle.
+	const withBundle = INDEX.replace("</head>", '<script type="module" src="./assets/index-x.js"></script></head>');
+	const html = decorateIndex(withBundle, { appleStatusBarStyle: "default" });
+	assert.ok(html.includes("apple-mobile-web-app-status-bar-style"));
+	assert.ok(html.indexOf("apple-mobile-web-app-status-bar-style") < html.indexOf('type="module"'),
+		"the bootstrap precedes the deferred app bundle");
 });
 
 test("manifest copy follows the dictionary for the configured language", () => {
@@ -288,8 +306,10 @@ test("decorateIndex still works when the document has no viewport or head", () =
 	const bare = decorateIndex("<div id=root></div>", {});
 	assert.ok(bare.includes("<!--dsh-mobile-maxxing-->"));
 	assert.ok(bare.includes("</div>"));
+	// A document with no viewport does not get one: the head stays as served.
 	const noViewport = decorateIndex("<head></head><body></body>", {});
-	assert.match(noViewport, /<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">/);
+	assert.ok(!noViewport.includes('name="viewport"'), "no viewport is invented");
+	assert.ok(noViewport.includes("<!--dsh-mobile-maxxing-->"));
 });
 
 test("the index decides the device mode before the module loader runs", () => {
@@ -354,19 +374,26 @@ test("one shared document answers per browser, so no response varies by user age
 		"the first script in the document decides the mode");
 	const decide = (navigator) => {
 		const attributes = new Map();
+		const head = [];
 		const sandbox = {
 			navigator,
-			document: { documentElement: { setAttribute: (name, value) => attributes.set(name, String(value)) } },
+			document: {
+				documentElement: { setAttribute: (name, value) => attributes.set(name, String(value)) },
+				head: { appendChild: (node) => head.push(node) },
+				createElement: () => ({ setAttribute(name, value) { this[name] = String(value); } }),
+			},
 		};
 		runInNewContext(script[1], sandbox, { filename: "early-mode.js" });
-		return { attribute: attributes.get(MODE_ATTRIBUTE), global: sandbox[MODE_GLOBAL] };
+		return { attribute: attributes.get(MODE_ATTRIBUTE), global: sandbox[MODE_GLOBAL], head: head.length };
 	};
 	const phone = decide({ userAgent: "Mozilla/5.0 (Linux; Android 14; Pixel 8) Mobile Safari/537.36", platform: "Linux armv8l", maxTouchPoints: 5 });
 	const ipad = decide({ userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Version/26.0 Safari/605.1.15", platform: "MacIntel", maxTouchPoints: 5 });
 	const laptop = decide({ userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36", platform: "Win32", maxTouchPoints: 10 });
-	assert.deepEqual([phone.attribute, phone.global], ["mobile", "mobile"]);
-	assert.deepEqual([ipad.attribute, ipad.global], ["mobile", "mobile"]);
-	assert.deepEqual([laptop.attribute, laptop.global], ["desktop", "desktop"]);
+	assert.deepEqual([phone.attribute, phone.global, phone.head], ["mobile", "mobile", 4],
+		"a phone gets the attribute and the four home-screen nodes");
+	assert.deepEqual([ipad.attribute, ipad.global, ipad.head], ["mobile", "mobile", 4]);
+	assert.deepEqual([laptop.attribute, laptop.global, laptop.head], [undefined, "desktop", 0],
+		"a desktop gets the global and no document write");
 	// Nothing in the served document depends on which one asked.
 	assert.equal(document, decorateIndex(INDEX, {}));
 });
@@ -432,8 +459,28 @@ test("hostile config values cannot break out of the injected markup", () => {
 		appleStatusBarStyle: '"><script>alert(1)</script>',
 	});
 	assert.ok(!html.includes("alert(1)"), "the rejected value never reaches the document");
-	assert.ok(html.includes('name="apple-mobile-web-app-status-bar-style" content="black-translucent"'),
-		"the default is used instead");
+	assert.ok(html.includes('"apple-mobile-web-app-status-bar-style","black-translucent"')
+		|| html.includes('"black-translucent"'), "the default is carried instead");
+	// A hostile value that somehow reached the bootstrap would still be a JSON
+	// string, and the element stays closed exactly once.
+	const hostile = earlyModeScript('"></script><script>alert(1)');
+	assert.equal((hostile.match(/<\/script/gi) ?? []).length, 1, "one closing tag");
+	assert.ok(!hostile.includes("alert(1)</script>"), "the value cannot close the element");
+});
+
+test("the merged plugin leaves the renderer alone", async () => {
+	// The renderer patch rewrote the asset URLs of the shared document, so it
+	// is not mounted here any more. A source check is what pins that: whether
+	// the patch would find an installed dist is environment-dependent, so the
+	// mounted-route count alone cannot catch a re-mount.
+	const source = await readFile(new URL("../index.js", import.meta.url), "utf8");
+	assert.doesNotMatch(source, /import\s*\{[^}]*applyMarkdownCjk[^}]*\}/,
+		"the merged host half must not import the patch");
+	assert.doesNotMatch(source, /mountPart\("rdsh-markdown-cjk"/,
+		"the merged host half must not mount the patch");
+	// The module itself keeps its API for the independent rdsh-markdown-cjk.
+	const module = await readFile(new URL("../lib/markdown-cjk.js", import.meta.url), "utf8");
+	assert.match(module, /export function apply\(/, "the standalone module stays usable");
 });
 
 test("routes serve the manifest, the worker and the icons", async () => {
@@ -441,10 +488,12 @@ test("routes serve the manifest, the worker and the icons", async () => {
 	assert.ok(routes.has("/manifest.webmanifest"));
 	assert.ok(routes.has("/sw.js"));
 	assert.ok(routes.has("/pwa/icon-192.png"));
-	// One tap adds the PWA tags; the CJK half adds a second only when it can
-	// resolve the installed DSH frontend, so the count is environment-dependent.
-	// Assert the content instead of the count.
+	// The merged plugin mounts the PWA/mode tap and the mobile-ux config tap,
+	// and nothing that rewrites the renderer: the CJK half is the independent
+	// plugin's job now. Assert the content instead of the exact count.
 	assert.ok(taps.length >= 1, "at least the PWA tap");
+	assert.equal([...routes.keys()].some((path) => path.startsWith("/markdown-cjk/")), false,
+		"the merged plugin leaves the renderer alone");
 	const decorated = taps.reduce((html, tap) => tap(html), INDEX);
 	assert.equal(decorated.split("<!--dsh-mobile-maxxing-->").length - 1, 1, "one PWA block");
 	assert.equal(injectedPayload(decorated).__RDSH_PWA_LANG__, "ja",
@@ -520,7 +569,7 @@ test("the worker follows the ja default but accepts the en dictionary", async ()
 });
 
 test("the worker treats the markdown-cjk entry chunks as cacheable", async () => {
-	// The host rewrites the document to load /markdown-cjk/v1/*.js instead of
+	// The independent CJK plugin rewrites the document to load /markdown-cjk/v1/*.js instead of
 	// the stock assets. If the worker does not cache that path, an offline
 	// launch serves the shell but the entry scripts fail and the plugin never
 	// boots. Evaluate sw.js in a stub scope so this is the worker's own

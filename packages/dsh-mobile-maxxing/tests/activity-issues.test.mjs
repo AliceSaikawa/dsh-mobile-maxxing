@@ -1135,6 +1135,52 @@ test("#40 only a running chip animates, and the safety poll is under a second", 
 });
 
 // ---------------------------------------------------------------------------
+// #57 — the rings wear DSH's link colour, not the plugin's own green
+// ---------------------------------------------------------------------------
+
+test("#57 running and settled rings use the link token and the old green is gone", () => {
+	// The static ring a completed chip keeps and the arc a running one turns
+	// are both water blue, matching DSH's own links in either palette. The
+	// fallback is the dark value; the token still resolves per theme.
+	assert.match(
+		CLIENT,
+		/\.rdsh-activity-ring \{\s*display: block; border: 1\.6px solid var\(--dsw-alias-link, #[0-9a-f]{6}\);/,
+		"the settled ring paints the link token with a fallback",
+	);
+	assert.match(
+		CLIENT,
+		/\[data-rdsh-activity-chip\]\[data-rdsh-activity-running\] \.rdsh-activity-ring \{[^}]*border-top-color: var\(--dsw-alias-link, #[0-9a-f]{6}\);/,
+		"the running arc paints the link token with a fallback",
+	);
+	assert.equal(
+		/#22c55e|--dsw-alias-state-success-primary/.test(CLIENT),
+		false,
+		"the fixed green ring colour is gone",
+	);
+});
+
+test("#57 only the ring changes colour; the idle chip stays secondary", () => {
+	// The icon and label keep the neutral idle colour; the ring alone carries
+	// the activity state, so no new state hook is needed (#40's attributes).
+	assert.match(
+		CLIENT,
+		/\[data-rdsh-activity-chip\] \{[^}]*color: var\(--dsw-alias-label-secondary, #[0-9a-f]{6}\);/,
+		"an idle chip keeps the secondary label colour",
+	);
+	assert.match(
+		CLIENT,
+		/setAttribute\("data-rdsh-activity-state", running \? "running" : "idle"\)/,
+		"#57 reuses the two #40 states instead of adding a third",
+	);
+	// The rules live in the phone stylesheet, so a desktop window never sees
+	// them (#44).
+	const phoneStart = CLIENT.indexOf("const CSS_PHONE = `");
+	const desktopStart = CLIENT.indexOf("const CSS = CSS_DEVICE;");
+	const ring = CLIENT.indexOf("\n  .rdsh-activity-ring {");
+	assert.ok(phoneStart !== -1 && desktopStart > phoneStart && ring > phoneStart && ring < desktopStart, "the ring CSS stays inside CSS_PHONE");
+});
+
+// ---------------------------------------------------------------------------
 // #41 — same chip closes, another chip switches, inner controls unaffected
 // ---------------------------------------------------------------------------
 

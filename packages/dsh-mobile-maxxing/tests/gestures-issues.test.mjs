@@ -22,7 +22,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import vm from "node:vm";
-import { COPY, PROBES } from "../lib/copy.js";
+import { COPY, LOCALE_PACKS, PROBES } from "../lib/copy.js";
 
 const CLIENT = readFileSync(new URL("../client.js", import.meta.url), "utf8");
 
@@ -267,6 +267,7 @@ function bootGestures({ narrow = true, mode = narrow ? "mobile" : "desktop", wid
 	const sandbox = {
 		__RDSH_PWA_PROBES__: PROBES,
 		__RDSH_PWA_COPY__: COPY,
+		__RDSH_PWA_LOCALES__: LOCALE_PACKS,
 		__RDSH_DEVICE_MODE__: mode,
 		window: {
 			__ModuleLoader__: {

@@ -57,12 +57,12 @@ none writes the shared DSH profile.
 | Setting | Effect |
 | --- | --- |
 | Font sizes (text / code / terminal) | Changes this device's rendering only |
-| Display language | Changes this device's UI language; only registered locales are offered |
+| Display language | Changes this device's UI language; only registered locales are offered (Japanese is registered on this device) |
 | Default permission | Applies to new sessions started on this device only |
 
 The permission choice is recorded as the session's own `/permission` right after it opens; the
-Host `defaultPreset` is untouched. A prompt sent in that same instant could run once under the
-shared default.
+Host `defaultPreset` is untouched. The composer stays disabled until that command settles, so
+the first send already runs under the chosen permission.
 
 Work-details verbosity, collapse timing, busy-send behavior and performance detail are not in
 this build: upstream exposes no device-local setter for them, and they cannot be separated
@@ -100,6 +100,12 @@ service-worker offline page and the notification text follow the same value
 (`notifications.lang` overrides it for notifications alone). `lang: "en"` makes the
 browser half, the service worker, the manifest and notifications all English;
 untranslated dictionary keys fall back to English.
+
+This device's display-language picker also carries a `ja` language pack. It translates
+the upstream shared vocabulary (`common`) and the Settings chrome (`settings` /
+`settings.locale`); other namespaces keep their English copy through the locale
+service's `ja` → `en` fallback rather than a guessed translation. The PC's language
+list is unchanged.
 
 ## Mobile layout
 

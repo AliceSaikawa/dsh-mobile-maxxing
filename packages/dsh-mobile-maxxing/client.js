@@ -1427,9 +1427,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     /**
      * Apply this browser's preset to one freshly opened blank session.
      *
-     * shortcut: the command runs right after the blank session opens, so a
-     * prompt sent in the same instant could run once under the shared default;
-     * gate the first send if that ever matters.
+     * The command itself is asynchronous, so the caller raises a composer
+     * block first (see installLocalPermissionDefault): a prompt cannot be
+     * submitted under the shared default while this round-trip is in flight.
      */
     async function applyLocalPermissionToSession(sessions, sessionId) {
       const preset = readLocalPermission();
@@ -1454,16 +1454,64 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * preset lands on the blank session before it is shown. The wrapper is an
      * instance property restored on disposal; the shared service and the Host
      * see no change.
+     *
+     * The first send must not race the command, so the wrapper also raises the
+     * session's composer block (the public `ctx.conversation.blocks` face)
+     * before the session is shown and clears it once the command settles. The
+     * submit button and Enter stay inert for exactly that round-trip; nothing
+     * is queued or replayed, so a send cannot be delivered twice.
      */
-    function installLocalPermissionDefault(scope, workspace, sessions) {
+    function installLocalPermissionDefault(scope, workspace, sessions, blocks) {
       if (workspace === undefined || workspace === null) return;
       const original = workspace.openWorkspaceSession;
       if (typeof original !== "function" || Object.hasOwn(workspace, "openWorkspaceSession")) return;
+      const canBlock = blocks !== null && blocks !== undefined && typeof blocks.set === "function";
       const wrapper = function (workspaceId, beforeOpen, reuse) {
         const open = typeof beforeOpen === "function" ? beforeOpen : null;
         return original.call(this, workspaceId, (sessionId) => {
-          if (open !== null) open(sessionId);
-          void applyLocalPermissionToSession(sessions, sessionId);
+          const preset = readLocalPermission();
+          const gate = canBlock && preset !== null && typeof sessionId === "string" && sessionId !== "";
+          if (!gate) {
+            if (open !== null) open(sessionId);
+            void applyLocalPermissionToSession(sessions, sessionId);
+            return;
+          }
+          let released = false;
+          let previous;
+          try {
+            previous = typeof blocks.storeFor === "function" ? blocks.storeFor(sessionId)?.getSnapshot?.() : undefined;
+          } catch (error) {
+            previous = undefined;
+          }
+          const block = { reason: t("localPermission.applying") };
+          const release = () => {
+            if (released) return;
+            released = true;
+            try {
+              // Restore what the composer showed before this gate, and never
+              // clear a newer block another plugin raised while we waited.
+              if (typeof blocks.storeFor === "function") {
+                const current = blocks.storeFor(sessionId)?.getSnapshot?.();
+                if (current === block) blocks.set(sessionId, previous);
+              } else {
+                blocks.set(sessionId, undefined);
+              }
+            } catch (error) {
+              /* the conversation fiber may be gone */
+            }
+          };
+          try {
+            blocks.set(sessionId, block);
+          } catch (error) {
+            /* the block registry may be gone; the command still runs */
+          }
+          try {
+            if (open !== null) open(sessionId);
+          } catch (error) {
+            release();
+            throw error;
+          }
+          void applyLocalPermissionToSession(sessions, sessionId).finally(release);
         }, reuse);
       };
       workspace.openWorkspaceSession = wrapper;
@@ -1734,6 +1782,60 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     // ---------------------------------------------------------------------
     let localDisplayRuntime = null;
 
+    /**
+     * Japanese language pack for the shared locale service (#64).
+     *
+     * Upstream ships zh and en only, so the display-language picker cannot
+     * offer Japanese by itself. The dictionaries live in lib/copy.js (the one
+     * module allowed to carry UI copy) and the host injects them as
+     * `__RDSH_PWA_LOCALES__`; this page adds the language through the public
+     * `addLanguage`/`register` API. A namespace without a ja dictionary falls
+     * through the declared ja -> en chain to its English copy, which is the
+     * locale service's documented behaviour. The pack is installed only on a
+     * phone, so a desktop catalog stays exactly upstream's (#44).
+     */
+    const JA_LOCALE_PACK = globalThis.__RDSH_PWA_LOCALES__?.ja ?? null;
+
+    /**
+     * Register the Japanese pack when the public locale API is present.
+     *
+     * Returns a disposer that removes the definition and every dictionary. A
+     * missing `addLanguage`/`register` (an older shell, the unit-test stub) or a
+     * catalog where another pack already owns ja leaves the picker untouched.
+     */
+    function installJapaneseLocale(localeService) {
+      if (!phone() || localeService === null || localeService === undefined) return null;
+      if (typeof localeService.addLanguage !== "function" || typeof localeService.register !== "function") return null;
+      const pack = JA_LOCALE_PACK;
+      if (pack === null || typeof pack !== "object" || pack.language === null || typeof pack.language !== "object"
+        || pack.dictionaries === null || typeof pack.dictionaries !== "object") return null;
+      let removeLanguage;
+      try {
+        removeLanguage = localeService.addLanguage(pack.language);
+      } catch (error) {
+        // Another pack already defines ja: its catalog and dictionaries stand.
+        return null;
+      }
+      const disposers = typeof removeLanguage === "function" ? [removeLanguage] : [];
+      for (const [namespace, dictionary] of Object.entries(pack.dictionaries)) {
+        try {
+          const removeDictionary = localeService.register(namespace, "ja", dictionary);
+          if (typeof removeDictionary === "function") disposers.push(removeDictionary);
+        } catch (error) {
+          console.warn("[rdsh-mobile-ux] ja dictionary failed", namespace, error);
+        }
+      }
+      return () => {
+        for (const dispose of disposers.reverse()) {
+          try {
+            dispose();
+          } catch (error) {
+            /* the locale fiber may already be gone */
+          }
+        }
+      };
+    }
+
     /** Read only this browser's display choices; malformed data means "follow Host". */
     function readLocalDisplaySettings() {
       const empty = {
@@ -1846,6 +1948,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       }
       const themeService = theme !== null && theme !== undefined && typeof theme.getTheme === "function" ? theme : null;
       const localeService = locale !== null && locale !== undefined && typeof locale.getSnapshot === "function" ? locale : null;
+      // Register before the first snapshot read so a stored "ja" is a valid
+      // choice on this page load, and before the picker copies the catalog.
+      let jaLocaleDispose = installJapaneseLocale(localeService);
       let hostTheme = null;
       let hostLocale = null;
       try {
@@ -2031,6 +2136,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
             if (document.documentElement.lang !== baseDocumentLang) document.documentElement.lang = baseDocumentLang;
           } catch (error) {
             /* the locale fiber may already be gone */
+          }
+          if (typeof jaLocaleDispose === "function") {
+            jaLocaleDispose();
+            jaLocaleDispose = null;
           }
           localDisplayLanguage = "";
           localDisplayHostLanguage = "";
@@ -11123,9 +11232,9 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         };
         // Session selection needs the workspace service, which arrives on its
         // own schedule; without it a notification tap can only raise a banner.
-        ctx.inject(["uiWorkspace", "sessions"], (scope) => {
+        ctx.inject(["uiWorkspace", "sessions", "conversation"], (scope) => {
           attachSessionOpener(scope);
-          if (phone()) installLocalPermissionDefault(scope, scope.uiWorkspace, scope.sessions);
+          if (phone()) installLocalPermissionDefault(scope, scope.uiWorkspace, scope.sessions, scope.conversation?.blocks ?? null);
         });
         ctx.inject(["remote", "remote.permissionPresets"], (scope) => {
           if (phone()) void loadPermissionCatalog(scope.remote);

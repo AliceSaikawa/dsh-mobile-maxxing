@@ -18,7 +18,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import vm from "node:vm";
-import { COPY, PROBES } from "../lib/copy.js";
+import { COPY, LOCALE_PACKS, PROBES } from "../lib/copy.js";
 
 const CLIENT = readFileSync(new URL("../client.js", import.meta.url), "utf8");
 
@@ -158,6 +158,7 @@ function bootClient({
 	requireImpl = null,
 	services = {},
 	log = console,
+	localePacks = LOCALE_PACKS,
 } = {}) {
 	let definition;
 	const disposers = [];
@@ -265,6 +266,7 @@ function bootClient({
 	sandbox.window.innerHeight = 844;
 	if (lang !== undefined) sandbox.__RDSH_PWA_LANG__ = lang;
 	if (copy !== null) sandbox.__RDSH_PWA_COPY__ = copy;
+	if (localePacks !== null) sandbox.__RDSH_PWA_LOCALES__ = localePacks;
 	// The canonical host bootstrap value. Null means "let the harness derive
 	// the legacy default"; contract tests pass it explicitly. `injectMode:
 	// false` models an old/absent bootstrap and must fail closed to desktop.
@@ -280,6 +282,7 @@ function bootClient({
 	// `apply` is what boot() runs from. It touches a lot of DOM; the stub
 	// absorbs that, and an undeclared identifier still throws.
 	const eventHandlers = new Map();
+	const emitted = [];
 	const ctx = {
 		effect(fn) {
 			const dispose = fn();
@@ -317,6 +320,7 @@ function bootClient({
 			return () => list.delete(handler);
 		},
 		emit(event, payload) {
+			emitted.push({ event, payload });
 			for (const handler of [...(eventHandlers.get(event) ?? [])]) handler(payload);
 		},
 		locale: locale ?? undefined,
@@ -327,6 +331,7 @@ function bootClient({
 		sandbox,
 		ctx,
 		disposers,
+		emitted,
 		emit: (event, payload) => ctx.emit(event, payload),
 		disposeAll() {
 			const errors = [];
@@ -1618,6 +1623,11 @@ test("device-local display projects font/locale and restores the Host snapshots"
 	assert.equal(theme.snapshot.fontSizes.text, 18, "the local font size was not projected");
 	assert.equal(theme.snapshot.fontSizes.code, 13);
 	assert.equal(theme.snapshot.fontSizes.terminal, 15);
+	// The sidebar terminal subscribes to theme/change and reads
+	// theme.fontSizes.terminal (#66): the projected snapshot must reach it.
+	const terminalEvent = booted.emitted.find((entry) => entry.event === "theme/change"
+		&& entry.payload?.fontSizes?.terminal === 15);
+	assert.ok(terminalEvent, "the terminal font size did not ride theme/change");
 	assert.equal(locale.snapshot.active, "en", "the local locale was not projected");
 	assert.equal(booted.sandbox.document.documentElement.lang, "en");
 	assert.deepEqual(writes, [], "a shared Host writer was called");
@@ -1640,6 +1650,120 @@ test("device-local display projects font/locale and restores the Host snapshots"
 	assert.equal(locale.snapshot.active, "zh", "the Host locale was not restored");
 	assert.equal(booted.sandbox.document.documentElement.lang, "zh-CN");
 	assert.deepEqual(writes, [], "dispose wrote a shared setting");
+});
+
+test("every accepted terminal size reaches theme/change (#66)", () => {
+	for (const terminal of [10, 13, 20]) {
+		const hostTheme = {
+			preference: "system",
+			revision: 3,
+			fontSizes: { text: 14, code: 11, terminal: 13 },
+			fontFamilies: { text: "", code: "", terminal: "" },
+			active: { id: "light", colorScheme: "light", tokens: {} },
+			themes: [],
+		};
+		const theme = {
+			snapshot: hostTheme,
+			getTheme() { return this.snapshot; },
+			setFontSize() { throw new Error("the shared font writer was called"); },
+		};
+		const booted = bootClient({
+			mode: "mobile",
+			narrow: true,
+			theme,
+			storage: {
+				"rdsh-mobile-ux:local-display": JSON.stringify({
+					fonts: { text: 16, code: 12, terminal },
+					language: "",
+				}),
+			},
+		});
+		assert.equal(booted.sandbox.__RDSH_MOBILE_UX__.state.localDisplay.fonts.terminal, terminal);
+		assert.equal(theme.snapshot.fontSizes.terminal, terminal, `terminal ${terminal} was not projected`);
+		const event = booted.emitted.find((entry) => entry.event === "theme/change"
+			&& entry.payload?.fontSizes?.terminal === terminal);
+		assert.ok(event, `terminal ${terminal} did not reach the terminal's theme subscription`);
+		assert.equal(event.payload.fontSizes.text, 16);
+		booted.disposeAll();
+	}
+});
+
+/** A locale service with the public language-pack API, recording registrations. */
+function japaneseLocale() {
+	const registered = [];
+	const removed = [];
+	const listeners = new Set();
+	const service = {
+		snapshot: {
+			active: "zh",
+			revision: 2,
+			locales: [{ id: "zh", label: "中文", fallback: "en" }, { id: "en", label: "English" }],
+		},
+		listeners,
+		getSnapshot() { return this.snapshot; },
+		addLanguage(input) {
+			registered.push({ kind: "language", input: { ...input } });
+			this.snapshot = {
+				...this.snapshot,
+				revision: this.snapshot.revision + 1,
+				locales: [...this.snapshot.locales, input],
+			};
+			return () => { removed.push("language"); };
+		},
+		register(namespace, lang, dictionary) {
+			registered.push({ kind: "dictionary", namespace, lang, keys: Object.keys(dictionary).length });
+			return () => { removed.push(`${namespace}:${lang}`); };
+		},
+		setLocale() { throw new Error("the shared locale writer was called"); },
+	};
+	return { service, registered, removed };
+}
+
+test("a phone gains ja in the display-language picker from the injected pack (#64)", () => {
+	const { service, registered, removed } = japaneseLocale();
+	const booted = bootClient({ mode: "mobile", narrow: true, locale: service });
+	const state = booted.sandbox.__RDSH_MOBILE_UX__.state;
+	assert.equal(state.localDisplay.available.language, true);
+	assert.deepEqual(state.localDisplay.languages.map((entry) => entry.id), ["zh", "en", "ja"],
+		"ja did not join the registered catalog");
+	const language = registered.find((entry) => entry.kind === "language");
+	assert.ok(language, "addLanguage was not called");
+	assert.deepEqual(language.input, { id: "ja", label: "日本語", fallback: "en" });
+	assert.deepEqual(
+		registered.filter((entry) => entry.kind === "dictionary").map((entry) => entry.namespace),
+		["common", "settings", "settings.locale"],
+		"the pack translated the wrong namespaces",
+	);
+	assert.ok(registered.find((entry) => entry.namespace === "common").keys >= 40, "common is incomplete");
+	booted.disposeAll();
+	assert.ok(removed.includes("language"), "the language definition was not released");
+	assert.ok(removed.includes("common:ja"), "a dictionary was not released");
+});
+
+test("a desktop never registers the ja pack (#44)", () => {
+	const { service, registered } = japaneseLocale();
+	bootClient({ mode: "desktop", locale: service });
+	assert.deepEqual(registered, [], "a desktop changed its locale catalog");
+});
+
+test("a shell without the injected pack or addLanguage offers no ja (#64)", () => {
+	const missingPack = japaneseLocale();
+	const withoutPack = bootClient({ mode: "mobile", narrow: true, locale: missingPack.service, localePacks: null });
+	assert.deepEqual(withoutPack.sandbox.__RDSH_MOBILE_UX__.state.localDisplay.languages.map((entry) => entry.id), ["zh", "en"]);
+	assert.deepEqual(missingPack.registered, [], "registrations ran without a pack");
+
+	const listeners = new Set();
+	const noApi = {
+		snapshot: {
+			active: "en",
+			revision: 1,
+			locales: [{ id: "en", label: "English" }, { id: "zh", label: "中文" }],
+		},
+		listeners,
+		getSnapshot() { return this.snapshot; },
+	};
+	const withoutApi = bootClient({ mode: "mobile", narrow: true, locale: noApi });
+	assert.deepEqual(withoutApi.sandbox.__RDSH_MOBILE_UX__.state.localDisplay.languages.map((entry) => entry.id), ["en", "zh"]);
 });
 
 test("font and language availability are independent and fail soft", () => {

@@ -2,12 +2,14 @@
 
 The boundary is the **device mode**, not the window width. A host bootstrap
 classifies the device once and writes `globalThis.__RDSH_DEVICE_MODE__` plus
-`html[data-rdsh-device-mode]` (`"mobile"` or `"desktop"`). Phones and tablets
-get the mobile surface at any width; ordinary PCs, Windows touch laptops and
-narrow desktop windows stay desktop. A missing or invalid bootstrap fails
-closed to desktop, and resizing never changes the mode. Width is geometry only
-(the Settings readout and genuinely responsive sizing). This deliberately
-supersedes the original #44 width-only specification per direct user request.
+`html[data-rdsh-device-mode]` (`"mobile"` or `"desktop"`). The client resolves
+the mode in this order: a valid `__RDSH_DEVICE_MODE__`, then a valid
+`data-rdsh-device-mode` attribute, then `"desktop"` (fail closed); it never
+re-classifies. Phones and tablets get the mobile surface at any width; ordinary
+PCs, Windows touch laptops and narrow desktop windows stay desktop. Resizing
+never changes the mode. Width is geometry only (the Settings readout and
+genuinely responsive sizing). This deliberately supersedes the original #44
+width-only specification per direct user request.
 
 ## Stylesheets
 

@@ -403,6 +403,34 @@ test("a missing bootstrap fails closed to desktop", () => {
 	assert.equal(sandbox.document.documentElement.getAttribute("data-rdsh-device-mode"), "desktop", "the DOM marker was not normalised to desktop");
 });
 
+test("a valid mode attribute is the fallback when the global is invalid", () => {
+	const { sandbox, disposeAll } = bootClient({
+		mode: "bogus",
+		narrow: false,
+		configureDocument(doc) {
+			doc.documentElement.setAttribute("data-rdsh-device-mode", "mobile");
+		},
+	});
+	assert.equal(sandbox.__RDSH_MOBILE_UX__.state.mode, "mobile", "the valid attribute fallback was ignored");
+	assert.equal(sandbox.__RDSH_MOBILE_UX__.phone(), true, "the valid attribute fallback did not enable mobile");
+	assert.equal(sandbox.document.documentElement.getAttribute("data-rdsh-device-mode"), "mobile", "the marker was not kept");
+	assert.deepEqual(disposeAll(), []);
+});
+
+test("a valid desktop global wins over a mobile attribute and syncs the marker", () => {
+	const { sandbox, disposeAll } = bootClient({
+		mode: "desktop",
+		narrow: false,
+		configureDocument(doc) {
+			doc.documentElement.setAttribute("data-rdsh-device-mode", "mobile");
+		},
+	});
+	assert.equal(sandbox.__RDSH_MOBILE_UX__.state.mode, "desktop", "the global did not win over the attribute");
+	assert.equal(sandbox.__RDSH_MOBILE_UX__.phone(), false, "the contradictory attribute enabled mobile");
+	assert.equal(sandbox.document.documentElement.getAttribute("data-rdsh-device-mode"), "desktop", "the root marker was not synchronised to desktop");
+	assert.deepEqual(disposeAll(), []);
+});
+
 test("PC 390px stays undecorated and a 1024px tablet stays mobile", () => {
 	const pc = bootClient({ mode: "desktop", narrow: true });
 	assert.equal(pc.sandbox.__RDSH_MOBILE_UX__.phone(), false, "a narrow PC became mobile");
@@ -462,6 +490,23 @@ test("an iPhone desktop-site UA still advertises the iOS install path", () => {
 	assert.equal(pwa.state.mode, "mobile", "the device mode is wrong");
 	assert.equal(pwa.showInstallPrompt(), true, "the welcome-screen A2HS card is not offered");
 	assert.deepEqual(disposeAll(), []);
+});
+
+test("isIos trusts Apple platform strings but not Windows or Android", () => {
+	const iosOf = (fields) => {
+		const booted = bootClient({
+			mode: "mobile",
+			narrow: false,
+			navigator: { onLine: true, serviceWorker: stub(), ...fields },
+		});
+		const value = booted.sandbox.__RDSH_PWA__.state.ios;
+		booted.disposeAll();
+		return value;
+	};
+	const mac = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Version/18.0 Safari/605.1.15";
+	assert.equal(iosOf({ userAgent: mac, platform: "iPad", maxTouchPoints: 0 }), true, "a desktop-site iPad lost the iOS hint");
+	assert.equal(iosOf({ userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120 Safari/537.36", platform: "Win32", maxTouchPoints: 10 }), false, "a Windows touch PC was treated as iOS");
+	assert.equal(iosOf({ userAgent: "Mozilla/5.0 (Linux; Android 14; Pixel 8) Chrome/120 Mobile Safari/537.36", platform: "Linux armv8l", maxTouchPoints: 5 }), false, "an Android phone was treated as iOS");
 });
 
 test("the desktop notification opt-in is read from this browser", () => {

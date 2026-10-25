@@ -73,11 +73,16 @@ untranslated dictionary keys fall back to English.
 
 ## Mobile layout
 
-The mobile UI is selected by the **device mode**, not by the window width. A host
-bootstrap classifies the device once before this bundle runs and writes
-`globalThis.__RDSH_DEVICE_MODE__` plus `html[data-rdsh-device-mode]` (`"mobile"` or
-`"desktop"`). Client code consumes that value; it never re-classifies from UA, width,
-pointer kind or touch points.
+The mobile UI is selected by the **device mode**, not by the window width. A small
+script injected by the host at the top of `<head>` decides it once in the browser and
+writes `globalThis.__RDSH_DEVICE_MODE__` plus `html[data-rdsh-device-mode]`
+(`"mobile"` or `"desktop"`). The same HTML/JS is served to every device; there is no
+SSR. Client code consumes the value; it never re-classifies from UA, width, pointer
+kind or touch points.
+
+Resolution order: a valid `__RDSH_DEVICE_MODE__`, then a valid
+`data-rdsh-device-mode` attribute, then `"desktop"` (fail closed). If the two
+disagree, the global wins and the root attribute is synchronised to it.
 
 - Phones (iPhone/Android, portrait or landscape) and tablets (iPad, Android tablets)
   are mobile. iPadOS's desktop-like UA (Macintosh plus `maxTouchPoints`) is still a
@@ -85,8 +90,10 @@ pointer kind or touch points.
 - Ordinary PCs, **Windows touch laptops**, and narrow desktop windows are desktop.
   Touch alone never selects mobile.
 - Crossing 767px changes geometry only. Resizing or rotating never changes the mode.
-- A missing or invalid bootstrap fails closed to desktop. An old cached shell opened
-  offline is therefore desktop until the next online launch refreshes it.
+- A shell without the bootstrap loaded by a **new client** (for example an old cached
+  shell opened offline) is desktop until the next online launch refreshes the HTML.
+  An old bundle still carries the old width code, so not every old offline session is
+  desktop.
 - Detection has limits: an Android tablet that requests the desktop site may lose the
   Android token and be treated as desktop. It is not infallible.
 

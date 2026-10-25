@@ -79,10 +79,15 @@ PC と共通のテーマは 設定 → 一般 → 外観 です。
 モバイルでは Settings を積み、タップと長押しを分け、通知設定と「モバイルでは使えない操作」の非表示
 リストを提供します。追加インストールは不要です。
 
-端末モードは**幅ではなく端末**で決まります。ホストがページ起動前に 1 回だけ判定し、
-`globalThis.__RDSH_DEVICE_MODE__` と `html[data-rdsh-device-mode]` に `"mobile"` または
-`"desktop"` を書きます。クライアントはその値を使うだけで、UA・幅・ポインタ種別・タッチ点数から
-判定し直しません。
+端末モードは**幅ではなく端末**で決まります。ホストが `<head>` 先頭に注入した小さな脚本が、
+ブラウザ上で 1 回だけ判定して `globalThis.__RDSH_DEVICE_MODE__` と
+`html[data-rdsh-device-mode]` に `"mobile"` または `"desktop"` を書きます
+（同一の HTML/JS を全端末に配信し、SSR はしません）。クライアントはその値を使うだけで、
+UA・幅・ポインタ種別・タッチ点数から判定し直しません。
+
+読み込み順は、**有効な `__RDSH_DEVICE_MODE__` → 有効な
+`html[data-rdsh-device-mode]` → どちらも無効なら desktop**（fail closed）です。
+矛盾する場合は global が優先され、`html` の属性もその値に同期されます。
 
 - スマホ（iPhone/Android、縦横とも）とタブレット（iPad、Android タブレット）は mobile。
   iPadOS のデスクトップ版 UA（Macintosh + `maxTouchPoints`）もタブレットとして mobile。
@@ -90,8 +95,10 @@ PC と共通のテーマは 設定 → 一般 → 外観 です。
   タッチできることだけを理由に mobile にはしません。
 - 幅を 767px の前後に行き来してもモードは変わりません。幅はレイアウトの寸法と
   Settings の表示（狭い/広い）だけに使います。
-- bootstrap が無い・壊れている場合は desktop に倒します（fail closed）。古いキャッシュの
-  HTML を offline で開いた場合も desktop になります。次の online 起動で更新されます。
+- bootstrap を含まない古い HTML に**新版 client** がロードされた場合（例: 更新前の shell を
+  offline で開いた場合）は desktop になります。次の online 起動で HTML が更新されます。
+  旧 bundle 自身は旧 width コードのままなので、旧 offline がすべて desktop になるわけでは
+  ありません。
 - Android タブレットで「PC版サイト」を要求して UA から Android が消えた場合など、
   識別できないことがあります。判定は完全ではありません。
 

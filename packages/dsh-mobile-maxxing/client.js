@@ -104,11 +104,12 @@ window.__ModuleLoader__.load({
     // ---------------------------------------------------------------------
     // Device mode: the host bootstrap decides it once, this bundle consumes it.
     //
-    // The canonical contract is `globalThis.__RDSH_DEVICE_MODE__` (a string)
-    // plus `html[data-rdsh-device-mode]`. The host's single classifier writes
-    // both before this module runs. This half never re-classifies from UA,
-    // width, pointer or touch points: a missing or invalid value means desktop
-    // (fail closed), and a resize never changes the mode.
+    // The canonical value is `globalThis.__RDSH_DEVICE_MODE__` (a string).
+    // If it is missing or invalid, a valid `html[data-rdsh-device-mode]` is the
+    // fallback; if neither is valid, the mode is desktop (fail closed). The
+    // host's single classifier writes both before this module runs. This half
+    // never re-classifies from UA, width, pointer or touch points, and a resize
+    // never changes the mode.
     const NARROW_QUERY = "(max-width: 767px)";
 
     function readDeviceMode() {

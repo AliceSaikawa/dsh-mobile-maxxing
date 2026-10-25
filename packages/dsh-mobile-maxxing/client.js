@@ -190,260 +190,6 @@ window.__ModuleLoader__.load({
       /* a document without documentElement only affects the CSS hook */
     }
 
-    // ---------------------------------------------------------------------
-    // Local chat policy (this device only)
-    //
-    // Four chat preferences upstream keeps in the Host configuration form:
-    // work-details verbosity and collapse timing (ui-chat TranscriptViewPolicy),
-    // performance detail (PerformanceUsagePolicy) and busy-Enter queue/steer
-    // (ui-conversation ComposerSubmissionPolicy). Their live values are client
-    // snapshot stores handed to upstream's own Settings rows as slot hooks.
-    //
-    // The user wants these on the phone only, and the Host form must never be
-    // written from here. This bundle therefore borrows the store from the
-    // upstream `settings.general.item` entry (`options.inject().hooks[hook]`),
-    // writes the device value into that live store and keeps the latest
-    // Host-accepted value as the baseline: reset, "follow Host" and teardown put
-    // the baseline back. The upstream `set*` functions are never called — they
-    // are the ones that persist to the Host.
-    //
-    // If an entry or hook is missing (a build without that preference), the row
-    // is reported unavailable with the reason instead of silently doing nothing.
-    // ---------------------------------------------------------------------
-    const LOCAL_CHAT_KEY = "rdsh-mobile-ux:local-chat";
-    const LOCAL_CHAT_SPECS = [
-      { id: "workDetails", entry: "transcript-view", hook: "transcriptView", values: ["compact", "standard", "detailed", "verbose"], fallback: "detailed" },
-      { id: "collapse", entry: "transcript-view", hook: "collapseTiming", values: ["completion", "next-input"], fallback: "completion" },
-      { id: "busyEnter", entry: "composer-enter", hook: "busyEnter", values: ["queue", "steer"], fallback: "queue" },
-      { id: "performance", entry: "performance-usage", hook: "performanceUsage", values: ["compact", "detailed"], fallback: "detailed" },
-    ];
-    /** spec id -> binding; a binding without a store is an unavailable row. */
-    const localChatBindings = new Map();
-    const localChatListeners = new Set();
-    let localChatStatus = { local: {}, host: {}, available: {}, reason: {} };
-
-    function readLocalChatChoices() {
-      let raw;
-      try {
-        raw = JSON.parse(localStorage.getItem(LOCAL_CHAT_KEY) || "{}");
-      } catch (error) {
-        return {};
-      }
-      const saved = raw !== null && typeof raw === "object" ? raw : {};
-      const values = {};
-      for (const spec of LOCAL_CHAT_SPECS) {
-        const value = saved[spec.id];
-        if (typeof value === "string" && spec.values.includes(value)) values[spec.id] = value;
-      }
-      return values;
-    }
-
-    function writeLocalChatChoices(choices) {
-      try {
-        localStorage.setItem(LOCAL_CHAT_KEY, JSON.stringify(choices));
-      } catch (error) {
-        /* private mode: the choice lives for this page only */
-      }
-    }
-
-    /** Publish the local/store state the Settings rows render. */
-    function publishLocalChat() {
-      const local = readLocalChatChoices();
-      const host = {};
-      const available = {};
-      const reason = {};
-      for (const spec of LOCAL_CHAT_SPECS) {
-        const binding = localChatBindings.get(spec.id);
-        available[spec.id] = binding?.store !== undefined && binding?.store !== null;
-        if (!available[spec.id]) {
-          reason[spec.id] = binding?.reason ?? "not-bound";
-          continue;
-        }
-        const value = binding.store.getSnapshot();
-        host[spec.id] = typeof value === "string" ? value : spec.fallback;
-      }
-      localChatStatus = { local, host, available, reason };
-      for (const notify of [...localChatListeners]) notify();
-    }
-
-    function subscribeLocalChatStatus(listener) {
-      localChatListeners.add(listener);
-      return () => localChatListeners.delete(listener);
-    }
-
-    /** Find the upstream settings entry that owns one preference. */
-    function localChatEntry(ctx, spec) {
-      let entries;
-      try {
-        entries = ctx.slots.entries?.("settings.general.item");
-      } catch (error) {
-        return { reason: "entries-failed" };
-      }
-      if (!Array.isArray(entries)) return { reason: "entries-missing" };
-      const entry = entries.find((candidate) => candidate?.options?.id === spec.entry);
-      return entry === undefined ? { reason: "entry-missing" } : { entry };
-    }
-
-    /** Resolve the live store for one preference, or the reason it is absent. */
-    function localChatStore(ctx, spec) {
-      const found = localChatEntry(ctx, spec);
-      if (found.entry === undefined) return { reason: found.reason };
-      const inject = found.entry.options?.inject;
-      if (typeof inject !== "function") return { reason: "inject-missing" };
-      let props;
-      try {
-        props = inject();
-      } catch (error) {
-        return { reason: "inject-failed" };
-      }
-      const store = props?.hooks?.[spec.hook];
-      if (store === null || typeof store !== "object") return { reason: "hook-missing" };
-      if (typeof store.getSnapshot !== "function" || typeof store.set !== "function" || typeof store.subscribe !== "function") {
-        return { reason: "hook-shape" };
-      }
-      return { store };
-    }
-
-    /** Write the device value into the live store (never the Host form). */
-    function applyLocalChatValue(binding, value) {
-      binding.ownWrite = true;
-      try {
-        binding.store.set(value);
-      } finally {
-        binding.ownWrite = false;
-      }
-    }
-
-    /**
-     * (Re)bind every preference to its upstream store.
-     *
-     * Called at boot, after a slot registration change and from the Settings
-     * rows, so a late `settings.general.item` entry is picked up without a
-     * reload. Rebinding the same store keeps the existing subscription.
-     */
-    function bindLocalChat(ctx) {
-      for (const spec of LOCAL_CHAT_SPECS) {
-        const found = localChatStore(ctx, spec);
-        const existing = localChatBindings.get(spec.id);
-        if (found.store === undefined) {
-          if (existing !== undefined) {
-            existing.unsubscribe?.();
-            localChatBindings.delete(spec.id);
-          }
-          localChatBindings.set(spec.id, { store: null, reason: found.reason, available: false });
-          continue;
-        }
-        if (existing?.store === found.store) {
-          existing.available = true;
-          existing.reason = "";
-          continue;
-        }
-        existing?.unsubscribe?.();
-        const binding = {
-          store: found.store,
-          baseline: found.store.getSnapshot(),
-          ownWrite: false,
-          available: true,
-          reason: "",
-          unsubscribe: null,
-        };
-        binding.unsubscribe = found.store.subscribe(() => {
-          const next = binding.store.getSnapshot();
-          const local = readLocalChatChoices()[spec.id];
-          // Our own write may not move the Host baseline; every other value is
-          // the Host's latest accepted answer, even when it equals the device
-          // choice, so a later reset still restores the newest Host value.
-          if (binding.ownWrite) return;
-          binding.baseline = next;
-          if (local !== undefined && next !== local) applyLocalChatValue(binding, local);
-          publishLocalChat();
-        });
-        localChatBindings.set(spec.id, binding);
-        const local = readLocalChatChoices()[spec.id];
-        if (local !== undefined && local !== binding.baseline) applyLocalChatValue(binding, local);
-      }
-      publishLocalChat();
-    }
-
-    /** Save and apply one device choice. */
-    function setLocalChatValue(id, value) {
-      const spec = LOCAL_CHAT_SPECS.find((candidate) => candidate.id === id);
-      if (spec === undefined || !spec.values.includes(value)) return false;
-      const binding = localChatBindings.get(id);
-      if (binding?.store === undefined || binding?.store === null) return false;
-      const choices = readLocalChatChoices();
-      choices[id] = value;
-      writeLocalChatChoices(choices);
-      if (binding.store.getSnapshot() !== value) applyLocalChatValue(binding, value);
-      publishLocalChat();
-      return true;
-    }
-
-    /** Drop the device choice and follow the latest Host-accepted value. */
-    function resetLocalChat(id) {
-      const choices = readLocalChatChoices();
-      if (choices[id] === undefined) return false;
-      delete choices[id];
-      writeLocalChatChoices(choices);
-      const binding = localChatBindings.get(id);
-      if (binding?.store !== undefined && binding?.store !== null) {
-        if (binding.store.getSnapshot() !== binding.baseline) applyLocalChatValue(binding, binding.baseline);
-      }
-      publishLocalChat();
-      return true;
-    }
-
-    /** Release every subscription and restore the latest Host baseline. */
-    function disposeLocalChat() {
-      const choices = readLocalChatChoices();
-      for (const [id, binding] of localChatBindings) {
-        binding.unsubscribe?.();
-        if (binding.store !== undefined && binding.store !== null && choices[id] !== undefined && binding.store.getSnapshot() !== binding.baseline) {
-          applyLocalChatValue(binding, binding.baseline);
-        }
-      }
-      localChatBindings.clear();
-      publishLocalChat();
-    }
-
-    /**
-     * Install the overrides for the mobile page and keep them bound.
-     *
-     * `subscription` re-binds when upstream registers or replaces the settings
-     * entries; the effect teardown removes both the subscription and every
-     * restored value.
-     */
-    function attachLocalChat(ctx) {
-      ctx.effect(() => {
-        bindLocalChat(ctx);
-        const stop = typeof ctx.slots.subscribe === "function"
-          ? ctx.slots.subscribe("settings.general.item", () => bindLocalChat(ctx))
-          : undefined;
-        return () => {
-          stop?.();
-          disposeLocalChat();
-        };
-      }, "rdsh-mobile-ux: local chat policy");
-    }
-
-    // Test seam: the runtime is plain functions over the slots service, so a
-    // harness that sets this flag gets the same closures without a browser.
-    const localChatTestHook = globalThis.__RDSH_LOCAL_CHAT_TEST__;
-    if (localChatTestHook !== null && typeof localChatTestHook === "object") {
-      localChatTestHook.localChat = {
-        attachLocalChat,
-        bindLocalChat,
-        disposeLocalChat,
-        setLocalChatValue,
-        resetLocalChat,
-        publishLocalChat,
-        status: () => localChatStatus,
-        specs: LOCAL_CHAT_SPECS,
-        key: LOCAL_CHAT_KEY,
-        subscribe: subscribeLocalChatStatus,
-      };
-    }
-
     // Shared clipboard + toast
     //
     // Two surfaces copy text: the session menu (its id) and the right-panel
@@ -1655,8 +1401,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     /** Read the permission catalog once for the Mobile card. */
-    async function loadPermissionCatalog() {
-      const remote = hostCtx?.remote;
+    async function loadPermissionCatalog(remote) {
       if (remote === undefined || remote === null || remote.permissionPresets === undefined) {
         emit({ permissionError: t("localPermission.unavailable") });
         return;
@@ -1686,10 +1431,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * prompt sent in the same instant could run once under the shared default;
      * gate the first send if that ever matters.
      */
-    async function applyLocalPermissionToSession(sessionId) {
+    async function applyLocalPermissionToSession(sessions, sessionId) {
       const preset = readLocalPermission();
       if (preset === null || typeof sessionId !== "string" || sessionId === "") return;
-      const sessions = hostCtx?.sessions;
       if (sessions === undefined || sessions === null) return;
       try {
         await sessions.using(sessionId, { source: "mobilePermissionDefault" }, async (reference) => {
@@ -1711,7 +1455,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * instance property restored on disposal; the shared service and the Host
      * see no change.
      */
-    function installLocalPermissionDefault(scope, workspace) {
+    function installLocalPermissionDefault(scope, workspace, sessions) {
       if (workspace === undefined || workspace === null) return;
       const original = workspace.openWorkspaceSession;
       if (typeof original !== "function" || Object.hasOwn(workspace, "openWorkspaceSession")) return;
@@ -1719,7 +1463,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         const open = typeof beforeOpen === "function" ? beforeOpen : null;
         return original.call(this, workspaceId, (sessionId) => {
           if (open !== null) open(sessionId);
-          void applyLocalPermissionToSession(sessionId);
+          void applyLocalPermissionToSession(sessions, sessionId);
         }, reuse);
       };
       workspace.openWorkspaceSession = wrapper;
@@ -2096,7 +1840,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         theme = undefined;
       }
       try {
-        locale = ctx.locale ?? (typeof ctx.get === "function" ? ctx.get("locale") : undefined);
+        locale = typeof ctx.get === "function" ? ctx.get("locale") : undefined;
       } catch (error) {
         locale = undefined;
       }
@@ -8910,10 +8654,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const sharedOption = options.find((option) => option.value === shared);
       const sharedLabel = sharedOption === undefined ? shared : permissionOptionLabel(sharedOption);
 
-      useEffect(() => {
-        void loadPermissionCatalog();
-      }, []);
-
       return h(
         "div",
         { className: "rdsh-mux-card" },
@@ -8943,60 +8683,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         h("p", { className: "rdsh-mux-note" }, t("localPermission.hostNote")),
         s.permissionError === "" ? null : h("p", { className: "rdsh-mux-note" }, s.permissionError),
         message === "" ? null : h("p", { className: "rdsh-mux-note" }, message),
-      );
-    }
-
-    /**
-     * Device-local chat preferences.
-     *
-     * Each row writes only the live client store of the upstream policy; the
-     * Host configuration form is never touched. A row whose entry or hook is
-     * missing says so instead of looking saved and doing nothing.
-     */
-    function LocalChatSettingsSection() {
-      const [status, setStatus] = useState(localChatStatus);
-      useEffect(() => {
-        setStatus({ ...localChatStatus });
-        return subscribeLocalChatStatus(() => setStatus({ ...localChatStatus }));
-      }, []);
-      return h(
-        "div",
-        { className: "rdsh-mux-card", "data-rdsh-local-chat": "" },
-        h("h3", { className: "rdsh-mux-title" }, t("localChat.title")),
-        h("p", { className: "rdsh-mux-desc" }, t("localChat.desc")),
-        LOCAL_CHAT_SPECS.map((spec) => {
-          const available = status.available?.[spec.id] === true;
-          const local = status.local?.[spec.id];
-          const hostValue = status.host?.[spec.id] ?? spec.fallback;
-          return h(
-            "div",
-            { className: "rdsh-mux-slider", key: spec.id, "data-rdsh-local-chat-row": spec.id },
-            h("span", null, t(`localChat.${spec.id}`)),
-            h(
-              "select",
-              {
-                className: "rdsh-mux-select",
-                value: local ?? hostValue,
-                disabled: !available,
-                onChange: (event) => {
-                  setLocalChatValue(spec.id, event.target.value);
-                },
-              },
-              spec.values.map((option) => h("option", { key: option, value: option }, t(`localChat.${spec.id}.${option}`))),
-            ),
-            available && local !== undefined
-              ? h("button", {
-                type: "button",
-                className: "rdsh-mux-secondary",
-                onClick: () => resetLocalChat(spec.id),
-              }, t("localChat.followHost"))
-              : null,
-            available
-              ? null
-              : h("span", { className: "rdsh-mux-note" }, t("localChat.unavailable", { reason: status.reason?.[spec.id] ?? "not-bound" })),
-          );
-        }),
-        h("p", { className: "rdsh-mux-note" }, t("localChat.note")),
       );
     }
 
@@ -9163,8 +8849,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           h("p", { className: "rdsh-mux-note" }, t("mux.note.notifyScope")),
           message !== "" ? h("p", { className: "rdsh-mux-note" }, message) : null,
         ),
-        // Chat display prefs are device-local, so they only exist here.
-        h(LocalChatSettingsSection),
         // One Mobile tab carries both sections inline; the separate tabs are
         // no longer registered.
         onPhone ? h(LocalDisplaySettingsSection) : null,
@@ -10768,9 +10452,6 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         if (phone()) {
           installDrawer();
           document.documentElement.setAttribute("data-rdsh-anim", ANIMATION);
-          // The catalog only feeds the Mobile card; a failed read is reported
-          // there instead of blocking the surface.
-          void loadPermissionCatalog();
         } else {
           clearPhoneHooks();
         }
@@ -10895,20 +10576,6 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
 
         globalThis.__RDSH_MOBILE_UX__ = {
           get state() { return { ...state }; },
-          debug: () => ({
-            entries: (ctx.slots?.entries?.("settings.general.item") ?? []).map((entry) => ({
-              id: entry?.options?.id,
-              keys: Object.keys(entry?.options ?? {}),
-              inject: typeof entry?.options?.inject,
-            })),
-            services: (() => {
-              const out = {};
-              for (const name of ["theme", "locale"]) {
-                try { out[name] = typeof ctx.get(name); } catch (error) { out[name] = String(error.message); }
-              }
-              return out;
-            })(),
-          }),
           get badgeCount() { return notificationTotal; },
           applyNotificationCount,
           readDeviceTheme,
@@ -11039,32 +10706,30 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         };
         // Session selection needs the workspace service, which arrives on its
         // own schedule; without it a notification tap can only raise a banner.
-        ctx.inject(["uiWorkspace"], (scope) => {
+        ctx.inject(["uiWorkspace", "sessions"], (scope) => {
           attachSessionOpener(scope);
-          if (phone()) installLocalPermissionDefault(scope, scope.uiWorkspace ?? scope.get("uiWorkspace"));
+          if (phone()) installLocalPermissionDefault(scope, scope.uiWorkspace, scope.sessions);
+        });
+        ctx.inject(["remote.permissionPresets"], (scope) => {
+          if (phone()) void loadPermissionCatalog(scope.remote);
         });
         try {
           attachDeviceTheme(ctx);
         } catch (error) {
           console.error("[rdsh-mobile-ux] device theme failed", error);
         }
-        try {
-          attachLocalDisplay(ctx);
-        } catch (error) {
-          console.error("[rdsh-mobile-ux] local display failed", error);
-        }
+        ctx.inject(["theme", "locale"], (scope) => {
+          try {
+            attachLocalDisplay(scope);
+          } catch (error) {
+            console.error("[rdsh-mobile-ux] local display failed", error);
+          }
+        });
         try {
           boot(ctx);
         } catch (error) {
           console.error("[rdsh-mobile-ux] boot failed", error);
           emit({ bootError: String((error && error.message) || error) });
-        }
-        // Device-local chat preferences: attach after boot so a failing boot
-        // still leaves the Host values untouched.
-        try {
-          attachLocalChat(ctx);
-        } catch (error) {
-          console.error("[rdsh-mobile-ux] local chat settings failed", error);
         }
         ctx.slots.inject("sidebar.workspaces.session.menu.item", () => ctx.slots.register({
           name: "sidebar.workspaces.session.menu.item",

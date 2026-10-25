@@ -29,49 +29,47 @@ function harness({ stored = null, command = async () => ({ ok: true, value: { ma
     emit: (patch) => emitted.push(patch),
     t: (key, vars) => (vars === undefined ? key : `${key}:${JSON.stringify(vars)}`),
     console: { warn: (...args) => warnings.push(args) },
-    hostCtx: {
-      remote: {
-        permissionPresets: {
-          catalog: async () =>
-            catalog === null
-              ? { ok: false, error: { code: "unavailable", message: "no catalog" } }
-              : { ok: true, value: catalog },
-        },
-      },
-      sessions: {
-        using: async (sessionId, options, operation) => {
-          commands.push({ sessionId, source: options.source });
-          return operation({
-            binding: { session: { command: (text) => { commands.push({ text }); return command(text); } } },
-          });
-        },
-      },
+  };
+  const remote = {
+    permissionPresets: {
+      catalog: async () =>
+        catalog === null
+          ? { ok: false, error: { code: "unavailable", message: "no catalog" } }
+          : { ok: true, value: catalog },
+    },
+  };
+  const sessions = {
+    using: async (sessionId, options, operation) => {
+      commands.push({ sessionId, source: options.source });
+      return operation({
+        binding: { session: { command: (text) => { commands.push({ text }); return command(text); } } },
+      });
     },
   };
   const api = vm.runInNewContext(
     `(() => {${block}\nreturn { readLocalPermission, writeLocalPermission, applyLocalPermissionToSession, installLocalPermissionDefault, loadPermissionCatalog }; })()`,
     sandbox,
   );
-  return { api, values, emitted, warnings, commands, sandbox };
+  return { api, values, emitted, warnings, commands, sandbox, remote, sessions };
 }
 
 test("an unset choice never touches a new session", async () => {
   const h = harness();
   assert.equal(h.api.readLocalPermission(), null);
-  await h.api.applyLocalPermissionToSession("s1");
+  await h.api.applyLocalPermissionToSession(h.sessions, "s1");
   assert.deepEqual(h.commands, []);
 });
 
 test("the chosen preset is applied with the session's own command", async () => {
   const h = harness({ stored: "workspace-write" });
-  await h.api.applyLocalPermissionToSession("s1");
+  await h.api.applyLocalPermissionToSession(h.sessions, "s1");
   assert.deepEqual(h.commands[0], { sessionId: "s1", source: "mobilePermissionDefault" });
   assert.deepEqual(h.commands[1], { text: "/permission workspace-write" });
 });
 
 test("a missing preset id is skipped rather than sent blank", async () => {
   const h = harness({ stored: "read-only" });
-  await h.api.applyLocalPermissionToSession("");
+  await h.api.applyLocalPermissionToSession(h.sessions, "");
   assert.deepEqual(h.commands, []);
 });
 
@@ -87,12 +85,12 @@ test("follow-the-shared-default clears the stored key", () => {
 
 test("a refused or missing command is reported, not thrown", async () => {
   const refused = harness({ stored: "read-only", command: async () => ({ ok: false, error: { code: "denied", message: "nope" } }) });
-  await refused.api.applyLocalPermissionToSession("s1");
+  await refused.api.applyLocalPermissionToSession(refused.sessions, "s1");
   assert.equal(refused.warnings.length, 1);
   assert.match(refused.emitted.at(-1).permissionError, /applyFailed/);
 
   const unmatched = harness({ stored: "read-only", command: async () => ({ ok: true, value: { matched: false } }) });
-  await unmatched.api.applyLocalPermissionToSession("s1");
+  await unmatched.api.applyLocalPermissionToSession(unmatched.sessions, "s1");
   assert.match(unmatched.emitted.at(-1).permissionError, /applyFailed/);
 });
 
@@ -109,7 +107,7 @@ test("the wrapper keeps the caller's beforeOpen and is restored on dispose", asy
     }
   }
   const workspace = new Workspace();
-  h.api.installLocalPermissionDefault(scope, workspace);
+  h.api.installLocalPermissionDefault(scope, workspace, h.sessions);
   const seen = [];
   const returned = workspace.openWorkspaceSession("w1", (id) => seen.push(id), { agentPreset: "x" });
   assert.equal(returned, "result");
@@ -118,7 +116,7 @@ test("the wrapper keeps the caller's beforeOpen and is restored on dispose", asy
   assert.deepEqual(h.commands.at(-1), { text: "/permission read-only" });
 
   // A second install must not stack another wrapper.
-  h.api.installLocalPermissionDefault(scope, workspace);
+  h.api.installLocalPermissionDefault(scope, workspace, h.sessions);
   workspace.openWorkspaceSession("w1", undefined, undefined);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(h.commands.filter((entry) => entry.text !== undefined).length, 2);
@@ -135,7 +133,7 @@ test("the catalog feeds the card and a failed read is reported", async () => {
       defaultPreset: "read-only",
     },
   });
-  await ok.api.loadPermissionCatalog();
+  await ok.api.loadPermissionCatalog(ok.remote);
   assert.deepEqual(plain(ok.emitted.at(-1)), {
     permissionOptions: [{ value: "read-only", name: "read-only", description: "" }],
     permissionSharedDefault: "read-only",
@@ -143,7 +141,7 @@ test("the catalog feeds the card and a failed read is reported", async () => {
   });
 
   const failed = harness();
-  await failed.api.loadPermissionCatalog();
+  await failed.api.loadPermissionCatalog(failed.remote);
   assert.match(failed.emitted.at(-1).permissionError, /unavailableDetail/);
 });
 

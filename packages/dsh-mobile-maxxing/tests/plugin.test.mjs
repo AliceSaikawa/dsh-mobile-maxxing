@@ -12,6 +12,7 @@ import { runInNewContext } from "node:vm";
 import { apply, buildManifest, decorateIndex, normalizeConfig } from "../index.js";
 import { buildTurnEndPayload } from "../notify/host.js";
 import { COPY, PROBES, copyFor } from "../lib/copy.js";
+import { MANIFEST_FILE, MODE_ATTRIBUTE, MODE_GLOBAL, earlyModeScript } from "../lib/device-mode.js";
 
 /**
  * A context good enough to mount the plugin.
@@ -152,23 +153,41 @@ test("manifest normalizes hostile or partial config", () => {
 	assert.equal(normalizeConfig({ navigationTimeoutMs: -5 }).navigationTimeoutMs, 300);
 });
 
-test("index decoration adds iOS metadata and an edge-to-edge viewport", () => {
+test("a desktop keeps the stock head: no metadata, no viewport rewrite", () => {
 	const html = decorateIndex(INDEX, {});
-	assert.ok(html.includes('name="mobile-web-app-capable"'),
-		"the standard capable meta is used");
-	assert.ok(!html.includes('name="apple-mobile-web-app-capable"'),
-		"the Apple-only capable meta would force the iOS 26 legacy frame");
-	assert.ok(html.includes('rel="apple-touch-icon"'));
-	assert.ok(html.includes('name="format-detection" content="telephone=no"'));
-	assert.ok(html.includes('name="apple-mobile-web-app-status-bar-style" content="black-translucent"'),
-		"the split-plugin status bar default is restored");
-	assert.ok(html.includes("viewport-fit=cover"));
-	assert.ok(html.includes("interactive-widget=resizes-content"));
-	assert.ok(html.includes("width=device-width"));
-	assert.ok(html.includes("initial-scale=1"), "existing viewport parts survive");
-	// A light-only profile can still ask for dark glyphs.
-	const light = decorateIndex(INDEX, { appleStatusBarStyle: "default" });
-	assert.ok(light.includes('name="apple-mobile-web-app-status-bar-style" content="default"'));
+	// Nothing the shared shell adds may show up as markup: the home-screen
+	// metadata belongs to the mobile bootstrap, which adds it in the browser.
+	assert.ok(!/<meta name="mobile-web-app-capable"/.test(html), "no capable meta");
+	assert.ok(!/<meta name="apple-mobile-web-app-capable"/.test(html), "no Apple-only capable meta");
+	assert.ok(!/<link rel="apple-touch-icon"/.test(html), "no touch icon link");
+	assert.ok(!/<meta name="format-detection"/.test(html), "no format detection meta");
+	assert.ok(!/<meta name="apple-mobile-web-app-status-bar-style"/.test(html), "no status bar meta");
+	// The stock viewport is left exactly as it was.
+	assert.ok(html.includes('<meta name="viewport" content="width=device-width, initial-scale=1" />'));
+	assert.ok(!html.includes("viewport-fit=cover, interactive-widget"), "the viewport is not rewritten");
+	assert.ok(!/<meta[^>]*viewport-fit/.test(html));
+	// Strip the marker and this package's two scripts: the document is stock.
+	const stripped = html
+		.replace("<!--dsh-mobile-maxxing-->", "")
+		.replace(/<script>\(function\(\)\{var m="desktop"[\s\S]*?<\/script>/, "")
+		.replace(/<script>globalThis\.__RDSH_PWA_COPY__[\s\S]*?<\/script>/, "");
+	assert.equal(stripped, INDEX, "the served document is the stock document plus inert scripts");
+});
+
+test("the mobile bootstrap carries the metadata the shell no longer writes", () => {
+	const script = earlyModeScript("default");
+	for (const name of ["mobile-web-app-capable", "apple-mobile-web-app-status-bar-style", "format-detection"]) {
+		assert.ok(script.includes(name), `${name} travels in the bootstrap`);
+	}
+	assert.ok(script.includes("apple-touch-icon"));
+	assert.ok(script.includes('"default"'), "the configured status bar style is used");
+	assert.ok(!script.includes("apple-mobile-web-app-capable"), "iOS 26 keeps the legacy frame out");
+	// And the decorated document really carries that script, before the bundle.
+	const withBundle = INDEX.replace("</head>", '<script type="module" src="./assets/index-x.js"></script></head>');
+	const html = decorateIndex(withBundle, { appleStatusBarStyle: "default" });
+	assert.ok(html.includes("apple-mobile-web-app-status-bar-style"));
+	assert.ok(html.indexOf("apple-mobile-web-app-status-bar-style") < html.indexOf('type="module"'),
+		"the bootstrap precedes the deferred app bundle");
 });
 
 test("manifest copy follows the dictionary for the configured language", () => {
@@ -246,7 +265,9 @@ test("index decoration injects the dictionary, the probes and the normalized lan
 	assert.deepEqual(payload.__RDSH_PWA_PROBES__, PROBES, "the full probe dictionary travels");
 	assert.ok(payload.__RDSH_PWA_PROBES__.actions.includes("操作"), "probes stay bilingual");
 	assert.equal(payload.__RDSH_PWA_LANG__, "ja", "the default host language reaches the browser half");
-	assert.ok(!html.includes("</script><script>globalThis.__RDSH_PWA_COPY__"), "no raw tag break");
+	const payloadScript = /<script>(globalThis\.__RDSH_PWA_COPY__[\s\S]*?)<\/script>/.exec(html);
+	assert.ok(payloadScript !== null, "the payload is one script element");
+	assert.ok(!payloadScript[1].includes("<"), "no value can close the payload element early");
 });
 
 test("an explicit en profile makes every host surface English", async () => {
@@ -285,8 +306,96 @@ test("decorateIndex still works when the document has no viewport or head", () =
 	const bare = decorateIndex("<div id=root></div>", {});
 	assert.ok(bare.includes("<!--dsh-mobile-maxxing-->"));
 	assert.ok(bare.includes("</div>"));
+	// A document with no viewport does not get one: the head stays as served.
 	const noViewport = decorateIndex("<head></head><body></body>", {});
-	assert.match(noViewport, /<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">/);
+	assert.ok(!noViewport.includes('name="viewport"'), "no viewport is invented");
+	assert.ok(noViewport.includes("<!--dsh-mobile-maxxing-->"));
+});
+
+test("the index decides the device mode before the module loader runs", () => {
+	// The stock head plus the two things the mode must precede: the client
+	// module loader and the deferred app bundle.
+	const loaded = INDEX.replace("</head>", [
+		'<script>window.__ModuleLoader__={mode:"queue"}</script>',
+		'<script type="module" crossorigin src="./assets/index-x.js"></script>',
+		"</head>",
+	].join(""));
+	const html = decorateIndex(loaded, {});
+	const modeAt = html.indexOf(`globalThis.${MODE_GLOBAL}=`);
+	assert.ok(modeAt > 0, "the mode script is injected");
+	assert.ok(modeAt < html.indexOf("__ModuleLoader__"), "it runs before the module loader");
+	assert.ok(modeAt < html.indexOf('type="module"'), "it runs before the deferred app bundle");
+	assert.equal((html.match(/data-rdsh-device-mode/g) ?? []).length, 1, "the attribute name appears once");
+	assert.equal((html.match(new RegExp(`globalThis\\.${MODE_GLOBAL}=`, "g")) ?? []).length, 1,
+		"the canonical global is published once");
+
+	// Idempotent: a second tap is a byte-for-byte no-op, and a legacy marker
+	// document without the script gets exactly one.
+	assert.equal(decorateIndex(html, {}), html);
+	const legacy = INDEX.replace("<head>", "<head><!--dsh-mobile-maxxing-->");
+	const once = decorateIndex(legacy, {});
+	assert.equal((once.match(new RegExp(`globalThis\\.${MODE_GLOBAL}=`, "g")) ?? []).length, 1);
+	assert.equal(decorateIndex(once, {}), once);
+});
+
+test("a shell that already reads the mode still gets the bootstrap", () => {
+	// How a consumer reads it: `===` / `==` on the global, never an assignment.
+	// Recognising those as "the script is already here" would skip the very
+	// script that defines the value, leaving the reader with undefined.
+	const reader = INDEX.replace("</head>", [
+		'<script type="module">const mobile=globalThis.__RDSH_DEVICE_MODE__==="mobile";'
+			+ 'const loose=globalThis.__RDSH_DEVICE_MODE__=="mobile";'
+			+ "const pick=(value)=>value;"
+			+ "export{mobile,loose,pick};</script>",
+		"</head>",
+	].join(""));
+	const html = decorateIndex(reader, {});
+	const injected = html.match(/<script>\(function\(\)\{var m="desktop"/g) ?? [];
+	assert.equal(injected.length, 1, "the classifier is injected exactly once");
+	const assignmentAt = html.search(/globalThis\.__RDSH_DEVICE_MODE__\s*=(?![=>])/);
+	assert.ok(assignmentAt > 0, "the bootstrap really assigns the global");
+	assert.ok(assignmentAt < html.indexOf("const mobile="),
+		"the assignment precedes the consumer that reads it");
+	assert.ok(html.indexOf("const mobile=") > 0, "the consumer script survives untouched");
+
+	// Idempotent in both directions: the finished document is stable, and a
+	// second tap cannot add a second classifier next to the reader.
+	assert.equal(decorateIndex(html, {}), html);
+	const twice = decorateIndex(decorateIndex(reader, {}), {});
+	assert.equal((twice.match(/<script>\(function\(\)\{var m="desktop"/g) ?? []).length, 1);
+});
+
+test("one shared document answers per browser, so no response varies by user agent", () => {
+	// What the service worker caches and what every client downloads is the
+	// same string; the decision happens in the browser, on that string.
+	const document = decorateIndex(INDEX, {});
+	const script = /<script>([\s\S]*?)<\/script>/.exec(document);
+	assert.ok(script !== null && script[1].includes(`globalThis.${MODE_GLOBAL}=`),
+		"the first script in the document decides the mode");
+	const decide = (navigator) => {
+		const attributes = new Map();
+		const head = [];
+		const sandbox = {
+			navigator,
+			document: {
+				documentElement: { setAttribute: (name, value) => attributes.set(name, String(value)) },
+				head: { appendChild: (node) => head.push(node) },
+				createElement: () => ({ setAttribute(name, value) { this[name] = String(value); } }),
+			},
+		};
+		runInNewContext(script[1], sandbox, { filename: "early-mode.js" });
+		return { attribute: attributes.get(MODE_ATTRIBUTE), global: sandbox[MODE_GLOBAL], head: head.length };
+	};
+	const phone = decide({ userAgent: "Mozilla/5.0 (Linux; Android 14; Pixel 8) Mobile Safari/537.36", platform: "Linux armv8l", maxTouchPoints: 5 });
+	const ipad = decide({ userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Version/26.0 Safari/605.1.15", platform: "MacIntel", maxTouchPoints: 5 });
+	const laptop = decide({ userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36", platform: "Win32", maxTouchPoints: 10 });
+	assert.deepEqual([phone.attribute, phone.global, phone.head], ["mobile", "mobile", 5],
+		"a phone gets the attribute, the home-screen nodes and its manifest link");
+	assert.deepEqual([ipad.attribute, ipad.global, ipad.head], ["mobile", "mobile", 5]);
+	assert.deepEqual([laptop.attribute, laptop.global, laptop.head], [undefined, "desktop", 0],
+		"a desktop gets the global and no document write");
+	// Nothing in the served document depends on which one asked.
+	assert.equal(document, decorateIndex(INDEX, {}));
 });
 
 test("an old marker without the payload gets copy, probes and lang exactly once", () => {
@@ -337,8 +446,11 @@ test("normalizeConfig rejects array, null and hostile language values", () => {
 	}
 	const english = decorateIndex(INDEX, { lang: "en" });
 	assert.equal(injectedPayload(english).__RDSH_PWA_LANG__, "en");
-	const script = /<script>([\s\S]*?)<\/script>/.exec(english);
-	assert.ok(script !== null);
+	// The mode script is the first script in the document, so the payload is
+	// addressed by its own assignment rather than by being script #1.
+	const script = /<script>(globalThis\.__RDSH_PWA_COPY__[\s\S]*?)<\/script>/.exec(english);
+	assert.ok(script !== null, "the payload script exists");
+	assert.ok(!script[1].includes("<"), "the payload code cannot close its own element");
 	assert.doesNotThrow(() => new Function(script[1]), "the injected payload is valid JavaScript");
 });
 
@@ -347,19 +459,71 @@ test("hostile config values cannot break out of the injected markup", () => {
 		appleStatusBarStyle: '"><script>alert(1)</script>',
 	});
 	assert.ok(!html.includes("alert(1)"), "the rejected value never reaches the document");
-	assert.ok(html.includes('name="apple-mobile-web-app-status-bar-style" content="black-translucent"'),
-		"the default is used instead");
+	assert.ok(html.includes('"apple-mobile-web-app-status-bar-style","black-translucent"')
+		|| html.includes('"black-translucent"'), "the default is carried instead");
+	// A hostile value that somehow reached the bootstrap would still be a JSON
+	// string, and the element stays closed exactly once.
+	const hostile = earlyModeScript('"></script><script>alert(1)');
+	assert.equal((hostile.match(/<\/script/gi) ?? []).length, 1, "one closing tag");
+	assert.ok(!hostile.includes("alert(1)</script>"), "the value cannot close the element");
+});
+
+test("the merged plugin leaves the renderer alone", async () => {
+	// The renderer patch rewrote the asset URLs of the shared document, so it
+	// is not mounted here any more. A source check is what pins that: whether
+	// the patch would find an installed dist is environment-dependent, so the
+	// mounted-route count alone cannot catch a re-mount.
+	const source = await readFile(new URL("../index.js", import.meta.url), "utf8");
+	assert.doesNotMatch(source, /import\s*\{[^}]*applyMarkdownCjk[^}]*\}/,
+		"the merged host half must not import the patch");
+	assert.doesNotMatch(source, /mountPart\("rdsh-markdown-cjk"/,
+		"the merged host half must not mount the patch");
+	// The module itself keeps its API for the independent rdsh-markdown-cjk.
+	const module = await readFile(new URL("../lib/markdown-cjk.js", import.meta.url), "utf8");
+	assert.match(module, /export function apply\(/, "the standalone module stays usable");
+});
+
+test("the mobile bootstrap links the plugin manifest before the stock one", () => {
+	// The stock document links its own manifest; the decorated copy must put
+	// the plugin's link ahead of it without removing the stock one.
+	const stock = INDEX.replace("</head>", '<link rel="manifest" href="./manifest.webmanifest" /></head>');
+	const html = decorateIndex(stock, {});
+	const bootstrapAt = html.indexOf(`globalThis.${MODE_GLOBAL}=`);
+	const stockLinkAt = html.indexOf('rel="manifest"');
+	assert.ok(bootstrapAt > 0 && stockLinkAt > 0);
+	assert.ok(bootstrapAt < stockLinkAt, "the bootstrap is parsed before the stock link");
+	// The stock document keeps its own link; the bootstrap prepends a link of
+	// its own at head start, so the plugin manifest is first in tree order.
+	assert.ok(html.includes(MANIFEST_FILE), "the dedicated filename travels in the bootstrap");
+	const head = html.slice(0, html.indexOf("</head>"));
+	assert.equal((head.match(/<link[^>]*rel="manifest"/g) ?? []).length, 1,
+		"the served markup still holds exactly the stock link");
+
+	// Root-level placement is what keeps an installed app on the site root.
+	const base = "https://example.test/";
+	for (const file of ["manifest.webmanifest", MANIFEST_FILE]) {
+		const resolved = new URL("./", new URL(file, base));
+		assert.equal(resolved.href, base, `${file} resolves id/start_url/scope to the root`);
+	}
+	const manifest = buildManifest({});
+	assert.equal(manifest.id, "./");
+	assert.equal(manifest.start_url, "./");
+	assert.equal(manifest.scope, "./");
 });
 
 test("routes serve the manifest, the worker and the icons", async () => {
 	const { routes, taps, listeners } = mount({});
-	assert.ok(routes.has("/manifest.webmanifest"));
+	assert.ok(routes.has(`/${MANIFEST_FILE}`), "the plugin manifest has its own path");
+	assert.equal(routes.has("/manifest.webmanifest"), false,
+		"the stock manifest path is not overridden: a desktop install reads the stock file");
 	assert.ok(routes.has("/sw.js"));
 	assert.ok(routes.has("/pwa/icon-192.png"));
-	// One tap adds the PWA tags; the CJK half adds a second only when it can
-	// resolve the installed DSH frontend, so the count is environment-dependent.
-	// Assert the content instead of the count.
+	// The merged plugin mounts the PWA/mode tap and the mobile-ux config tap,
+	// and nothing that rewrites the renderer: the CJK half is the independent
+	// plugin's job now. Assert the content instead of the exact count.
 	assert.ok(taps.length >= 1, "at least the PWA tap");
+	assert.equal([...routes.keys()].some((path) => path.startsWith("/markdown-cjk/")), false,
+		"the merged plugin leaves the renderer alone");
 	const decorated = taps.reduce((html, tap) => tap(html), INDEX);
 	assert.equal(decorated.split("<!--dsh-mobile-maxxing-->").length - 1, 1, "one PWA block");
 	assert.equal(injectedPayload(decorated).__RDSH_PWA_LANG__, "ja",
@@ -381,7 +545,7 @@ test("routes serve the manifest, the worker and the icons", async () => {
 		assert.ok(routes.has(path), `missing ${path}`);
 	}
 
-	const manifest = await call(routes.get("/manifest.webmanifest"));
+	const manifest = await call(routes.get(`/${MANIFEST_FILE}`));
 	assert.equal(manifest.status, 200);
 	assert.match(manifest.headers["content-type"], /application\/manifest\+json/);
 	assert.equal(JSON.parse(manifest.text).display, "standalone");
@@ -435,7 +599,7 @@ test("the worker follows the ja default but accepts the en dictionary", async ()
 });
 
 test("the worker treats the markdown-cjk entry chunks as cacheable", async () => {
-	// The host rewrites the document to load /markdown-cjk/v1/*.js instead of
+	// The independent CJK plugin rewrites the document to load /markdown-cjk/v1/*.js instead of
 	// the stock assets. If the worker does not cache that path, an offline
 	// launch serves the shell but the entry scripts fail and the plugin never
 	// boots. Evaluate sw.js in a stub scope so this is the worker's own
@@ -481,7 +645,7 @@ test("notification copy defaults to the package language and keeps an explicit o
 
 test("routes reject methods they do not own", async () => {
 	const { routes } = mount({});
-	for (const path of ["/manifest.webmanifest", "/sw.js", "/pwa/icon-192.png"]) {
+	for (const path of [`/${MANIFEST_FILE}`, "/sw.js", "/pwa/icon-192.png"]) {
 		const response = await call(routes.get(path), "POST");
 		assert.equal(response.status, 405);
 		assert.equal(response.headers.allow, "GET, HEAD");
@@ -490,7 +654,7 @@ test("routes reject methods they do not own", async () => {
 
 test("HEAD returns headers without a body", async () => {
 	const { routes } = mount({});
-	const response = await call(routes.get("/manifest.webmanifest"), "HEAD");
+	const response = await call(routes.get(`/${MANIFEST_FILE}`), "HEAD");
 	assert.equal(response.status, 200);
 	assert.equal(response.body.length, 0);
 	assert.ok(Number(response.headers["content-length"]) > 10);

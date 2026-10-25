@@ -31,7 +31,13 @@ const MAX_STATIC_ENTRIES = 250;
 
 const SCOPE = new URL(self.registration.scope);
 const SHELL_URL = new URL("./", SCOPE).href;
-const MANIFEST_URL = new URL("manifest.webmanifest", SCOPE).href;
+/**
+ * The plugin's own manifest, linked by the mobile bootstrap only. The stock
+ * `manifest.webmanifest` is a different file now: it stays the stock manifest
+ * for desktop installs, so both are cacheable and only ours is protected.
+ */
+const MANIFEST_FILE = "dsh-mobile-maxxing.webmanifest";
+const MANIFEST_URL = new URL(MANIFEST_FILE, SCOPE).href;
 
 /**
  * Paths, relative to the scope, whose responses are safe to serve from cache.
@@ -43,7 +49,13 @@ const MANIFEST_URL = new URL("manifest.webmanifest", SCOPE).href;
  * while offline.
  */
 const STATIC_PREFIXES = ["assets/", "plugins/", "pwa/", "markdown-cjk/"];
-const STATIC_FILES = new Set(["favicon.svg", "favicon-dark.svg", "manifest.webmanifest"]);
+const STATIC_FILES = new Set([
+	"favicon.svg",
+	"favicon-dark.svg",
+	// The stock manifest stays cacheable: a desktop install reads it.
+	"manifest.webmanifest",
+	MANIFEST_FILE,
+]);
 
 /** Never intercept these: the UI reads live state, terminal and HMR need sockets. */
 const BYPASS_SEGMENTS = ["/api", "/hmr", "/terminal", "/__"];

@@ -51,7 +51,8 @@ dsh plugin --profile web add link:/path/to/dsh-mobile-maxxing
 | インストール可能な PWA | ホーム画面に追加、オフライン起動、更新のお知らせ |
 | 通知 | アプリを見ている間はアプリ内バナー、それ以外は Web Push |
 | 通知音 | 合成した5種類。音量も設定可。音声ファイルは同梱しません |
-| スマホ幅のレイアウト | サイドバーがドロワーに、設定は1タップ、コードは折り返し |
+| スマホ/タブレットのレイアウト | サイドバーがドロワーに、設定は1タップ、コードは折り返し。幅ではなく端末で判定 |
+| コードレビュー | 折り返しを既定でON。右端の操作は「…」に集約し、PC で開く系は非表示 |
 | テーマ（ライト／ダーク） | 上流のトークンに追従。PC と別に「この端末だけ」の配色を選べる |
 | CJK 表示の修正 | `**https://x**（メモ）` の太字とリンクが壊れない |
 | セッションIDのコピー | セッションメニューに1行追加 |
@@ -66,7 +67,7 @@ dsh plugin --profile web add link:/path/to/dsh-mobile-maxxing
 ## 開発
 
 ```sh
-npm test     # ブラウザ不要のテスト114件
+npm test     # Node.js のテスト + 任意の Chrome CSS fixture 3件
 ```
 
 ビルド工程はありません。`client.js` はブラウザにそのまま配信され、`index.js` は Node
@@ -76,8 +77,8 @@ npm test     # ブラウザ不要のテスト114件
 
 # English
 
-A single integrated plugin that makes the DSH (DeepSeek Harness) Web UI pleasant on a phone:
-installable PWA, notifications, phone-width layout, a CJK rendering fix and a session-id copy
+A single integrated plugin that makes the DSH (DeepSeek Harness) Web UI pleasant on phones and tablets:
+installable PWA, notifications, a phone/tablet layout chosen by device mode, a CJK rendering fix and a session-id copy
 row. **It installs on a stock DSH** — no other `rdsh-*` plugin and no external npm package.
 
 ## Install
@@ -123,7 +124,8 @@ dsh plugin --profile web add link:/path/to/dsh-mobile-maxxing
 | Installable PWA | Add to home screen, offline launch, update notice |
 | Notifications | In-app banner while the app is on screen, Web Push otherwise |
 | Notification sounds | Five synthesised presets with a volume control; no audio files ship |
-| Phone layout | Sidebar becomes a drawer, settings open in one tap, code wraps |
+| Mobile layout | Sidebar becomes a drawer, settings open in one tap, code wraps |
+| Code review | Wrap is on by default; header actions collapse into a "…" menu; native open-in-app buttons are hidden |
 | Light / dark theme | Follows the host tokens; a per-device palette can differ from the PC |
 | CJK rendering | `**https://x**（memo）` keeps its bold and its link |
 | Session id copy | One row in the session row menu |
@@ -136,7 +138,7 @@ dsh plugin --profile web add link:/path/to/dsh-mobile-maxxing
 ## Development
 
 ```sh
-npm test     # 114 tests, no browser required
+npm test     # Node.js tests + optional Chrome CSS fixture tests (3)
 ```
 
 There is no build step: `client.js` is served verbatim and `index.js` uses only Node

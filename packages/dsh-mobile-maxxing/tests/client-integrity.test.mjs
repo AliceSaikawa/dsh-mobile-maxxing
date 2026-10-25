@@ -188,16 +188,22 @@ function helperBody(name) {
 	return CLIENT.slice(start, close === -1 ? undefined : close);
 }
 
-test("the context meter reads the projection instead of opening the popover", () => {
+test("the context meter reads the public Session list snapshot", () => {
 	// #13: a real click opened the popover for about 80ms on every update, and
 	// the rule that hid it only lived inside the phone media query, so a
 	// settings modal flickered on desktop too.
 	assert.equal(/data-rdsh-context-probe/.test(CLIENT), false, "the probe attribute and its rule are gone");
+	assert.equal(/sessions\.projectionValues/.test(CLIENT), false, "projectionValues() is a private manager method");
 	const meter = helperBody("contextUsageText");
 	assert.equal(/\.click\(/.test(meter), false, "reading the meter must not click the button");
-	assert.match(meter, /projectionValues\(/, "the figures come from the Session projection");
-	assert.match(meter, /contextPressure/);
-	assert.match(meter, /pressureTokens/, "the same numerator the upstream panel uses");
+	assert.match(meter, /contextPressureOf\(sessions, sessionId\)/, "the meter goes through the projection reader");
+	assert.match(meter, /projectedTokens \?\? pressure\.pressureTokens/, "the same numerator the upstream panel uses");
+	// #36: `ClientSessions` exposes finished projections on its list snapshot,
+	// not a projectionValues() method.
+	const read = helperBody("contextPressureOf");
+	assert.match(read, /sessions\.list\.getSnapshot\(\)/, "the figures come from the public list snapshot");
+	assert.match(read, /byId\?\.\[sessionId\]\?\.projectionValues\?\.contextPressure/);
+	assert.match(read, /projectionsBySession\?\.[^;]*values\?\.contextPressure/, "unhinted rows read the same value face");
 });
 
 test("the transcript keeps its column tag and the reference 349px measure", () => {
@@ -248,11 +254,23 @@ test("the device theme never writes the shared preference", () => {
 // has to stay inside the phone query or a desktop session looks like a phone.
 // ---------------------------------------------------------------------------
 
-/** Both `const CSS = \`…\`` blocks, with the query interpolated in. */
+/** One `const NAME = \`…\`;` template, with the query interpolated in. */
+function cssTemplate(name) {
+	const tick = String.fromCharCode(96);
+	const match = CLIENT.match(new RegExp(`const ${name} = ${tick}([\\s\\S]*?)${tick};\\n`));
+	assert.ok(match, `${name} exists`);
+	return match[1].replace(/\$\{NARROW_QUERY\}/g, "(max-width: 767px)");
+}
+
+/**
+ * Both stylesheets as the browser receives them: the PWA shell, and the phone
+ * half wrapped mechanically by `phoneStyles()`.
+ */
 function cssBlocks() {
-	const blocks = [...CLIENT.matchAll(/const CSS = `([\s\S]*?)`;\n/g)].map((match) => match[1]);
-	assert.ok(blocks.length >= 2, "expected the shell and the layout stylesheets");
-	return blocks.map((css) => css.replace(/\$\{NARROW_QUERY\}/g, "(max-width: 767px)"));
+	const shell = cssTemplate("CSS");
+	const device = cssTemplate("CSS_DEVICE");
+	const phone = cssTemplate("CSS_PHONE");
+	return [shell, device, phone];
 }
 
 /**
@@ -296,33 +314,19 @@ function functionHead(name, length = 900) {
 	return CLIENT.slice(at, at + length);
 }
 
-test("upstream hooks are styled only inside the phone query", () => {
+test("upstream hooks are styled only in the mobile stylesheet", () => {
 	// The report behind this test: on a desktop, running sessions showed the
 	// phone ring, the open row was painted with a hard-coded #232324, image
-	// previews were darkened and cropped. Those rules used to sit outside the
-	// media block. The safe-area rules are the only exception: they key off
-	// `env()` values, which are zero on a desktop. The hide-list rules are the
-	// second: their attribute is only written at phone width, so the attribute
-	// itself is the gate. The session colour frame is the third: the reference
-	// build paints it on desktop too.
-	const allow = [
-		/^html\[data-rdsh-safe-(top|bottom|left|right)\]/,
-		/^html\[data-rdsh-native-gap\]/,
-		/^html\[data-dsh-mobile-maxxing=/,
-		/^html\[data-rdsh-hide-settings\]/,
-		/^\[data-rdsh-session-frame\]$/,
-	];
-	const phone = (at) => at.some((head) => /max-width:\s*767px/.test(head));
-	const leaked = [];
-	for (const css of cssBlocks()) {
-		for (const rule of cssRules(css)) {
-			if (!/\[data-rdsh-/.test(rule.head)) continue;
-			if (phone(rule.at)) continue;
-			if (allow.some((pattern) => pattern.test(rule.head))) continue;
-			leaked.push(rule.head);
-		}
-	}
-	assert.deepEqual(leaked, [], "styled outside the phone query");
+	// previews were darkened and cropped. The boundary is now the bootstrapped
+	// mode: the mobile sheet is a separate <style> that a desktop never gets.
+	const device = cssTemplate("CSS_DEVICE");
+	const leaked = cssRules(device)
+		.filter((rule) => /\[data-rdsh-/.test(rule.head))
+		.map((rule) => rule.head);
+	assert.deepEqual(leaked, [], "an upstream hook leaked into the always-on stylesheet");
+	const phone = cssTemplate("CSS_PHONE");
+	assert.match(phone, /\[data-rdsh-session-frame\]/, "the session frame rule is not in the mobile sheet");
+	assert.doesNotMatch(phone, /@media \(max-width: 767px\)/, "the mobile sheet regained a max-width wrapper");
 	// The drawer header toggle: every pointer state is label-primary on a
 	// transparent background, no Android tap flash, and no delayed tooltip.
 	assert.match(
@@ -334,20 +338,18 @@ test("upstream hooks are styled only inside the phone query", () => {
 	assert.match(CLIENT, /html:has\(\[data-rdsh-sidebar-toggle\]:is\(:hover, :focus\)\) \[role="tooltip"\] \{ display: none !important; \}/, "the toggle tooltip is not suppressed");
 });
 
-test("the phone query is the legacy width-only contract", () => {
-	// The reference plugin treats everything at or below 767px as a phone,
-	// in either orientation. A landscape 844px phone stays in the desktop
-	// layout, because that is what the reference build does.
+test("NARROW_QUERY is geometry only and has one definition", () => {
+	// Width is still measured for the Settings readout and for the mobile
+	// layout's own geometry, but it no longer selects the mode.
 	const definitions = [...CLIENT.matchAll(/const NARROW_QUERY = "([^"]+)";/g)].map((match) => match[1]);
-	assert.equal(definitions.length, 2, "one definition per half");
-	for (const definition of definitions) {
-		assert.equal(definition, "(max-width: 767px)", "the query gained an orientation or pointer clause");
-	}
+	assert.equal(definitions.length, 1, "the width query is defined once, at module scope");
+	assert.equal(definitions[0], "(max-width: 767px)", "the geometry query gained an orientation or pointer clause");
 	assert.equal(
 		(CLIENT.match(/@media \(max-width: 767px\)/g) ?? []).length,
 		0,
-		"the stylesheets must interpolate NARROW_QUERY instead of repeating it",
+		"a hand-written width feature query came back",
 	);
+	assert.match(CLIENT, /function phone\(\) \{\s*return DEVICE_MODE === "mobile";/, "phone() is not the bootstrapped mode");
 });
 
 test("Enter follows the phone width, as in the reference build", () => {
@@ -361,35 +363,47 @@ test("Enter follows the phone width, as in the reference build", () => {
 });
 
 test("panel-wide decorations stay off the desktop", () => {
-	// Both of these reach across upstream UI: the stats dock opens the context
-	// panel to read a number, and the lightbox injects a crop button.
-	assert.match(functionHead("decorateStatsDock", 500), /if \(!narrow\(\)\) return;/, "decorateStatsDock is not phone-gated");
-	assert.match(functionHead("decorateLightbox", 400), /if \(!narrow\(\)\) return;/, "decorateLightbox is not phone-gated");
+	// Both of these reach across upstream UI: the stats dock reads a number
+	// from upstream buttons and the lightbox injects a crop button. A wide
+	// window must also undo what a narrower pass left behind.
+	const stats = functionHead("decorateStatsDock", 700);
+	assert.match(stats, /if \(!phone\(\)\) \{/, "decorateStatsDock is not mode-gated");
+	assert.match(stats, /clearOwnedAttribute\("data-rdsh-stat-text"\)/, "a desktop pass leaves the stats hook");
+	const lightbox = functionHead("decorateLightbox", 700);
+	assert.match(lightbox, /if \(!phone\(\)\) \{/, "decorateLightbox is not mode-gated");
+	assert.match(lightbox, /clearLightboxHooks\(\)/, "a desktop pass leaves the crop button");
 });
 
-test("leaving the phone layout removes its hooks, while desktop frames stay", () => {
-	// Attributes survive a resize on their own: the stylesheet stops applying
-	// but the DOM keeps claiming a row is running, and the header title keeps
-	// a hook whose sheen no longer exists.
+test("dispose removes the mobile hooks, including the colour frame", () => {
+	// The mobile surface is fixed at boot and removed by dispose, never by a
+	// width crossing. Attributes are still stripped with the rest so a live
+	// reload starts clean, and the frame CSS lives in the mobile sheet.
 	assert.match(CLIENT, /function clearSessionRowHooks\(\)/, "no row cleanup");
 	assert.match(CLIENT, /function clearPhoneHooks\(\)/, "no header/typing cleanup");
-	assert.match(
-		CLIENT,
-		/if \(!media\.matches\) \{\s*\n\s*resetGestures\(\);\s*\n\s*clearPhoneHooks\(\);/,
-		"a resize to desktop keeps the phone hooks",
-	);
+	const width = CLIENT.slice(CLIENT.indexOf("const applyWidthBoundary = () => {"), CLIENT.indexOf("const onMedia =", CLIENT.indexOf("const applyWidthBoundary = () => {")));
+	assert.match(width, /emit\(\{ narrow: narrow\(\) \}\);/, "syncWidth no longer updates the geometry readout");
+	assert.match(width, /if \(!phone\(\)\) return;/, "syncWidth still runs mobile effects on a desktop");
+	assert.doesNotMatch(width, /clearPhoneHooks|installDrawer|applyDeviceTheme|enforceNoZoomViewport/, "a width crossing still changes the mobile surface");
 	assert.match(CLIENT, /"data-rdsh-sidebar-toggle"/, "the sidebar toggle tag is not cleaned up");
 	const toggle = functionHead("decorateSidebarToggle", 1700);
-	assert.match(toggle, /if \(!narrow\(\)\)/, "the sidebar toggle is tagged on a desktop");
+	assert.match(toggle, /if \(!phone\(\)\)/, "the sidebar toggle is tagged on a desktop");
 	assert.match(toggle, /\[data-slot="sidebar"\]/, "the sidebar toggle search is not bounded by its slot");
 	assert.match(toggle, /button\[aria-label="Open sidebar"\], button\[aria-label="Collapse sidebar"\]/, "the toggle action label is not used");
-	// The reference decorates rows at every width, so the desktop colour frame
-	// exists as a hook and is painted by a rule outside the phone query.
-	assert.match(CLIENT, /^\s+decorateSessionRows\(\);\s*$/m, "session rows are no longer decorated on desktop");
-	assert.match(CLIENT, /^\[data-rdsh-session-frame\] \{\s*\n\s*box-shadow: inset 0 0 0 2px var\(--rdsh-session-frame\) !important;/m, "the frame hook has no desktop style");
+	// Session rows are still visited on every pass, but the function only
+	// writes the mobile hooks (frame included) in mobile mode.
+	assert.match(CLIENT, /^\s+decorateSessionRows\(\);\s*$/m, "session rows are no longer visited on desktop");
+	assert.match(
+		CLIENT,
+		/function decorateSessionRows\(\) \{\s*\n\s*\/\/[^\n]*\n(?:\s*\/\/[^\n]*\n)*\s*if \(!phone\(\)\) \{\s*\n\s*if \(rowHooksActive\) clearSessionRowHooks\(\);\s*\n\s*return;\s*\n\s*\}/,
+		"the desktop pass does not clear the mobile row hooks",
+	);
+	const phoneCss = cssTemplate("CSS_PHONE");
+	assert.match(phoneCss, /\[data-rdsh-session-frame\]/, "the session frame rule is not in the mobile stylesheet");
+	assert.doesNotMatch(phoneCss, /@media \(max-width: 767px\)/, "the frame is behind a width wrapper again");
+	assert.match(CLIENT, /"data-rdsh-session-frame",/, "the frame hook is not in the cleanup list");
 });
 
-test("the live-speed poller only runs on a phone", () => {
+test("the live-speed poller only runs in mobile mode", () => {
 	const body = functionHead("LiveSpeed", 2400);
 	assert.match(body, /if \(!sessionId \|\| !phone\) \{/, "the poller runs on a desktop");
 	assert.match(body, /if \(!phone \|\| speed === null\) return null;/, "the speed label renders on a desktop");
@@ -646,19 +660,28 @@ test("a right-panel swipe closes it even from the left edge", () => {
 	assert.match(body, /target\.closest\("input, textarea, \[contenteditable=true\], \.xterm/, "the input/xterm exclusion is gone");
 });
 
-test("the reference viewport zoom lock is restored", () => {
-	assert.match(
-		CLIENT,
-		/const content = "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover";/,
-		"the fixed viewport string is gone",
-	);
-	assert.match(CLIENT, /if \(meta\.getAttribute\("content"\) !== content\) meta\.setAttribute\("content", content\);/, "the viewport is not applied");
+test("the viewport zoom lock is mobile-only and restorable", () => {
+	// The lock belongs to the mobile surface; a desktop keeps its own viewport.
+	// The value this page shipped with is captured before the first override
+	// and put back on dispose.
+	const body = functionHead("enforceNoZoomViewport", 1600);
+	assert.match(body, /if \(!phone\(\)\) \{\s*\n\s*releaseViewportLock\(\);/, "the lock is applied on a desktop");
+	assert.match(body, /const content = viewportContent\(meta\.getAttribute\("content"\), \{/, "the viewport is not merged over the shipped value");
+	// The mobile value locks zoom, covers the notch and keeps the keyboard layout
+	// in step; merging means no key can be emitted twice.
+	assert.match(body, /"maximum-scale": "maximum-scale=1"/, "the zoom lock is gone");
+	assert.match(body, /"interactive-widget": "interactive-widget=resizes-content"/, "the keyboard layout token is gone");
+	assert.match(CLIENT, /function viewportContent\(current, wanted\)/, "the viewport merger is gone");
+	assert.match(body, /if \(meta\.getAttribute\("content"\) !== content\) meta\.setAttribute\("content", content\);/, "the viewport is not applied");
+	assert.match(CLIENT, /viewportBaseline = \{ content: viewportMetaOwned \? null : meta\.getAttribute\("content"\) \};/, "the original content is not captured");
+	assert.match(CLIENT, /meta\.setAttribute\("content", baseline\.content\)/, "the original content is not restored");
+	assert.match(CLIENT, /if \(viewportMetaOwned\) meta\.remove\(\);/, "a meta this module created is not removed");
 	assert.match(CLIENT, /input, textarea, \[contenteditable="true"\] \{\s*\n\s*font-size: 16px !important;/, "the 16px focus guard is gone");
 });
 
 test("ensureRightPanelFits is restored and cannot loop or click a ghost", () => {
 	const ensure = helperBody("ensureRightPanelFits");
-	assert.match(ensure, /if \(!narrow\(\)\)/, "the promotion is not phone-scoped");
+	assert.match(ensure, /if \(!phone\(\)\)/, "the promotion is not mode-scoped");
 	assert.match(ensure, /visibleFullscreenButton\(\)/, "the button is not resolved through the visibility guard");
 	assert.match(ensure, /rightPanelFitPending/, "there is no one-shot guard");
 	assert.match(ensure, /data-rdsh-auto-fired/, "the same button can be clicked repeatedly");
@@ -747,47 +770,59 @@ test("shipped code carries no personal provider or device identifiers", () => {
 	assert.deepEqual(offenders, [], "a shipped file contains a personal provider or device identifier");
 });
 
-test("the question card viewport sizing is phone-only", () => {
-	// Desktop must keep the upstream card width: the new 100vw - 32px rule is
-	// inside the narrow media block, so no >=768px rule changes.
-	const rules = cssBlocks().flatMap((css) => cssRules(css));
+test("the question card viewport sizing is mobile-only", () => {
+	// Desktop must keep the upstream card width: the 100vw - 32px rule lives
+	// in the mobile stylesheet, which a desktop never receives.
+	const rules = cssRules(cssTemplate("CSS_PHONE"));
 	const frame = rules.find((rule) => rule.head === "[data-rdsh-question-frame]");
 	const card = rules.find((rule) => rule.head === "[data-rdsh-question-frame] > [data-rdsh-question-card]");
-	assert.ok(frame, "the question frame rule is missing");
-	assert.ok(card, "the question card rule is missing");
-	for (const rule of [frame, card]) {
-		assert.ok(rule.at.some((head) => /max-width:\s*767px/.test(head)), `${rule.head} is outside the phone query`);
-	}
+	assert.ok(frame, "the question frame rule is missing from the mobile sheet");
+	assert.ok(card, "the question card rule is missing from the mobile sheet");
 });
 
-test("the queue dock meets the composer and the preview never covers it", () => {
-	// Phone-only: the dock is inset 24px per side from the composer card, sits
-	// flush on its top edge (the gap is cancelled from the live row-gap), and
-	// keeps square bottom corners. The preview is fixed and height capped so a
-	// long queued text scrolls above the composer.
-	assert.match(CLIENT, /\[data-rdsh-queue-dock\] \{[^}]*width: calc\(100% - 32px\) !important;[^}]*margin-bottom: 0;/, "the queue dock is not attached to the composer");
-	assert.match(CLIENT, /dock\.style\.marginBottom = \(-\(gapPx \+ 1\)\) \+ "px";/, "the queue dock does not cancel the composer gap");
-	assert.match(CLIENT, /\[data-rdsh-queue-panel\] \{[^}]*border-bottom-left-radius: 0 !important;[^}]*border-bottom-right-radius: 0 !important;/, "the queue panel keeps floating bottom corners");
-	assert.match(CLIENT, /\.rdsh-mux-queue-preview \{[^}]*position: fixed;[^}]*max-height: min\(50vh, 360px\);[^}]*overflow-y: auto;/, "the queued text preview is not a capped overlay");
-	assert.match(CLIENT, /\.rdsh-mux-queue-menu \{[^}]*position: fixed;/, "the long-press menu is not an overlay");
-	const rules = cssBlocks().flatMap((css) => cssRules(css));
-	for (const head of ["[data-rdsh-queue-dock]", "[data-rdsh-queue-panel]", ".rdsh-mux-queue-preview", ".rdsh-mux-queue-menu"]) {
-		const rule = rules.find((entry) => entry.head === head);
-		assert.ok(rule, `${head} is missing`);
-		assert.ok(rule.at.some((media) => /max-width:\s*767px/.test(media)), `${head} is outside the phone query`);
+test("the queue joins only at its lower corners and leaves the composer unchanged", () => {
+	assert.match(CLIENT, /function decorateQueueJoin\(panel, dock\)/);
+	assert.match(CLIENT, /data-rdsh-queue-join/);
+	assert.match(CLIENT, /panel\.style\.removeProperty\("clip-path"\)/);
+	assert.match(CLIENT, /queueRect\.bottom - cardRect\.top/);
+	assert.match(CLIENT, /borderTopLeftRadius/);
+	assert.match(CLIENT, /borderTopRightRadius/);
+	assert.match(CLIENT, /addCorner\("left"/);
+	assert.match(CLIENT, /addCorner\("right"/);
+	assert.match(CLIENT, /decorateQueueJoin\(panel, dock\);/);
+	// Main #37's measured seam is still what attaches the queue to the card.
+	assert.match(CLIENT, /dock\.style\.marginBottom = \(-\(gapPx \+ 1\)\) \+ "px";/, "the measured seam was dropped");
+	assert.match(CLIENT, /\[data-rdsh-queue-dock\] \{[^}]*z-index: 1 !important;/, "the join layer must paint above the composer");
+	assert.match(CLIENT, /\[data-rdsh-queue-dock\] \{[^}]*overflow: visible !important;/, "the join cannot paint outside the dock");
+	assert.match(CLIENT, /\[data-rdsh-queue-panel\] \{[^}]*border-bottom-left-radius: 0 !important;[^}]*border-bottom-right-radius: 0 !important;/);
+	assert.match(CLIENT, /\.rdsh-mux-queue-preview \{[^}]*position: fixed;[^}]*max-height: min\(50vh, 360px\);[^}]*overflow-y: auto;/);
+	assert.match(CLIENT, /\.rdsh-mux-queue-menu \{[^}]*position: fixed;/);
+	const joinStart = CLIENT.indexOf("function decorateQueueJoin(panel, dock) {");
+	const joinEnd = CLIENT.indexOf("\n\n    function decorateQueueDock()", joinStart);
+	assert.ok(joinStart >= 0 && joinEnd > joinStart, "queue join helper is missing");
+	const joinSource = CLIENT.slice(joinStart, joinEnd);
+	assert.match(joinSource, /if \(!phone\(\)/, "the queue join is not mode-gated");
+	assert.match(joinSource, /dock\.append\(bridge\)/, "the bridge is never attached");
+	assert.doesNotMatch(joinSource, /card\.style\.|card\.setAttribute\(/, "the composer must not be mutated");
+	const clearStart = CLIENT.indexOf("function clearQueueDockHooks()");
+	const clearEnd = CLIENT.indexOf("\n\n", clearStart);
+	assert.match(CLIENT.slice(clearStart, clearEnd), /data-rdsh-queue-join/, "teardown keeps the bridge");
+	// The composer's own top corners stay untouched; #37's corner-zeroing rule
+	// contradicted the PR47 contract and was removed in the integration.
+	assert.doesNotMatch(CLIENT, /\[data-rdsh-queue-dock\]:has\(li\)[^{]*\{[^}]*border-top-left-radius:\s*0/, "the composer radius is still zeroed");
+	const rules = cssRules(cssTemplate("CSS_PHONE"));
+	for (const head of ["[data-rdsh-queue-dock]", "[data-rdsh-queue-panel]", "[data-rdsh-queue-join]", ".rdsh-mux-queue-preview", ".rdsh-mux-queue-menu"]) {
+		assert.ok(rules.some((entry) => entry.head === head), `${head} is missing from the mobile sheet`);
 	}
 });
-
 test("the workspace picker caps its list and keeps Add workspace outside it", () => {
 	assert.match(CLIENT, /\[data-rdsh-workspace-menu\] \{[^}]*max-height: min\(70vh, 520px\) !important;/, "the workspace menu is not height-bounded");
 	assert.match(CLIENT, /\[data-rdsh-workspace-menu\] \[data-rdsh-workspace-viewport\] \{[^}]*max-height: min\(40vh, 320px\) !important;[^}]*overflow-y: auto !important;/, "the workspace list is not the scroll viewport");
 	assert.match(CLIENT, /\[data-rdsh-workspace-menu\] \[data-rdsh-workspace-hidden\] \{ display: none !important; \}/, "filtered rows are still visible");
 	assert.match(CLIENT, /\.rdsh-mux-workspace-search input \{[^}]*font-size: 16px;/, "the search field can trigger iOS zoom");
 	assert.match(CLIENT, /\.rdsh-mux-workspace-empty \{[^}]*font-size: 13px;/, "the no-match row has no style");
-	const rules = cssBlocks().flatMap((css) => cssRules(css));
+	const rules = cssRules(cssTemplate("CSS_PHONE"));
 	for (const head of ["[data-rdsh-workspace-menu]", "[data-rdsh-workspace-menu] [data-rdsh-workspace-viewport]", ".rdsh-mux-workspace-search", ".rdsh-mux-workspace-empty"]) {
-		const rule = rules.find((entry) => entry.head === head);
-		assert.ok(rule, `${head} is missing`);
-		assert.ok(rule.at.some((media) => /max-width:\s*767px/.test(media)), `${head} is outside the phone query`);
+		assert.ok(rules.some((entry) => entry.head === head), `${head} is missing from the mobile sheet`);
 	}
 });

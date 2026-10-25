@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Queue / Composer bridge mockup</title>
+  <style>
+    :root { color-scheme: dark; --surface: #2b2b2e; --background: #151517; --muted: #a1a1aa; --blue: #79a9ff; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif; color: #f5f5f7; background: var(--background); }
+    .app { min-height: 100dvh; max-width: 480px; margin: auto; position: relative; }
+    .header { padding-top: max(45px, env(safe-area-inset-top)); border-bottom: 1px solid #2c2c31; }
+    .topline { display: flex; align-items: center; gap: 18px; padding: 6px 16px 0 8px; height: 77px; }
+    .hamburger { width: 42px; height: 42px; display: grid; place-items: center; background: #303033; border-radius: 13px; font-size: 23px; }
+    .session-title { font-size: 16px; font-weight: 600; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .sidebar { color: #bebec5; font-size: 23px; }
+    .tabs { display: flex; gap: 40px; padding-left: 74px; height: 42px; align-items: center; color: var(--muted); }
+    .tab { height: 100%; display: grid; place-items: center; }
+    .tab.selected { color: var(--blue); border-bottom: 2px solid var(--blue); }
+    .story { padding: 14px 20px 340px; line-height: 1.9; font-size: 16px; }
+    .story p { margin: 0 0 24px; }
+    .thinking { display: flex; gap: 8px; align-items: center; color: var(--blue); border-top: 1px solid #29292c; padding-top: 12px; font-size: 14px; }
+    .input-area { position: fixed; bottom: max(34px, env(safe-area-inset-bottom)); width: min(100%, 383px); left: 50%; transform: translateX(-50%); }
+    .queue-dock { position: relative; z-index: 1; overflow: visible; width: calc(100% - 32px); margin: 0 auto -5px; }
+    .queue-panel { position: relative; z-index: 1; min-height: 42px; display: flex; align-items: center; gap: 10px; padding: 0 14px; background: var(--surface); border-radius: 20px 20px 0 0; }
+    .queue-icon { font-size: 17px; color: #b7b7c0; }
+    .queue-text { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 15px; }
+    .queue-actions { display: flex; gap: 15px; align-items: center; }
+    button { border: 0; color: inherit; background: transparent; font: inherit; cursor: pointer; }
+    .queue-actions button { color: #b1b1ba; padding: 3px; font-size: 20px; }
+    .composer { position: relative; width: calc(100% - 32px); min-height: 124px; margin: 0 auto; border-radius: 30px; background: var(--surface); display: flex; flex-direction: column; justify-content: flex-end; padding: 16px 10px 8px; }
+    .composer-input { width: 100%; min-height: 56px; border: 0; background: transparent; outline: none; resize: none; color: #f4f4f5; font: inherit; font-size: 16px; padding: 0 8px; }
+    .composer-toolbar { display: flex; align-items: center; gap: 8px; color: #b6b6bd; }
+    .plus { width: 35px; height: 35px; border-radius: 50%; background: #363639; font-size: 28px; line-height: 1; }
+    .shield { font-size: 20px; }
+    .model { margin-left: auto; font-size: 14px; color: #c6c6cb; white-space: nowrap; }
+    .model span { color: #868690; }
+    .stop { width: 36px; height: 36px; background: #3977eb; border-radius: 50%; display: grid; place-items: center; margin-left: 8px; }
+    .stop::after { content: ""; width: 11px; height: 11px; border-radius: 3px; background: white; }
+    .speed { text-align: center; color: #b8b8c0; font-size: 12px; margin-top: 5px; }
+    @media (min-width: 480px) { .input-area { bottom: 38px; } }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <div class="topline"><div class="hamburger">☰</div><div class="session-title">テーマ自由の小説を書く</div><div class="sidebar">◫</div></div>
+      <nav class="tabs"><span class="tab selected">Chat</span><span class="tab">Trajectory</span></nav>
+    </header>
+    <main class="story">
+      <p>透明なガラス瓶に、青い蓋。ラベルには祖母の字で「八月」と書かれている。瓶を振ると、しゃら、しゃら、と小さな波の音がした。</p>
+      <p>「海が遠くなったら、開けなさい」</p>
+      <p>祖母はそう言っていた。</p>
+      <p>その夏、祖母は町を出ていった。海の見える家を売り、駅前の小さな部屋に移るのだという。</p>
+      <p>私は瓶を鞄に入れた。蓋を開ける気にはなれなかった。まだ海は近かったから。</p>
+      <p>何年か経ち、私は町を離れた。知らない駅、知らない道、窓を開けても潮の匂いのしない部屋。</p>
+      <div class="thinking">⚑ Deep diving for 3s ⋯</div>
+    </main>
+    <section class="input-area" aria-label="入力エリア">
+      <div class="queue-dock" id="queueDock">
+        <div class="queue-panel" id="queuePanel" data-rdsh-queue-panel>
+          <span class="queue-icon">☷</span>
+          <span class="queue-text" id="queueText">あ</span>
+          <div class="queue-actions">
+            <button id="editQueue" title="編集" aria-label="編集">↗</button>
+            <button id="removeQueue" title="キューを消去" aria-label="キューを消去">▤</button>
+            <button title="今すぐ送信" aria-label="今すぐ送信">↑</button>
+          </div>
+        </div>
+      </div>
+      <div class="composer" id="composer">
+        <textarea class="composer-input" aria-label="入力" id="composerInput"></textarea>
+        <div class="composer-toolbar"><button class="plus" id="addQueue" title="キューを追加" aria-label="キューを追加">+</button><span class="shield">♢⌄</span><div class="model">GPT-6 Luna <span>Off ⌄</span></div><button class="stop" aria-label="生成停止"></button></div>
+      </div>
+      <div class="speed">≈ 114 tok/s</div>
+    </section>
+  </div>
+  <script>
+    const panel = document.getElementById("queuePanel");
+    const card = document.getElementById("composer");
+    const dock = document.getElementById("queueDock");
+    const svgNS = "http://www.w3.org/2000/svg";
+    const fmt = (value) => String(Number(value.toFixed(3)));
+
+    function radiusPair(value, dimension) {
+      const parts = String(value || "0").trim().split(/\s+/);
+      const resolve = (part) => part.endsWith("%") ? dimension * (parseFloat(part) || 0) / 100 : parseFloat(part) || 0;
+      return { x: resolve(parts[0]), y: resolve(parts[1] || parts[0]) };
+    }
+
+    function cornerPath(side, q, c, rx, ry, overlap) {
+      if (rx <= 0 || ry <= 0 || overlap >= ry) return null;
+      const tangent = side === "left" ? c.left + rx : c.right - rx;
+      const start = side === "left" ? Math.max(q.left, c.left) : Math.min(q.right, c.right);
+      let end = side === "left" ? Math.min(q.right, tangent) : Math.max(q.left, tangent);
+      if (side === "left" ? start >= end : start <= end) return null;
+      if (overlap > 0) {
+        const inset = rx * Math.sqrt(Math.max(0, 1 - Math.pow(1 - overlap / ry, 2)));
+        const zeroY = side === "left" ? tangent - inset : tangent + inset;
+        end = side === "left" ? Math.min(end, zeroY) : Math.max(end, zeroY);
+      }
+      const depthAt = (x) => {
+        const t = side === "left" ? (tangent - x) / rx : (x - tangent) / rx;
+        return ry * (1 - Math.sqrt(Math.max(0, 1 - t * t))) - overlap;
+      };
+      if (side === "left" ? start >= end : start <= end) return null;
+      if (depthAt(start) <= 0) return null;
+      let path = "M " + fmt(start - q.left) + " 0 L " + fmt(end - q.left) + " 0";
+      for (let i = 1; i <= 20; i += 1) {
+        const x = end + (start - end) * i / 20;
+        path += " L " + fmt(x - q.left) + " " + fmt(Math.max(0, depthAt(x)));
+      }
+      return path + " Z";
+    }
+
+    function drawJoin() {
+      const existing = dock.querySelector("[data-rdsh-queue-join]");
+      if (dock.hidden || panel.hidden) { existing?.remove(); return; }
+      const q = panel.getBoundingClientRect();
+      const c = card.getBoundingClientRect();
+      const d = dock.getBoundingClientRect();
+      const css = getComputedStyle(card);
+      const left = radiusPair(css.borderTopLeftRadius, c.width, c.height);
+      const right = radiusPair(css.borderTopRightRadius, c.width, c.height);
+      const overlap = q.bottom - c.top;
+      const paths = [
+        cornerPath("left", q, c, Math.min(left.x, c.width / 2), Math.min(left.y, c.height / 2), overlap),
+        cornerPath("right", q, c, Math.min(right.x, c.width / 2), Math.min(right.y, c.height / 2), overlap),
+      ].filter(Boolean);
+      const gap = Math.max(0, -overlap);
+      const flatLeft = Math.max(q.left, c.left + left.x);
+      const flatRight = Math.min(q.right, c.right - right.x);
+      if (gap > 0 && flatRight > flatLeft) {
+        paths.push("M " + fmt(flatLeft - q.left) + " 0 H " + fmt(flatRight - q.left) + " V " + fmt(gap) + " H " + fmt(flatLeft - q.left) + " Z");
+      }
+      if (!paths.length) { existing?.remove(); return; }
+      const height = Math.max(1, left.y, right.y, gap);
+      const svg = existing || document.createElementNS(svgNS, "svg");
+      svg.setAttribute("data-rdsh-queue-join", "");
+      svg.setAttribute("aria-hidden", "true");
+      svg.setAttribute("viewBox", "0 0 " + fmt(q.width) + " " + fmt(height));
+      svg.setAttribute("preserveAspectRatio", "none");
+      Object.assign(svg.style, { position: "absolute", left: (q.left - d.left) + "px", top: (q.bottom - d.top) + "px", width: q.width + "px", height: height + "px", overflow: "visible", pointerEvents: "none", zIndex: "0" });
+      svg.replaceChildren();
+      const fill = getComputedStyle(panel).backgroundColor;
+      for (const data of paths) {
+        const shape = document.createElementNS(svgNS, "path");
+        shape.setAttribute("d", data);
+        shape.setAttribute("fill", fill);
+        svg.append(shape);
+      }
+      if (!existing) dock.append(svg);
+    }
+
+    const update = () => requestAnimationFrame(drawJoin);
+    window.addEventListener("resize", update);
+    new ResizeObserver(update).observe(card);
+    new ResizeObserver(update).observe(panel);
+    document.getElementById("removeQueue").addEventListener("click", () => { dock.hidden = true; update(); });
+    document.getElementById("addQueue").addEventListener("click", () => { dock.hidden = false; panel.hidden = false; update(); });
+    document.getElementById("editQueue").addEventListener("click", () => {
+      document.getElementById("queueText").textContent = "キューのテキストを編集しました";
+      update();
+    });
+    drawJoin();
+  </script>
+</body>
+</html>

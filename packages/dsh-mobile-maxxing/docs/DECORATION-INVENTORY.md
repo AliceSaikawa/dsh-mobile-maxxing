@@ -66,6 +66,14 @@ attribute in `PHONE_HOOKS`, restores inline styles and the viewport, then
 releases the device palette and safe-area writes. `decorate()` also fails safe:
 a MutationObserver pass on a wide window only clears, never tags.
 
+Queued work cannot undo that cleanup: the boot effect owns a `live` flag, so a
+decorate frame requested before dispose is a no-op; the theme effect keeps its
+own `active` flag for its rAF and `theme/change` microtask; and
+`releaseDeviceTheme()` bumps `deviceThemeCheck` so a queued verification frame
+cannot retry the palette. `boundary-issues.test.mjs` disposes with those frames
+still queued, flushes them, and asserts the viewport, palette, animation and
+drawer state stay released.
+
 ## Deliberately device-independent (not gated)
 
 - PWA shell: manifest, service worker, offline launch, install card, toasts,

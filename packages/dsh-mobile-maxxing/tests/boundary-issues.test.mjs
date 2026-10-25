@@ -357,13 +357,16 @@ function stub(depth = 0) {
 /**
  * Boot the module with a mutable width.
  *
- * Decorations are not scheduled (rAF is a no-op), so the assertions are about
- * the boundary path itself: `syncWidth()` is what the media listener calls.
+ * Animation frames are queued instead of run, so a test can dispose first and
+ * then flush the frames a boot/decorate/theme pass left behind. The assertions
+ * are about the boundary path itself: `syncWidth()` is what the media listener
+ * calls.
  */
 function bootBoundary({ narrow = true, seed = {}, safeTop = 0 } = {}) {
 	const viewport = { narrow };
 	const document = makeDocument();
 	const disposers = [];
+	const frames = [];
 	const meta = new FakeNode("meta");
 	meta.setAttribute("name", "viewport");
 	meta.setAttribute("content", "width=device-width, initial-scale=1");
@@ -395,7 +398,7 @@ function bootBoundary({ narrow = true, seed = {}, safeTop = 0 } = {}) {
 		clearTimeout() {},
 		setInterval: () => 0,
 		clearInterval() {},
-		requestAnimationFrame: () => 0,
+		requestAnimationFrame: (callback) => { frames.push(callback); return frames.length; },
 		cancelAnimationFrame() {},
 		MutationObserver: class {
 			observe() {}
@@ -480,6 +483,15 @@ function bootBoundary({ narrow = true, seed = {}, safeTop = 0 } = {}) {
 		setWidth(next) {
 			viewport.narrow = next;
 			api.syncWidth();
+		},
+		/** Run every queued frame, including ones queued while flushing. */
+		flushFrames() {
+			const pending = frames.splice(0);
+			for (const callback of pending) callback();
+			if (frames.length > 0) {
+				const next = frames.splice(0);
+				for (const callback of next) callback();
+			}
 		},
 		dispose() {
 			const errors = [];
@@ -637,4 +649,29 @@ test("safe-area root padding and style are phone-only", () => {
 	assert.equal(booted.html.hasAttribute("data-rdsh-safe-top"), false, "the safe-area attribute survived");
 	assert.equal(booted.html.style.getPropertyValue("--rdsh-safe-top"), "", "the safe-area variable survived");
 	assert.equal(booted.html.style.getPropertyValue("--rdsh-native-gap-px"), "", "the native-gap variable survived");
+});
+
+test("a queued frame cannot resurrect the phone surface after dispose", () => {
+	// A decorate/theme pass can leave an animation frame queued. Disposing in
+	// between must invalidate that frame: otherwise it re-locks the viewport,
+	// re-applies the per-device palette and re-adds the drawer after the
+	// cleanup contract already ran.
+	const booted = bootBoundary({ narrow: true, seed: { "dsh-mobile-maxxing:device-theme": "dark" } });
+	booted.setWidth(true);
+	assert.equal(booted.body.querySelectorAll(".rdsh-mux-fab").length, 1, "the drawer was not installed");
+	assert.match(booted.meta.getAttribute("content"), /maximum-scale=1/, "the phone lock was not applied");
+	assert.equal(booted.body.hasAttribute("data-ds-dark-theme"), true, "the phone palette was not applied");
+
+	assert.deepEqual(booted.dispose(), [], "dispose threw");
+	assert.equal(booted.meta.getAttribute("content"), "width=device-width, initial-scale=1", "dispose did not restore the viewport");
+	assert.equal(booted.body.hasAttribute("data-ds-dark-theme"), false, "dispose did not release the palette");
+
+	// The frames queued by boot/decorate/theme are now stale. They must be no-ops.
+	booted.flushFrames();
+	assert.equal(booted.meta.getAttribute("content"), "width=device-width, initial-scale=1", "a stale frame re-locked the viewport");
+	assert.equal(booted.body.hasAttribute("data-ds-dark-theme"), false, "a stale frame re-applied the phone palette");
+	assert.equal(booted.html.getAttribute("data-rdsh-device-theme"), null, "a stale frame re-added the device-theme attribute");
+	assert.equal(booted.html.hasAttribute("data-rdsh-anim"), false, "a stale frame re-added the animation attribute");
+	assert.equal(booted.html.hasAttribute("data-rdsh-drawer"), false, "a stale frame re-added the drawer state");
+	assert.equal(booted.body.querySelectorAll(".rdsh-mux-fab").length, 0, "a stale frame re-created the drawer button");
 });

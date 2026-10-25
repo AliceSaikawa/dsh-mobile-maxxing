@@ -1234,6 +1234,9 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
 
     /** Undo every DOM write this override made. */
     function releaseDeviceTheme() {
+      // Invalidate a verification frame queued by applyDeviceTheme(): after a
+      // dispose it must not retry and repaint the palette.
+      deviceThemeCheck += 1;
       if (deviceThemeBaseline === null) return;
       const baseline = deviceThemeBaseline;
       deviceThemeBaseline = null;
@@ -1369,29 +1372,43 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       }
       if (service === undefined || service === null) return;
       ctx.effect(() => {
+        // A disposed effect must ignore its own queued work. applyDeviceTheme
+        // schedules a frame and theme/change schedules a microtask; either can
+        // outlive the cleanup and repaint the phone palette after it was
+        // released.
+        let active = true;
         try {
           const snapshot = service.getTheme();
           if (snapshot !== undefined && snapshot !== null) deviceThemeSnapshot = snapshot;
         } catch (error) {
           deviceThemeSnapshot = null;
         }
-        applyDeviceTheme();
-        if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => applyDeviceTheme());
+        if (active) applyDeviceTheme();
+        if (typeof requestAnimationFrame === "function") {
+          requestAnimationFrame(() => {
+            if (active) applyDeviceTheme();
+          });
+        }
         let media = null;
         try {
           media = window.matchMedia("(prefers-color-scheme: dark)");
         } catch (error) {
           media = null;
         }
-        const onSystemScheme = () => applyDeviceTheme();
+        const onSystemScheme = () => {
+          if (active) applyDeviceTheme();
+        };
         media?.addEventListener?.("change", onSystemScheme);
         const offTheme = ctx.on("theme/change", (snapshot) => {
           if (snapshot !== undefined && snapshot !== null) deviceThemeSnapshot = snapshot;
           // The presenter applies synchronously inside its own listener; run
           // after every listener so the device choice is the one that stands.
-          queueMicrotask(applyDeviceTheme);
+          queueMicrotask(() => {
+            if (active) applyDeviceTheme();
+          });
         });
         return () => {
+          active = false;
           media?.removeEventListener?.("change", onSystemScheme);
           if (typeof offTheme === "function") offTheme();
           releaseDeviceTheme();
@@ -3560,11 +3577,18 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       }
     }
 
+    /**
+     * Whether the boot effect is still mounted. A decorate frame queued before
+     * dispose must not run after it: it would re-lock the viewport and re-add
+     * the phone hooks that dispose just removed.
+     */
+    let live = false;
     let scheduled = false;
     function scheduleDecorate() {
-      if (scheduled) return;
+      if (!live || scheduled) return;
       scheduled = true;
       requestAnimationFrame(() => {
+        if (!live) return;
         scheduled = false;
         try {
           decorate();
@@ -7721,6 +7745,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
       hostCtx = ctx;
 
       ctx.effect(() => {
+        live = true;
         const style = document.createElement("style");
         style.setAttribute("data-rdsh-mux-style", "");
         style.textContent = CSS;
@@ -7910,6 +7935,11 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             document.removeEventListener("pointermove", onPointerMove, true);
             document.removeEventListener("focusout", onModelFocusOut, true);
             media.removeEventListener("change", onMedia);
+            // Invalidate any decorate frame queued before this teardown. The
+            // frame checks `live` before touching the DOM, so it cannot undo
+            // the cleanup below.
+            live = false;
+            scheduled = false;
             // One teardown path: every owned attribute/node/listener/style,
             // the original viewport and the upstream palette. It runs even if
             // the window is still narrow, so a live reload starts clean.

@@ -3571,6 +3571,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         clearModelSearch();
         return;
       }
+      // The picker was closed and React took the input with it. Forget the tap
+      // that enabled it, so the next open starts disabled again.
+      if (modelSearchState !== null && !modelSearchState.input.isConnected) clearModelSearch();
       const menu = document.querySelector('[class*="_7KE1Ra_menu"]');
       if (menu === null) return;
       const input = menu.querySelector("input");
@@ -3586,12 +3589,19 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           // longer pulls focus (or the keyboard) into the search.
           const handler = () => {
             input.disabled = false;
+            // Record the tap on the record itself: the app re-renders the
+            // picker on pointerdown, and the next decorate pass would disable
+            // and blur the field before its own rAF focus could run.
+            if (modelSearchState !== null && modelSearchState.input === input) modelSearchState.active = true;
             requestAnimationFrame(() => input.focus({ preventScroll: true }));
           };
           row.addEventListener("pointerdown", handler, true);
-          modelSearchState = { input, row, handler, wasDisabled: input.disabled };
+          modelSearchState = { input, row, handler, wasDisabled: input.disabled, active: false };
         }
       }
+      // Once the user has tapped the row the field belongs to them until the
+      // picker closes; re-disabling it here is what dropped the keyboard.
+      if (modelSearchState !== null && modelSearchState.input === input && modelSearchState.active) return;
       if (!input.disabled) input.disabled = true;
       if (document.activeElement === input) input.blur();
     }

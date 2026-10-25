@@ -1,9 +1,10 @@
 /**
  * #46 layering geometry in a real browser, plus the #44 CSS boundary.
  *
- * Attaches to the already-running isolated CDP page (default :9222) instead of
- * opening a tab, writes a small fixture into that page, and resets it to
- * about:blank afterwards. It never navigates to the app or a user session.
+ * Creates its OWN incognito browser context and page target through the
+ * browser-level CDP endpoint, drives only that target, and disposes both in a
+ * `finally`. Existing tabs/targets are only read from `/json/list` to find the
+ * new target's WebSocket URL; they are never attached to or modified.
  *
  *   node tests/boundary-layering.e2e.mjs
  *
@@ -43,41 +44,74 @@ const fixture = `<head><meta name="viewport" content="width=device-width, initia
 <div data-row-key="session:s1" data-rdsh-session-frame style="--rdsh-session-frame:#ff6b6b;height:20px">row</div>
 </body>`;
 
-const list = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
-const target = list.find((entry) => entry.type === "page" && entry.url === "about:blank");
-assert.ok(target, "an isolated about:blank page target is required (CDP_PORT)");
-const ws = new WebSocket(target.webSocketDebuggerUrl);
-await new Promise((resolve, reject) => {
-	ws.onopen = resolve;
-	ws.onerror = reject;
-});
-let id = 0;
-const pending = new Map();
-ws.onmessage = (event) => {
-	const message = JSON.parse(event.data);
-	if (message.id === undefined) return;
-	const call = pending.get(message.id);
-	pending.delete(message.id);
-	if (message.error) call.reject(new Error(message.error.message));
-	else call.resolve(message.result);
-};
-const send = (method, params = {}) => {
-	const callId = ++id;
-	ws.send(JSON.stringify({ id: callId, method, params }));
-	return new Promise((resolve, reject) => pending.set(callId, { resolve, reject }));
-};
-const evaluate = async (expression) => {
-	const result = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
-	if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);
-	return result.result.value;
-};
+/** One CDP socket with request/response correlation. */
+async function connect(webSocketUrl) {
+	const socket = new WebSocket(webSocketUrl);
+	await new Promise((resolve, reject) => {
+		socket.onopen = resolve;
+		socket.onerror = reject;
+	});
+	let nextId = 0;
+	const pending = new Map();
+	socket.onmessage = (event) => {
+		const message = JSON.parse(event.data);
+		if (message.id === undefined) return;
+		const call = pending.get(message.id);
+		pending.delete(message.id);
+		if (call === undefined) return;
+		if (message.error) call.reject(new Error(message.error.message));
+		else call.resolve(message.result);
+	};
+	return {
+		send(method, params = {}) {
+			const id = ++nextId;
+			socket.send(JSON.stringify({ id, method, params }));
+			return new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
+		},
+		close() {
+			try {
+				socket.close();
+			} catch {
+				/* already closed */
+			}
+		},
+	};
+}
 
-await send("Page.enable");
-await send("Runtime.enable");
-await send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 3, mobile: true });
-await evaluate(`document.documentElement.innerHTML = ${JSON.stringify(fixture)}; true`);
+const version = await (await fetch(`http://127.0.0.1:${PORT}/json/version`)).json();
+assert.ok(version.webSocketDebuggerUrl, "the CDP browser endpoint is required (CDP_PORT)");
 
-const measure = () => evaluate(`(() => {
+let browser = null;
+let page = null;
+let browserContextId = null;
+let targetId = null;
+let result = null;
+try {
+	browser = await connect(version.webSocketDebuggerUrl);
+	({ browserContextId } = await browser.send("Target.createBrowserContext", { disposeOnDetach: false }));
+	({ targetId } = await browser.send("Target.createTarget", { url: "about:blank", browserContextId }));
+
+	// Read-only: the list is used only to resolve the new target's page socket.
+	const targets = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
+	const target = targets.find((entry) => entry.id === targetId && entry.type === "page");
+	assert.ok(target, "the browser did not expose the target this test created");
+	page = await connect(target.webSocketDebuggerUrl);
+
+	const send = page.send;
+	const evaluate = async (expression) => {
+		const response = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
+		if (response.exceptionDetails) {
+			throw new Error(response.exceptionDetails.exception?.description || response.exceptionDetails.text);
+		}
+		return response.result.value;
+	};
+
+	await send("Page.enable");
+	await send("Runtime.enable");
+	await send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 3, mobile: true });
+	await evaluate(`document.documentElement.innerHTML = ${JSON.stringify(fixture)}; true`);
+
+	const measure = () => evaluate(`(() => {
   const header = document.querySelector("header[data-rdsh-header]");
   const rect = header.getBoundingClientRect();
   const hit = document.elementFromPoint(Math.round(rect.left + rect.width / 2), Math.round(rect.top + rect.height / 2));
@@ -92,28 +126,40 @@ const measure = () => evaluate(`(() => {
   };
 })()`);
 
-const narrow = await measure();
-assert.notEqual(narrow.display, "none", "the open panel removed the header from layout");
-assert.notEqual(narrow.visibility, "hidden", "the open panel hid the header");
-assert.equal(narrow.panelInFront, true, "the panel is not painted above the header");
-assert.equal(narrow.paddingLeft, "64px", "the phone header inset is not applied");
-assert.match(narrow.frameShadow, /255, 107, 107/, "the phone session frame is not applied");
+	const narrow = await measure();
+	assert.notEqual(narrow.display, "none", "the open panel removed the header from layout");
+	assert.notEqual(narrow.visibility, "hidden", "the open panel hid the header");
+	assert.equal(narrow.panelInFront, true, "the panel is not painted above the header");
+	assert.equal(narrow.paddingLeft, "64px", "the phone header inset is not applied");
+	assert.match(narrow.frameShadow, /255, 107, 107/, "the phone session frame is not applied");
 
-const rects = [];
-for (let index = 0; index < 10; index += 1) {
-	await evaluate(`document.documentElement.toggleAttribute("data-rdsh-rightpanel-open", ${index % 2 === 0})`);
+	const rects = [];
+	for (let index = 0; index < 10; index += 1) {
+		await evaluate(`document.documentElement.toggleAttribute("data-rdsh-rightpanel-open", ${index % 2 === 0})`);
+		await evaluate("new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
+		rects.push((await measure()).rect.join(","));
+	}
+	assert.equal(new Set(rects).size, 1, "the header rect moved while the panel opened and closed");
+
+	await send("Emulation.setDeviceMetricsOverride", { width: 768, height: 900, deviceScaleFactor: 1, mobile: false });
 	await evaluate("new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
-	rects.push((await measure()).rect.join(","));
+	const wide = await measure();
+	assert.notEqual(wide.paddingLeft, "64px", "the phone header inset leaked to 768px");
+	assert.equal(wide.frameShadow, "none", "the phone session frame leaked to 768px");
+	assert.notEqual(wide.display, "none", "the header is still hidden at 768px");
+
+	result = { narrow, rects: [...new Set(rects)], wide };
+} finally {
+	page?.close();
+	if (browser !== null) {
+		if (targetId !== null) {
+			await browser.send("Target.closeTarget", { targetId }).catch(() => {});
+		}
+		if (browserContextId !== null) {
+			await browser.send("Target.disposeBrowserContext", { browserContextId }).catch(() => {});
+		}
+		browser.close();
+	}
 }
-assert.equal(new Set(rects).size, 1, "the header rect moved while the panel opened and closed");
 
-await send("Emulation.setDeviceMetricsOverride", { width: 768, height: 900, deviceScaleFactor: 1, mobile: false });
-await evaluate("new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
-const wide = await measure();
-assert.notEqual(wide.paddingLeft, "64px", "the phone header inset leaked to 768px");
-assert.equal(wide.frameShadow, "none", "the phone session frame leaked to 768px");
-assert.notEqual(wide.display, "none", "the header is still hidden at 768px");
-
-console.log(JSON.stringify({ narrow, rects: [...new Set(rects)], wide }, null, 2));
-await send("Page.navigate", { url: "about:blank" });
-ws.close();
+console.log(JSON.stringify(result, null, 2));

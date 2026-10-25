@@ -385,6 +385,44 @@ function clip(value, limit) {
 	return `${text.slice(0, limit - 1)}…`;
 }
 
+/**
+ * Normalize an app origin for storage and comparison.
+ *
+ * `URL.origin` drops a trailing slash and an explicit default port, so a
+ * subscription registered as `https://app.example:443/` matches the request
+ * origin `https://app.example`. Values that cannot be parsed are kept as
+ * trimmed text so an unusual but previously accepted entry is not discarded.
+ *
+ * @param {string} value - stored or requested origin.
+ * @returns {string} the normalized origin, or "" when absent.
+ */
+function normalizeOrigin(value) {
+	const text = typeof value === "string" ? value.trim() : "";
+	if (text === "") return "";
+	try {
+		return new URL(text).origin;
+	} catch {
+		return text;
+	}
+}
+
+/**
+ * Whether two recorded app origins name the same deployment.
+ *
+ * A legacy entry may carry a trailing slash or an explicit default port while
+ * the request's origin is the normalized `URL.origin`. Compare the normalized
+ * forms so that app can still retire its own subscription.
+ *
+ * @param {string} left - stored origin.
+ * @param {string} right - requesting origin.
+ * @returns {boolean} true when both name the same origin.
+ */
+function sameOrigin(left, right) {
+	const a = normalizeOrigin(left);
+	const b = normalizeOrigin(right);
+	return a !== "" && b !== "" && a === b;
+}
+
 // ---------------------------------------------------------------------------
 // Store + fan-out
 // ---------------------------------------------------------------------------
@@ -497,7 +535,12 @@ export class PushStore {
 			endpoint,
 			keys: { p256dh: subscription.keys.p256dh, auth: subscription.keys.auth },
 			label: typeof meta.label === "string" ? meta.label.slice(0, 120) : "",
-			origin: typeof meta.origin === "string" ? meta.origin : "",
+			// Store the canonical origin so exact-origin routing (which compares
+			// against a request's URL.origin) cannot miss a new subscription
+			// just because the caller sent a trailing slash or `:443`. Entries
+			// already on disk are not rewritten: an unnormalized legacy entry
+			// can still miss exact routing until the app subscribes again.
+			origin: normalizeOrigin(meta.origin),
 			addedAt: Date.now(),
 		};
 		this.reload();
@@ -511,12 +554,26 @@ export class PushStore {
 	 * Drop one subscription.
 	 *
 	 * @param {string} endpoint - the endpoint to forget.
+	 * @param {string} [origin] - the requesting app's origin. When it is known
+	 *   and the stored entry belongs to another origin, the entry is kept:
+	 *   profiles share this file, and one app's Settings should not retire the
+	 *   other app's live subscription. This is an ownership-consistency check,
+	 *   not an authentication boundary (the endpoint is not a secret). A
+	 *   missing/legacy origin stays removable so an upgrade can clean up (and
+	 *   404/410 pruning passes no origin at all). Origins are compared through
+	 *   `URL`, so a trailing slash or an explicit default port in an older
+	 *   entry does not stop its own app from removing it.
 	 * @returns {boolean} whether anything was removed.
 	 */
-	remove(endpoint) {
+	remove(endpoint, origin = "") {
 		this.reload();
 		const before = this.state.subscriptions.length;
-		this.state.subscriptions = this.state.subscriptions.filter((item) => item.endpoint !== endpoint);
+		this.state.subscriptions = this.state.subscriptions.filter((item) => {
+			if (item.endpoint !== endpoint) return true;
+			const requester = typeof origin === "string" ? origin : "";
+			const owner = typeof item.origin === "string" ? item.origin : "";
+			return requester !== "" && owner !== "" && !sameOrigin(owner, requester);
+		});
 		if (this.state.subscriptions.length !== before) this.save();
 		return this.state.subscriptions.length !== before;
 	}
@@ -810,7 +867,18 @@ export function applyNotify(ctx, config) {
 					const body = await readJsonBody(req);
 					noteOrigin(req, body);
 					try {
-						const count = store.add(body.subscription, { label: body.label, origin: body.origin });
+						// Keep the page's explicit origin: behind a proxy the
+						// request's Origin/Referer can be the inner http origin
+						// while the browser still reports the public origin in
+						// the body, and overwriting it would misroute the push.
+						// Only when the body omits the origin (a caller outside
+						// the current client, or a hand-rolled request) fall
+						// back to the request headers. This is defensive: every
+						// known client sends `body.origin` today.
+						const origin = typeof body.origin === "string" && body.origin !== ""
+							? body.origin
+							: requestOrigin(req, body);
+						const count = store.add(body.subscription, { label: body.label, origin });
 						json(res, 200, { ok: true, count, subject: store.subject(copy.subject) });
 					} catch (error) {
 						json(res, 400, { ok: false, error: String(error?.message ?? error) });
@@ -829,7 +897,9 @@ export function applyNotify(ctx, config) {
 					}
 					const body = await readJsonBody(req);
 					const endpoint = typeof body.endpoint === "string" ? body.endpoint : body.subscription?.endpoint;
-					const removed = typeof endpoint === "string" ? store.remove(endpoint) : false;
+					// Scope the delete to the app that asked: the shared store
+					// also holds the other installed origin's subscription.
+					const removed = typeof endpoint === "string" ? store.remove(endpoint, requestOrigin(req, body)) : false;
 					json(res, 200, { ok: true, removed, count: store.subscriptions().length });
 				},
 			},

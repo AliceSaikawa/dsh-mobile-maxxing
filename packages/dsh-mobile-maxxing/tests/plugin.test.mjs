@@ -12,6 +12,7 @@ import { runInNewContext } from "node:vm";
 import { apply, buildManifest, decorateIndex, normalizeConfig } from "../index.js";
 import { buildTurnEndPayload } from "../notify/host.js";
 import { COPY, PROBES, copyFor } from "../lib/copy.js";
+import { MODE_ATTRIBUTE, MODE_GLOBAL } from "../lib/device-mode.js";
 
 /**
  * A context good enough to mount the plugin.
@@ -246,7 +247,9 @@ test("index decoration injects the dictionary, the probes and the normalized lan
 	assert.deepEqual(payload.__RDSH_PWA_PROBES__, PROBES, "the full probe dictionary travels");
 	assert.ok(payload.__RDSH_PWA_PROBES__.actions.includes("操作"), "probes stay bilingual");
 	assert.equal(payload.__RDSH_PWA_LANG__, "ja", "the default host language reaches the browser half");
-	assert.ok(!html.includes("</script><script>globalThis.__RDSH_PWA_COPY__"), "no raw tag break");
+	const payloadScript = /<script>(globalThis\.__RDSH_PWA_COPY__[\s\S]*?)<\/script>/.exec(html);
+	assert.ok(payloadScript !== null, "the payload is one script element");
+	assert.ok(!payloadScript[1].includes("<"), "no value can close the payload element early");
 });
 
 test("an explicit en profile makes every host surface English", async () => {
@@ -287,6 +290,58 @@ test("decorateIndex still works when the document has no viewport or head", () =
 	assert.ok(bare.includes("</div>"));
 	const noViewport = decorateIndex("<head></head><body></body>", {});
 	assert.match(noViewport, /<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">/);
+});
+
+test("the index decides the device mode before the module loader runs", () => {
+	// The stock head plus the two things the mode must precede: the client
+	// module loader and the deferred app bundle.
+	const loaded = INDEX.replace("</head>", [
+		'<script>window.__ModuleLoader__={mode:"queue"}</script>',
+		'<script type="module" crossorigin src="./assets/index-x.js"></script>',
+		"</head>",
+	].join(""));
+	const html = decorateIndex(loaded, {});
+	const modeAt = html.indexOf(`globalThis.${MODE_GLOBAL}=`);
+	assert.ok(modeAt > 0, "the mode script is injected");
+	assert.ok(modeAt < html.indexOf("__ModuleLoader__"), "it runs before the module loader");
+	assert.ok(modeAt < html.indexOf('type="module"'), "it runs before the deferred app bundle");
+	assert.equal((html.match(/data-rdsh-device-mode/g) ?? []).length, 1, "the attribute name appears once");
+	assert.equal((html.match(new RegExp(`globalThis\\.${MODE_GLOBAL}=`, "g")) ?? []).length, 1,
+		"the canonical global is published once");
+
+	// Idempotent: a second tap is a byte-for-byte no-op, and a legacy marker
+	// document without the script gets exactly one.
+	assert.equal(decorateIndex(html, {}), html);
+	const legacy = INDEX.replace("<head>", "<head><!--dsh-mobile-maxxing-->");
+	const once = decorateIndex(legacy, {});
+	assert.equal((once.match(new RegExp(`globalThis\\.${MODE_GLOBAL}=`, "g")) ?? []).length, 1);
+	assert.equal(decorateIndex(once, {}), once);
+});
+
+test("one shared document answers per browser, so no response varies by user agent", () => {
+	// What the service worker caches and what every client downloads is the
+	// same string; the decision happens in the browser, on that string.
+	const document = decorateIndex(INDEX, {});
+	const script = /<script>([\s\S]*?)<\/script>/.exec(document);
+	assert.ok(script !== null && script[1].includes(`globalThis.${MODE_GLOBAL}=`),
+		"the first script in the document decides the mode");
+	const decide = (navigator) => {
+		const attributes = new Map();
+		const sandbox = {
+			navigator,
+			document: { documentElement: { setAttribute: (name, value) => attributes.set(name, String(value)) } },
+		};
+		runInNewContext(script[1], sandbox, { filename: "early-mode.js" });
+		return { attribute: attributes.get(MODE_ATTRIBUTE), global: sandbox[MODE_GLOBAL] };
+	};
+	const phone = decide({ userAgent: "Mozilla/5.0 (Linux; Android 14; Pixel 8) Mobile Safari/537.36", platform: "Linux armv8l", maxTouchPoints: 5 });
+	const ipad = decide({ userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Version/26.0 Safari/605.1.15", platform: "MacIntel", maxTouchPoints: 5 });
+	const laptop = decide({ userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36", platform: "Win32", maxTouchPoints: 10 });
+	assert.deepEqual([phone.attribute, phone.global], ["mobile", "mobile"]);
+	assert.deepEqual([ipad.attribute, ipad.global], ["mobile", "mobile"]);
+	assert.deepEqual([laptop.attribute, laptop.global], ["desktop", "desktop"]);
+	// Nothing in the served document depends on which one asked.
+	assert.equal(document, decorateIndex(INDEX, {}));
 });
 
 test("an old marker without the payload gets copy, probes and lang exactly once", () => {
@@ -337,8 +392,11 @@ test("normalizeConfig rejects array, null and hostile language values", () => {
 	}
 	const english = decorateIndex(INDEX, { lang: "en" });
 	assert.equal(injectedPayload(english).__RDSH_PWA_LANG__, "en");
-	const script = /<script>([\s\S]*?)<\/script>/.exec(english);
-	assert.ok(script !== null);
+	// The mode script is the first script in the document, so the payload is
+	// addressed by its own assignment rather than by being script #1.
+	const script = /<script>(globalThis\.__RDSH_PWA_COPY__[\s\S]*?)<\/script>/.exec(english);
+	assert.ok(script !== null, "the payload script exists");
+	assert.ok(!script[1].includes("<"), "the payload code cannot close its own element");
 	assert.doesNotThrow(() => new Function(script[1]), "the injected payload is valid JavaScript");
 });
 

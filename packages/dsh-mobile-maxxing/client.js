@@ -9359,10 +9359,9 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
     padding-left: 16px !important;
     padding-right: 16px !important;
   }
-  /* The legacy transcript column: a fixed 349px reading measure, centred.
-     max-width: 100% keeps it inside viewports narrower than 349px. */
+  /* Use the available conversation width, including on tablets. */
   [data-rdsh-transcript-column] {
-    width: 349px !important;
+    width: 100% !important;
     max-width: 100% !important;
     margin-left: auto !important;
     margin-right: auto !important;

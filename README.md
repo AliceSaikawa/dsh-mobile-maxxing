@@ -39,7 +39,7 @@ dsh plugin --profile web add https://github.com/kuraneko1/dsh-mobile-maxxing
 ## 開発
 
 ```sh
-npm test                    # テスト145件（うち3件は Chrome がある時だけ実行）
+npm test                    # Node.js のテスト + 任意の Chrome CSS fixture 3件
 node scripts/pack-all.mjs   # dist/ に tarball を作る
 ```
 
@@ -107,7 +107,7 @@ push library are needed.
 ## Development
 
 ```sh
-npm test                    # 145 tests (3 run only when Chrome is available)
+npm test                    # Node.js tests + optional Chrome CSS fixture tests (3)
 node scripts/pack-all.mjs   # build the tarballs into dist/
 ```
 

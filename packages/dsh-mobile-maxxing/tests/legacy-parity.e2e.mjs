@@ -359,6 +359,7 @@ async function state(page) {
 			width: innerWidth,
 			height: innerHeight,
 			narrow: matchMedia("(max-width: 767px)").matches,
+			mode: html.getAttribute("data-rdsh-device-mode"),
 			coarse: matchMedia("(pointer: coarse)").matches,
 			anyCoarse: matchMedia("(any-pointer: coarse)").matches,
 			standalone: html.getAttribute("data-dsh-mobile-maxxing"),
@@ -389,7 +390,7 @@ async function addHideFixture(page) {
 	await page.eval(`(() => {
 		const old = document.getElementById("qa-hide-fixture");
 		if (old !== null) old.remove();
-		const labels = ["Open in Files", "More actions", "Feedback", "Keyboard shortcuts"];
+		const labels = ["More actions", "Feedback", "Keyboard shortcuts"];
 		const holder = document.createElement("div");
 		holder.id = "qa-hide-fixture";
 		holder.style.cssText = "position:fixed;right:8px;top:96px;z-index:99990;display:flex;flex-direction:column;gap:4px;background:#111;padding:6px;align-items:flex-end";
@@ -400,6 +401,16 @@ async function addHideFixture(page) {
 			button.textContent = label;
 			holder.append(button);
 		}
+		// #33: the native open-in-app split button is matched structurally, not
+		// by a label (the host names the app itself).
+		const openTarget = document.createElement("div");
+		openTarget.id = "qa-open-target";
+		openTarget.setAttribute("data-open-target", "file");
+		const openButton = document.createElement("button");
+		openButton.setAttribute("data-open-path-open", "");
+		openButton.textContent = "Open";
+		openTarget.append(openButton);
+		holder.append(openTarget);
 		document.body.append(holder);
 		globalThis.__qaHideFixture = labels;
 		return true;
@@ -413,6 +424,12 @@ async function hideReport(page) {
 		const labels = globalThis.__qaHideFixture || [];
 		return {
 			html: document.documentElement.hasAttribute("data-rdsh-hide-settings"),
+			openTarget: (() => {
+				const element = document.getElementById("qa-open-target");
+				if (element === null) return null;
+				const style = getComputedStyle(element);
+				return { display: style.display, visible: style.display !== "none" && element.getBoundingClientRect().height > 0 };
+			})(),
 			items: labels.map((label) => {
 				const button = document.querySelector('#qa-hide-fixture button[aria-label="' + label + '"]');
 				if (button === null) return { label, found: false };
@@ -879,6 +896,7 @@ async function hiddenControls(page, report) {
 	for (const item of hidden.items) {
 		report.check(`hides desktop-only control: ${item.label}`, item.found && item.hiddenAttr && !item.visible, item);
 	}
+	report.check("hides the native open-in-app split button (#33)", hidden.openTarget?.display === "none", hidden.openTarget);
 	await shot(page, "hidden-controls");
 
 	await page.eval(`localStorage.setItem("rdsh-mobile-ux:hide-disabled", "1"); globalThis.__RDSH_MOBILE_UX__.decorate();`);
@@ -1009,7 +1027,8 @@ async function deviceProfile(page, report, device) {
 	report.observe(`device ${device.id}: applied hidden controls`, appliedLabels, hidden);
 	report.observe(`device ${device.id}: hide-settings attribute`, hidden.html === true);
 	report.observe(`device ${device.id}: narrow state`, before.diagnosticsState?.narrow ?? before.narrow);
-	report.observe(`device ${device.id}: effective phone`, before.phone ?? before.diagnosticsState?.narrow ?? before.narrow);
+	report.observe(`device ${device.id}: device mode`, before.mode ?? before.diagnosticsState?.mode ?? null);
+	report.observe(`device ${device.id}: effective mobile`, before.phone ?? before.diagnosticsState?.phone ?? false);
 	report.observe(`device ${device.id}: initial drawer`, before.drawer);
 	report.observe(`device ${device.id}: initial panel`, before.panelOpen);
 	if (device.swipes) {

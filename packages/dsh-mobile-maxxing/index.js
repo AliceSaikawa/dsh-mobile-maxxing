@@ -13,6 +13,12 @@
  * and decorates the served index.html with the iOS/Android metadata the stock
  * page lacks (viewport-fit=cover, apple-touch-icon, standalone title, ...).
  *
+ * It also puts the device-mode decision at the top of `<head>`, ahead of the
+ * module loader: the browser classifies itself there and publishes one global,
+ * and the browser half reads it instead of classifying again. The document
+ * itself stays one shared byte sequence for every client — this is not server
+ * negotiation, and no response varies by user agent.
+ *
  * Every route is registered on the Web server's exact-route table, so it wins
  * over the SPA fallback and stays alive across HMR recompositions.
  *
@@ -25,6 +31,7 @@ import { apply as applyMobileUx } from "./lib/mobile-ux.js";
 import { apply as applyMarkdownCjk } from "./lib/markdown-cjk.js";
 import { apply as applySessionIdCopy } from "./lib/session-id-copy.js";
 import { COPY, PROBES, copyFor, serviceWorkerCopy } from "./lib/copy.js";
+import { MODE_GLOBAL, earlyModeScript } from "./lib/device-mode.js";
 import { readFile } from "node:fs/promises";
 
 /** Stable Cordis plugin name. */
@@ -46,6 +53,15 @@ const INDEX_MARKER = "<!--dsh-mobile-maxxing-->";
 const COPY_ASSIGNMENT = /(?:globalThis|self|window)\.__RDSH_PWA_COPY__\s*=/;
 const PROBES_ASSIGNMENT = /(?:globalThis|self|window)\.__RDSH_PWA_PROBES__\s*=/;
 const LANG_ASSIGNMENT = /(?:globalThis|self|window)\.__RDSH_PWA_LANG__\s*=/;
+/**
+ * The early device-mode script, recognised so a re-tap never adds a second one.
+ *
+ * A plain assignment only. `globalThis.__RDSH_DEVICE_MODE__ === "mobile"` is
+ * how a consumer *reads* the mode, and a shell that already reads it still
+ * needs the bootstrap that defines it. The negative lookahead keeps `==`,
+ * `===` and a following `=>` out of the match.
+ */
+const MODE_ASSIGNMENT = new RegExp(`(?:globalThis|self|window)\\.${MODE_GLOBAL}\\s*=(?![=>])`);
 
 /** Manifest and viewport limits we normalize before serving. */
 const DISPLAY_MODES = new Set(["standalone", "minimal-ui", "fullscreen", "browser", "window-controls-overlay"]);
@@ -248,8 +264,15 @@ function insertInHead(html, fragment) {
 }
 
 /**
- * Add the metadata a home-screen launch needs. Pure and idempotent: the
- * returned HTML carries {@link INDEX_MARKER} exactly once.
+ * Add the metadata a home-screen launch needs, plus the early device-mode
+ * decision. Pure and idempotent: the returned HTML carries
+ * {@link INDEX_MARKER} exactly once, and a document that already decided the
+ * mode does not get a second script.
+ *
+ * The mode script is the first element of the injected block, so it is parsed
+ * and executed before the module loader and the app bundle. It carries no
+ * per-request data: the classifier runs in the browser, which is the only
+ * place the iPad's desktop-like UA and touch points can be told apart.
  *
  * A document that already has the marker may come from the split-plugin tap,
  * which did not inject `__RDSH_PWA_COPY__` / `__RDSH_PWA_PROBES__` /
@@ -271,9 +294,16 @@ export function decorateIndex(html, config) {
 		probes: !PROBES_ASSIGNMENT.test(html),
 		lang: LANG_ASSIGNMENT.test(html) ? undefined : cfg.lang,
 	});
-	if (html.includes(INDEX_MARKER)) return payload === "" ? html : insertInHead(html, payload);
+	const mode = MODE_ASSIGNMENT.test(html) ? "" : earlyModeScript();
+	if (html.includes(INDEX_MARKER)) {
+		const missing = `${mode}${payload}`;
+		return missing === "" ? html : insertInHead(html, missing);
+	}
 	const head = [
 		INDEX_MARKER,
+		// Decided in the browser, first in the document: nothing mode-dependent
+		// can run before it.
+		mode,
 		// The browser half reads its strings from here; nothing else in the
 		// client carries UI copy. PROBES are upstream label vocabularies, not
 		// copy, so they travel separately.

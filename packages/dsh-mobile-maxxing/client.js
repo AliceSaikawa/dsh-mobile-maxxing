@@ -4,7 +4,7 @@ window.__ModuleLoader__.load({
     // dsh-mobile-maxxing — browser half.
     //
     // One module carries three behaviours that used to be separate plugins:
-    // the PWA shell, the phone-width layout, and the session-id copy row.
+    // the PWA shell, the mobile-device UX, and the session-id copy row.
     // They ship together because the client module system maps one package to
     // one browser module: a package cannot register several.
     //
@@ -102,6 +102,115 @@ window.__ModuleLoader__.load({
     }
 
     // ---------------------------------------------------------------------
+
+    // Device mode: the host bootstrap decides it once, this bundle consumes it.
+    //
+    // The canonical value is `globalThis.__RDSH_DEVICE_MODE__` (a string).
+    // If it is missing or invalid, a valid `html[data-rdsh-device-mode]` is the
+    // fallback; if neither is valid, the mode is desktop (fail closed). The
+    // host's single classifier writes both before this module runs. This half
+    // never re-classifies from UA, width, pointer or touch points, and a resize
+    // never changes the mode.
+    const NARROW_QUERY = "(max-width: 767px)";
+
+    function readDeviceMode() {
+      try {
+        const injected = globalThis.__RDSH_DEVICE_MODE__;
+        if (typeof injected === "string" && (injected === "mobile" || injected === "desktop")) return injected;
+        const attr = document !== null && document !== undefined && document.documentElement !== null && document.documentElement !== undefined
+          ? document.documentElement.getAttribute("data-rdsh-device-mode")
+          : null;
+        if (attr === "mobile" || attr === "desktop") return attr;
+      } catch (error) {
+        /* a broken bootstrap is the same as an absent one */
+      }
+      return "desktop";
+    }
+
+    const DEVICE_MODE = readDeviceMode();
+
+    // Keep the DOM marker in step with the value this bundle will use. This is
+    // propagation of the host decision, not a second classifier.
+    try {
+      if (document !== null && document !== undefined && document.documentElement !== null && document.documentElement !== undefined) {
+        document.documentElement.setAttribute("data-rdsh-device-mode", DEVICE_MODE);
+      }
+    } catch (error) {
+      /* a document without documentElement only affects the CSS hook */
+    }
+
+    // Shared clipboard + toast
+    //
+    // Two surfaces copy text: the session menu (its id) and the right-panel
+    // file tree (a path or a name). Both use the same secure-context path and
+    // the same fallback, so there is one place where a failed clipboard is
+    // handled.
+    // ---------------------------------------------------------------------
+    const TOAST_HOST_ID = "rdsh-session-id-copy-toast";
+    const TOAST_ROOT_KEY = "__rdshSessionIdCopyToastRoot";
+
+    async function copyText(text) {
+      const clipboard =
+        typeof navigator === "object" && navigator !== null ? navigator.clipboard : undefined;
+      if (clipboard && typeof clipboard.writeText === "function") {
+        try {
+          await clipboard.writeText(text);
+          return true;
+        } catch (error) {
+          // Permission denied or no focus: use the selection fallback below.
+        }
+      }
+      let area;
+      try {
+        area = document.createElement("textarea");
+        area.value = text;
+        area.setAttribute("readonly", "");
+        area.style.position = "fixed";
+        area.style.top = "0";
+        area.style.left = "0";
+        area.style.width = "1px";
+        area.style.height = "1px";
+        area.style.opacity = "0";
+        document.body.appendChild(area);
+        area.focus();
+        area.select();
+        area.setSelectionRange(0, text.length);
+        return typeof document.execCommand === "function" && document.execCommand("copy") === true;
+      } catch (error) {
+        return false;
+      } finally {
+        area?.remove();
+      }
+    }
+
+    // One body portal, one root per page: a live reload must not stack roots.
+    function notify(text) {
+      try {
+        const React = require("react");
+        const primitives = require("@deepseek-ai/dsh-client-ui-primitives");
+        const { createRoot } = require("react-dom/client");
+        let host = document.getElementById(TOAST_HOST_ID);
+        if (host === null) {
+          host = document.createElement("div");
+          host.id = TOAST_HOST_ID;
+          document.body.appendChild(host);
+        }
+        const root = (window[TOAST_ROOT_KEY] = window[TOAST_ROOT_KEY] ?? createRoot(host));
+        root.render(
+          React.createElement(primitives.Toast, {
+            text,
+            tone: "success",
+            onDone: () => {
+              root.render(null);
+            },
+          }),
+        );
+      } catch (error) {
+        // The copy itself already succeeded; a missing toast is not fatal.
+      }
+    }
+
+    // ---------------------------------------------------------------------
     // dsh-mobile-maxxing — PWA shell: manifest, service worker, install prompt, notification transport.
     // ---------------------------------------------------------------------
     function pwaPart() {
@@ -130,13 +239,6 @@ window.__ModuleLoader__.load({
     const ROOT_ATTR = "data-dsh-mobile-maxxing";
     const UPDATE_POLL_MS = 30 * 60 * 1000;
     const UPDATE_MIN_GAP_MS = 5 * 60 * 1000;
-    // Phone layout, in one place for both halves of this file.
-    //
-    // The legacy contract is width-only: every window at or below 767px gets
-    // the phone layout, mounted app or not, mouse or finger. A landscape phone
-    // wider than that stays in the desktop layout, exactly as the reference
-    // build does.
-    const NARROW_QUERY = "(max-width: 767px)";
     const INSTALL_PROMPT_KEY = "dsh-mobile-maxxing:install-prompt-dismissed";
     const INSTALL_PROMPT_SNOOZE_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -154,9 +256,13 @@ window.__ModuleLoader__.load({
 
     function isIos() {
       const ua = navigator.userAgent || "";
-      if (/iPad|iPhone|iPod/.test(ua)) return true;
+      const platform = navigator.platform || "";
+      // A desktop-site iPhone keeps the Apple platform string while the UA
+      // turns into a Macintosh one. The host classifier trusts platform for
+      // the same reason; the install hint must not lose those devices.
+      if (/iPad|iPhone|iPod/.test(ua) || /iPad|iPhone|iPod/.test(platform)) return true;
       // iPadOS 13+ reports a desktop Mac UA; touch points give it away.
-      return navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
+      return platform === "MacIntel" && navigator.maxTouchPoints > 1;
     }
 
     const CSS = `
@@ -171,14 +277,13 @@ html[data-dsh-mobile-maxxing="standalone"] { overscroll-behavior-y: none; }
 html[data-dsh-mobile-maxxing="standalone"] body { overscroll-behavior-y: contain; }
 html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: calc(env(safe-area-inset-top, 0px) + 10px); }
 
-/* Phones: keep the toast column clear of the 64px sidebar header, and hang the
-   install card on the right so the logo (session list) stays tappable. */
-@media ${NARROW_QUERY} {
-  .dsh-mobile-maxxing-toasts { top: calc(env(safe-area-inset-top, 0px) + 8px); padding-top: 56px; }
-  .dsh-mobile-maxxing-install { align-self: flex-end; max-width: min(330px, calc(100vw - 24px)); flex-wrap: wrap; row-gap: 8px; }
-  .dsh-mobile-maxxing-install .dsh-mobile-maxxing-card-text { flex: 1 1 100%; }
-  .dsh-mobile-maxxing-install-actions { display: flex; gap: 8px; margin-left: auto; align-items: center; }
-}
+/* Mobile devices: keep the toast column clear of the 64px sidebar header, and
+   hang the install card on the right so the logo (session list) stays tappable.
+   This is a device-mode rule, not a width rule: a tablet at 1024px keeps it. */
+html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-toasts { top: calc(env(safe-area-inset-top, 0px) + 8px); padding-top: 56px; }
+html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install { align-self: flex-end; max-width: min(330px, calc(100vw - 24px)); flex-wrap: wrap; row-gap: 8px; }
+html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install .dsh-mobile-maxxing-card-text { flex: 1 1 100%; }
+html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { display: flex; gap: 8px; margin-left: auto; align-items: center; }
 
 .dsh-mobile-maxxing-toasts {
   position: fixed; top: 10px; left: 50%; transform: translateX(-50%);
@@ -272,7 +377,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       build: "",
       cache: "",
       ios: isIos(),
-      narrow: typeof window.matchMedia === "function" ? window.matchMedia(NARROW_QUERY).matches : false,
+      mode: DEVICE_MODE,
       secure: typeof window.isSecureContext === "boolean" ? window.isSecureContext : false,
       installing: false,
       installDismissed: false,
@@ -589,7 +694,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     /** The release banner: whether a compact install affordance belongs on screen. */
     function showInstallPrompt() {
       if (state.standalone || state.installDismissed) return false;
-      if (!state.narrow) return false;
+      if (state.mode !== "mobile") return false;
       if (!state.installable && !state.ios) return false;
       if (!onWelcomeScreen()) return false;
       return !installPromptSnoozed();
@@ -830,9 +935,6 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
 
         const modeQueries = [STANDALONE_QUERY, FULLSCREEN_QUERY, MINIMAL_QUERY].map((query) => window.matchMedia(query));
         for (const media of modeQueries) media.addEventListener("change", applyMode);
-        const narrowMedia = window.matchMedia(NARROW_QUERY);
-        const onNarrow = () => emit({ narrow: narrowMedia.matches });
-        narrowMedia.addEventListener("change", onNarrow);
 
         const onOnline = () => {
           emit({ offline: false });
@@ -878,6 +980,9 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
         globalThis.__RDSH_PWA__ = {
           get state() { return { ...state }; },
           get transitions() { return transitions.slice(); },
+          // Read-only diagnostic used by the regression that keeps the iOS
+          // A2HS hint when the device requested the desktop site.
+          showInstallPrompt,
           applyUpdate,
           checkForUpdate,
           promptInstall,
@@ -902,7 +1007,6 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
           renderedSignature = "";
           emit({ installDismissed: false });
           for (const media of modeQueries) media.removeEventListener("change", applyMode);
-          narrowMedia.removeEventListener("change", onNarrow);
           window.removeEventListener("online", onOnline);
           window.removeEventListener("offline", onOffline);
           window.removeEventListener("beforeinstallprompt", onBeforeInstall);
@@ -956,7 +1060,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
 
     // ---------------------------------------------------------------------
-    // rdsh-mobile-ux — phone-width UX: drawer, settings, composer, in-app banners.
+    // rdsh-mobile-ux — mobile-device UX: drawer, settings, composer, in-app banners.
     // ---------------------------------------------------------------------
     function mobilePart() {
 
@@ -988,9 +1092,9 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     const useState = React.useState;
     const useEffect = React.useEffect;
 
-    // The same width-only query as the PWA part. Both halves must agree or
-    // the shell and the layout disagree on where the phone begins.
-    const NARROW_QUERY = "(max-width: 767px)";
+    // ---------------------------------------------------------------------
+    // rdsh-mobile-ux — device-mode UX: drawer, settings, composer, in-app banners.
+    // ---------------------------------------------------------------------
     const HIDE_OVERRIDE_KEY = "rdsh-mobile-ux:hide-disabled";
     const HIDE_EXTRA_KEY = "rdsh-mobile-ux:hide-extra";
     const NOTIFY_DEVICE_TURNS_KEY = "rdsh-mobile-ux:notify-device-turns";
@@ -1016,18 +1120,15 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     const CONTEXT_PROBE = probeRegex("context", "i", "context");
 
     /**
-     * Controls that have no meaning inside an installed app on a phone.
+     * Controls that have no meaning inside an installed app on a mobile device.
      *
-     * This is the reference list, restored. It is applied only at phone width
-     * (<= 767px), so a wide desktop keeps every entry and a narrow window gets
-     * the same shell the legacy plugin produced. "Open configuration file" is
-     * an addition from the merged build: the host-side action also dead-ends
-     * in a phone browser.
+     * This is the reference list, restored. It is applied only when the host
+     * bootstrap selected mobile mode, so a desktop keeps every entry even in a
+     * narrow window. "Open configuration file" is an addition from the merged
+     * build: the host-side action also dead-ends in a mobile browser.
      */
     const HIDE_DEFAULT = [
       "Open configuration file",
-      "Open in Files",
-      "More ways to open",
       "More actions",
       "Feedback",
       "Sign in",
@@ -1035,17 +1136,36 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       "Desktop notifications",
       "Show coding view",
       "Built-in plugins",
-      // Bundled editors and file managers are desktop affordances; on a phone
-      // the tap only produces an error or a dead end.
-      "Open in Text Editor",
-      "Open in editor",
-      "Open in Explorer",
-      "Reveal in Finder",
     ];
+
+    /**
+     * Upstream's native "open in <app>" split button (#33).
+     *
+     * `@deepseek-ai/dsh-client-ui-open-in-app` marks the wrapper with
+     * `data-open-target` (directory|file) and its halves with
+     * `data-open-path-open` / `data-open-path-more`. The visible wording is the
+     * host app's own name ("Open in Chrome"), which is not in the shipped
+     * locales, so a label list can never catch it; the prominent half also has
+     * no aria-label at all. Hiding the wrapper is therefore the only complete
+     * match. It is a phone-only CSS rule, and it must not hide browser
+     * preview features (wrap, reload, the viewer picker) that live in the same
+     * header.
+     */
+    const OPEN_TARGET_SELECTOR = "[data-open-target]";
 
     // ---------------------------------------------------------------------
     // Store
     // ---------------------------------------------------------------------
+    /**
+     * Wrap code-review lines by default on a phone (#34).
+     *
+     * A code default, not a user setting: upstream owns the toggle and the
+     * only remembered choice is an explicit OFF on a surface (see
+     * `suppressReviewWrap`). Keeping this as a flag documents the decision
+     * without adding a second source of truth or a new settings row.
+     */
+    const REVIEW_WRAP_DEFAULT = true;
+
     /** Browser-local theme choice; also read while the store initialises. */
     const DEVICE_THEME_KEY = "dsh-mobile-maxxing:device-theme";
     const DEVICE_THEME_MODES = ["", "light", "dark", "system"];
@@ -1059,9 +1179,13 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     };
 
     const state = {
+      // Window geometry only: the Settings card reports it and responsive CSS
+      // uses it. It never selects the device mode.
       narrow: window.matchMedia(NARROW_QUERY).matches,
-      // The phone layout predicate (see `phone()`), kept in the store so the
-      // settings UI can decide which cards and rows apply.
+      // The device mode the host bootstrap fixed for this page (and the same
+      // value `phone()` returns), kept in the store so Settings can decide
+      // which cards and rows apply.
+      mode: DEVICE_MODE,
       phone: phone(),
       drawerOpen: false,
       hidden: [],
@@ -1102,16 +1226,17 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
 
     /**
-     * Is this device running the phone UI?
+     * Is this device running the mobile UI?
      *
-     * The legacy contract is the window width alone: at 767px or below, a
-     * mouse, a hardware keyboard, an installed app and a narrow desktop
-     * window all get the same layout, Enter handling, attachment hijack,
-     * settings tab merge and push ownership. A wide window stays stock even
-     * when its pointer is coarse; pointer kind does not widen the phone UI.
+     * This is the one value the host bootstrap fixed before the bundle ran:
+     * phones and tablets (including iPad's desktop-like UA) are `mobile`;
+     * ordinary PCs, Windows touch laptops and narrow desktop windows are
+     * `desktop`. Width, pointer kind, touch points and an installed-app
+     * display mode never change it. If the bootstrap is missing or invalid,
+     * the module already failed closed to desktop.
      */
     function phone() {
-      return narrow();
+      return DEVICE_MODE === "mobile";
     }
 
     function readEnterToSend() {
@@ -1234,6 +1359,9 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
 
     /** Undo every DOM write this override made. */
     function releaseDeviceTheme() {
+      // Invalidate a verification frame queued by applyDeviceTheme(): after a
+      // dispose it must not retry and repaint the palette.
+      deviceThemeCheck += 1;
       if (deviceThemeBaseline === null) return;
       const baseline = deviceThemeBaseline;
       deviceThemeBaseline = null;
@@ -1260,16 +1388,24 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
 
     /**
-     * Paint the stored per-device choice over the shared theme.
+     * Paint the stored per-device choice over the shared theme, in mobile mode.
      *
      * Called at boot, after every `theme/change` (one microtask later, so the
      * upstream presenter has already written) and when the UI changes the
-     * value. The result is checked on the next frame: if the palette attribute
-     * was reverted or the body colour did not move, the contract is not there
-     * and the override is abandoned for good.
+     * value. A desktop releases the override: #44 keeps upstream's palette
+     * there. The result is checked on the next frame:
+     * if the palette attribute was reverted or the body colour did not move,
+     * the contract is not there and the override is abandoned for good.
      */
     function applyDeviceTheme() {
       if (typeof document === "undefined" || document.body === null) return;
+      // #44: the per-device palette belongs to the mobile surface. A desktop
+      // paints upstream's palette from the shared setting, so a mobile choice
+      // made in this browser cannot change a desktop screenshot.
+      if (!phone()) {
+        releaseDeviceTheme();
+        return;
+      }
       if (deviceThemeBlocked) return;
       const mode = readDeviceTheme();
       const html = document.documentElement;
@@ -1361,29 +1497,43 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       }
       if (service === undefined || service === null) return;
       ctx.effect(() => {
+        // A disposed effect must ignore its own queued work. applyDeviceTheme
+        // schedules a frame and theme/change schedules a microtask; either can
+        // outlive the cleanup and repaint the phone palette after it was
+        // released.
+        let active = true;
         try {
           const snapshot = service.getTheme();
           if (snapshot !== undefined && snapshot !== null) deviceThemeSnapshot = snapshot;
         } catch (error) {
           deviceThemeSnapshot = null;
         }
-        applyDeviceTheme();
-        if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => applyDeviceTheme());
+        if (active) applyDeviceTheme();
+        if (typeof requestAnimationFrame === "function") {
+          requestAnimationFrame(() => {
+            if (active) applyDeviceTheme();
+          });
+        }
         let media = null;
         try {
           media = window.matchMedia("(prefers-color-scheme: dark)");
         } catch (error) {
           media = null;
         }
-        const onSystemScheme = () => applyDeviceTheme();
+        const onSystemScheme = () => {
+          if (active) applyDeviceTheme();
+        };
         media?.addEventListener?.("change", onSystemScheme);
         const offTheme = ctx.on("theme/change", (snapshot) => {
           if (snapshot !== undefined && snapshot !== null) deviceThemeSnapshot = snapshot;
           // The presenter applies synchronously inside its own listener; run
           // after every listener so the device choice is the one that stands.
-          queueMicrotask(applyDeviceTheme);
+          queueMicrotask(() => {
+            if (active) applyDeviceTheme();
+          });
         });
         return () => {
+          active = false;
           media?.removeEventListener?.("change", onSystemScheme);
           if (typeof offTheme === "function") offTheme();
           releaseDeviceTheme();
@@ -1431,8 +1581,25 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       });
     }
 
-    /** Publish the measured safe-area insets so fixed layers can inset too. */
+    /**
+     * Drop the safe-area measurements. `env()` is not width-dependent, so a
+     * wide iPad in standalone mode still reports insets; #44 keeps the root
+     * padding and the custom properties off a desktop viewport.
+     */
+    function releaseSafeArea() {
+      const root = document.documentElement;
+      for (const name of ["top", "bottom", "left", "right"]) root.removeAttribute(`data-rdsh-safe-${name}`);
+      root.removeAttribute("data-rdsh-native-gap");
+      root.style.removeProperty("--rdsh-safe-top");
+      root.style.removeProperty("--rdsh-safe-bottom");
+      root.style.removeProperty("--rdsh-native-gap-px");
+    }
+
     function measureSafeArea() {
+      if (!phone()) {
+        releaseSafeArea();
+        return;
+      }
       const probe = document.createElement("div");
       probe.style.cssText = "position:fixed;left:0;top:0;width:0;height:0;visibility:hidden;pointer-events:none;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);padding-left:env(safe-area-inset-left,0px);padding-right:env(safe-area-inset-right,0px)";
       document.body.append(probe);
@@ -1600,9 +1767,9 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     function applyHideList(disabled) {
       const labels = hideLabels();
       const hidden = new Set();
-      // The legacy hide list is a width rule, not a device rule: a narrow
-      // window gets it even with a mouse. A wide desktop keeps every control.
-      const hideOnThisDevice = !disabled && narrow();
+      // Hide the controls that dead-end on a mobile device. Desktop mode
+      // keeps every control, whatever the window width.
+      const hideOnThisDevice = !disabled && phone();
       for (const element of document.querySelectorAll("button[aria-label], [role='menuitem']")) {
         const label = labelOf(element);
         if (label === "" || label.length > 48) continue;
@@ -1614,9 +1781,9 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
         }
       }
       const modal = document.querySelector('[data-shortcut-modal="settings"]');
-      // The tab merge is the phone layout: `MobileSection` inlines the PWA and
-      // Input sections there, so the separate tabs vanish with them.
-      if (modal !== null && narrow()) {
+      // The tab merge belongs to mobile mode: `MobileSection` inlines the PWA
+      // and Input sections there, so the separate tabs vanish with them.
+      if (modal !== null && phone()) {
         for (const button of modal.querySelectorAll("nav button")) {
           const label = (button.textContent || "").trim();
           const merged = label === t("tab.pwa") || label === t("tab.input");
@@ -1735,6 +1902,13 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
 
     function decorateSessionRows() {
+      // #44: every session-row hook, including the colour frame, dresses the
+      // mobile sidebar. Desktop keeps upstream's rows untouched; the frame
+      // rule itself lives in the mobile stylesheet.
+      if (!phone()) {
+        if (rowHooksActive) clearSessionRowHooks();
+        return;
+      }
       rowHooksActive = true;
       for (const row of document.querySelectorAll('[data-row-key^="session:"]')) {
         row.setAttribute("data-rdsh-session", "");
@@ -1787,11 +1961,12 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     /**
      * Strip every session-row hook.
      *
-     * Reached when the window widens (or a rotation leaves the phone layout):
-     * the styling is inside the phone query, so the attributes are inert, but
-     * leaving them behind means a later narrow pass starts from another
+     * Reached from the desktop guard and from dispose: the styling lives in
+     * the mobile stylesheet, so a desktop never applies it, but leaving the
+     * attributes behind means a later mobile pass starts from another
      * layout's leftovers, and `[data-rdsh-running]` on a desktop row is a lie
-     * to anything that reads the DOM.
+     * to anything that reads the DOM. The colour frame is stripped here too:
+     * it is a mobile feature under #44.
      */
     function clearSessionRowHooks() {
       rowHooksActive = false;
@@ -1807,22 +1982,155 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
         if (element.hasAttribute("data-rdsh-session-title")) element.removeAttribute("data-rdsh-session-title");
         element.removeAttribute("data-rdsh-ringed");
       }
+      for (const row of document.querySelectorAll("[data-row-key^='session:']")) row.style.removeProperty("--rdsh-session-frame");
     }
 
     /**
-     * Strip the other phone-only hooks whose styling lives in the phone query.
+     * Every attribute the mobile surface writes onto DOM.
      *
-     * The typing overlay is painted above React's text with the real glyphs
-     * made transparent, so it has to go together with its attributes.
+     * Kept in one place so `clearPhoneHooks()` is exhaustive: a hook added to
+     * a decorate function without being listed here is caught by
+     * `tests/boundary-issues.test.mjs`, which walks the live DOM after dispose
+     * and a desktop boot. Device/PWA attributes are deliberately absent:
+     * `data-dsh-mobile-maxxing`, the notification diagnostics
+     * (`data-rdsh-badge-hook`, `-sessions-hook`, `-running-subagents`),
+     * `data-rdsh-notice-host` and the style markers. The safe-area attributes
+     * are listed: #44 keeps their root padding off a desktop even when a
+     * standalone iPad reports non-zero insets.
+     */
+    const PHONE_HOOKS = [
+      "data-rdsh-frame",
+      "data-rdsh-center-col",
+      "data-rdsh-rightbar-col",
+      "data-rdsh-sidebar",
+      "data-rdsh-drawer",
+      "data-rdsh-anim",
+      "data-rdsh-safe-top",
+      "data-rdsh-safe-bottom",
+      "data-rdsh-safe-left",
+      "data-rdsh-safe-right",
+      "data-rdsh-native-gap",
+      "data-rdsh-header",
+      "data-rdsh-crumbs",
+      "data-rdsh-conversation",
+      "data-rdsh-rightpanel",
+      "data-rdsh-rightpanel-open",
+      "data-rdsh-rtab",
+      "data-rdsh-code-pre",
+      "data-rdsh-code-scroll",
+      "data-rdsh-question-card",
+      "data-rdsh-question-frame",
+      "data-rdsh-question-tile",
+      "data-rdsh-question-arrow",
+      "data-rdsh-todo-item",
+      "data-rdsh-todo-text",
+      "data-rdsh-todo-status",
+      "data-rdsh-goal-objective",
+      "data-rdsh-goal-text",
+      "data-rdsh-goal-actions",
+      "data-rdsh-goal-editing",
+      "data-rdsh-header-title",
+      "data-rdsh-header-running",
+      "data-rdsh-typing",
+      "data-rdsh-typing-layer",
+      "data-rdsh-typing-caret",
+      "data-rdsh-toast",
+      "data-rdsh-toast-dismissed",
+      "data-rdsh-model-search",
+      "data-rdsh-model-search-row",
+      "data-rdsh-model-button",
+      "data-rdsh-settings-nav-arrow",
+      "data-rdsh-nav-scroll",
+      "data-rdsh-nav-tabclick",
+      "data-rdsh-fade-left",
+      "data-rdsh-fade-right",
+      "data-rdsh-options-observer",
+      "data-rdsh-stat-text",
+      "data-rdsh-composer-dock",
+      "data-rdsh-composer-root",
+      "data-rdsh-has-dock",
+      "data-rdsh-add",
+      "data-rdsh-hide-settings",
+      "data-rdsh-queue-dock",
+      "data-rdsh-queue-panel",
+      "data-rdsh-queue-row",
+      "data-rdsh-queue-index",
+      "data-rdsh-queue-preview",
+      "data-rdsh-queue-for",
+      "data-rdsh-queue-text",
+      "data-rdsh-workspace-menu",
+      "data-rdsh-workspace-viewport",
+      "data-rdsh-workspace-hidden",
+      "data-rdsh-workspace-search",
+      "data-rdsh-workspace-empty",
+      "data-rdsh-workspace-trigger",
+      "data-rdsh-activity-chip",
+      "data-rdsh-activity-spinner",
+      "data-rdsh-activity-icon",
+      "data-rdsh-activity-generated",
+      "data-rdsh-transcript",
+      "data-rdsh-transcript-column",
+      "data-rdsh-user-stack",
+      "data-rdsh-user-bubble",
+      "data-rdsh-edit-card",
+      "data-rdsh-edit-header",
+      "data-rdsh-edit-row",
+      "data-rdsh-scroll",
+      "data-rdsh-route-heading",
+      "data-rdsh-sidebar-toggle",
+      "data-rdsh-more-row",
+      "data-rdsh-settings-row",
+      "data-rdsh-settings-tab-hidden",
+      "data-rdsh-hidden",
+      "data-rdsh-setting-hidden",
+      "data-rdsh-lightbox",
+      "data-rdsh-crop-button",
+      "data-rdsh-crop-overlay",
+      "data-rdsh-swipe",
+      "data-rdsh-auto-fired",
+    ];
+
+    function clearOwnedAttribute(name) {
+      for (const element of document.querySelectorAll(`[${name}]`)) element.removeAttribute(name);
+    }
+
+    /**
+     * Strip the other mobile-only hooks whose styling lives in the mobile
+     * stylesheet.
+     *
+     * Also the single cleanup path for dispose and the defensive desktop boot.
+     * It restores what this module changed (attributes, injected nodes, inline
+     * styles, viewport meta, device palette) and leaves upstream's own state
+     * alone: no upstream attribute or style is touched unless this module wrote
+     * it first.
      */
     function clearPhoneHooks() {
+      // Nodes and listeners that are not recoverable from an attribute alone.
       closeQueueUi();
       clearWorkspacePicker();
-      for (const attribute of ["data-rdsh-header-title", "data-rdsh-header-running", "data-rdsh-typing", "data-rdsh-rtab", "data-rdsh-sidebar-toggle", "data-rdsh-route-heading"]) {
-        for (const element of document.querySelectorAll(`[${attribute}]`)) element.removeAttribute(attribute);
-      }
+      clearSettingsNavArrows();
+      closeDetailPopover();
+      closeFramePalette();
+      clearLightboxHooks();
+      closeCropOverlay();
+      clearDetailPanelHooks();
+      clearQuestionArrows();
+      clearModelSearch();
+      clearActivityChips();
+      clearPreviewTools();
+      clearComposerHooks();
+      clearTypingAnimations();
+      removeDrawerNodes();
+      // Inline styles this module wrote onto upstream nodes.
+      clearQueueDockHooks();
+      clearToastHooks();
       for (const layer of document.querySelectorAll("[data-rdsh-typing-layer]")) layer.remove();
+      for (const attribute of PHONE_HOOKS) clearOwnedAttribute(attribute);
       clearSessionRowHooks();
+      releaseSafeArea();
+      releaseViewportLock();
+      releaseDeviceTheme();
+      clearTerminalFit();
     }
 
     function decorateEditCards() {
@@ -1831,6 +2139,9 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
         element.removeAttribute("data-rdsh-edit-header");
         element.removeAttribute("data-rdsh-edit-row");
       }
+      // The tighter edit summary is a mobile layout rule; the scan itself is
+      // expensive, so desktop only clears what a previous pass wrote.
+      if (!phone()) return;
       for (const element of document.querySelectorAll("span, div")) {
         if (element.children.length !== 0) continue;
         if (!/^Edited \d+ files?$/.test((element.textContent || "").trim())) continue;
@@ -1889,6 +2200,8 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
           && panel.getBoundingClientRect().width > 0;
       }
       document.documentElement.toggleAttribute("data-rdsh-rightpanel-open", open);
+      if (open) scheduleTerminalFit();
+      else clearTerminalFit();
     }
 
     function watchRightPanel(panel) {
@@ -1909,7 +2222,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
      *
      * The panel node is replaced when the route or the pane changes, and the
      * old tag has to go with it: two tagged nodes at once apply the panel's
-     * phone layout (max-width, overflow, padding) to the whole app.
+     * mobile layout (max-width, overflow, padding) to the whole app.
      */
     function forgetRightPanel() {
       for (const node of document.querySelectorAll("[data-rdsh-rightpanel]")) node.removeAttribute("data-rdsh-rightpanel");
@@ -1946,7 +2259,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
 
     function ensureRightPanelFits() {
-      if (!narrow()) {
+      if (!phone()) {
         rightPanelFitPending = false;
         return;
       }
@@ -1971,6 +2284,11 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
      * keys off this attribute so a long line cannot be panned sideways.
      */
     function decorateCodePreview() {
+      if (!phone()) {
+        clearOwnedAttribute("data-rdsh-code-pre");
+        clearOwnedAttribute("data-rdsh-code-scroll");
+        return;
+      }
       for (const pre of document.querySelectorAll("[data-rdsh-rightpanel] [data-textpreview-body] pre:not([data-rdsh-code-pre])")) {
         pre.setAttribute("data-rdsh-code-pre", "");
         let node = pre.parentElement;
@@ -1985,7 +2303,496 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       }
     }
 
+    // ---------------------------------------------------------------------
+    // #34 / #35: review wrap default and the phone preview kebab
+    //
+    // Both features own only their `data-rdsh-*` hooks and only act inside the
+    // right panel. The upstream surfaces are matched through attributes
+    // (`data-changes-review`, `data-textpreview-*`), never through a hashed
+    // class. A wide desktop never gets a node, an attribute or a style from
+    // this section: decoration creates the kebab only in the phone query, and
+    // `clearPhoneHooks` takes everything down when the window widens.
+    // ---------------------------------------------------------------------
+
+    /** True only while a user (not this plugin) changed a review wrap toggle. */
+    let reviewWrapProbeTimer = 0;
+    /** Auto-fired / opted-out surfaces; pane ids survive a rerender of the root. */
+    let reviewWrapAutoFired = new WeakSet();
+    let reviewWrapUserOff = new WeakSet();
+    /** root -> surface key marked auto-fired; a new root is a new surface. */
+    let reviewWrapAutoRootKeys = new WeakMap();
+    const reviewWrapUserOffKeys = new Set();
+
+    /** The stable piece of a review surface: its dockkit pane, else its file. */
+    function reviewSurfaceKey(root) {
+      const pane = root.closest?.("[data-dockkit-pane]");
+      const paneId = pane === null || pane === undefined ? null : pane.getAttribute("data-dockkit-pane");
+      if (paneId !== null && paneId !== "") {
+        // dockkit gives every tab an id and only the active pane's active tab
+        // is laid out, so this identifies the review tab across rerenders.
+        const tab = pane.querySelector?.('[data-dockkit-tab][aria-selected="true"]');
+        const tabId = tab === null || tab === undefined ? null : tab.getAttribute("data-dockkit-tab");
+        if (tabId !== null && tabId !== "") return `pane:${paneId}:tab:${tabId}`;
+        return `pane:${paneId}`;
+      }
+      const file = root.querySelector?.("[data-review-file]");
+      const path = file === null || file === undefined ? null : file.getAttribute("data-review-file");
+      if (path !== null && path !== "") return `file:${path}`;
+      return "";
+    }
+
+    function reviewWrapIsOff(root) {
+      // Keyed surfaces must decide by the pane/tab key only. React reuses the
+      // root when the pane switches tabs; a root-level OFF from tab A would
+      // otherwise block tab B's default. Keyless surfaces fall back to root.
+      const key = reviewSurfaceKey(root);
+      if (key !== "") return reviewWrapUserOffKeys.has(key);
+      return reviewWrapUserOff.has(root);
+    }
+
+    function reviewWrapAutoDone(root) {
+      const key = reviewSurfaceKey(root);
+      // The pair, not the tab key alone: React reuses the root when switching
+      // tabs (new key must get its own default), and a remount creates a new
+      // root (a new surface with no user choice gets the default again).
+      if (reviewWrapAutoRootKeys.has(root)) return reviewWrapAutoRootKeys.get(root) === key;
+      if (key === "") return root.getAttribute("data-rdsh-review-auto") === "1";
+      return false;
+    }
+
+    function markReviewWrapAuto(root) {
+      const key = reviewSurfaceKey(root);
+      reviewWrapAutoRootKeys.set(root, key);
+      if (key !== "") return;
+      // Only keyless surfaces need a DOM marker, and only their own wrapper:
+      // there is no tab identity to keep the two apart otherwise.
+      reviewWrapAutoFired.add(root);
+      // A desktop click is remembered, but the mobile hooks are not painted
+      // in desktop mode (the 390px desktop must stay untouched).
+      if (!phone()) return;
+      root.setAttribute("data-rdsh-review-auto", "1");
+    }
+
+    function suppressReviewWrap(root) {
+      reviewWrapUserOff.add(root);
+      const key = reviewSurfaceKey(root);
+      if (key !== "") reviewWrapUserOffKeys.add(key);
+      if (phone()) root.setAttribute("data-rdsh-review-off", "");
+      markReviewWrapAuto(root);
+    }
+
+    function allowReviewWrap(root) {
+      reviewWrapUserOff.delete(root);
+      const key = reviewSurfaceKey(root);
+      if (key !== "") reviewWrapUserOffKeys.delete(key);
+      if (phone()) root.removeAttribute("data-rdsh-review-off");
+      markReviewWrapAuto(root);
+    }
+
+    /**
+     * Turn wrap on once per review surface, through upstream's own button.
+     *
+     * Clicking the real `[data-review-tool="wrap"]` is what makes upstream
+     * render the wrapped layout; forcing CSS alone leaves the side-by-side
+     * grid (and its horizontal travel) in place. A user who turns it off wins:
+     * the surface (pane id, else file path) is remembered for this page and is
+     * never clicked again, including after React replaces the review root.
+     *
+     * Upstream side effect, stated in the PR: with wrap on, the diff falls back
+     * from side-by-side to the unified row layout. This plugin never clicks the
+     * split toggle, so a reader who wants both columns turns wrap off and that
+     * choice stays off for the surface.
+     */
+    function decorateReviewWrap() {
+      if (!phone() || REVIEW_WRAP_DEFAULT !== true) return;
+      for (const root of document.querySelectorAll("[data-rdsh-rightpanel] [data-changes-review]")) {
+        const toggle = root.querySelector('[data-review-tool="wrap"]');
+        root.setAttribute("data-rdsh-review", "");
+        if (toggle === null) continue;
+        if (toggle.disabled === true) continue;
+        if (toggle.getAttribute("aria-pressed") === "true") root.setAttribute("data-rdsh-review-wrap", "");
+        else root.removeAttribute("data-rdsh-review-wrap");
+        const pressed = toggle.getAttribute("aria-pressed") === "true";
+        // An explicit user OFF wins; see noteReviewWrapClick.
+        if (reviewWrapIsOff(root)) {
+          root.setAttribute("data-rdsh-review-off", "");
+          continue;
+        }
+        // A reused root can still carry the previous tab's OFF attribute; the
+        // key decides, so drop the stale hook before applying tab B's default.
+        root.removeAttribute("data-rdsh-review-off");
+        if (pressed) {
+          if (!reviewWrapAutoDone(root)) markReviewWrapAuto(root);
+          continue;
+        }
+        if (reviewWrapAutoDone(root)) continue;
+        markReviewWrapAuto(root);
+        toggle.click();
+      }
+    }
+
+    /**
+     * Remember a real user's wrap choice after React has committed the toggle.
+     *
+     * `HTMLElement.click()` from this plugin produces an untrusted event, so an
+     * explicit OFF (untrusted === false) can never be mistaken for our own
+     * default-on click. The check runs after the upstream handler so the new
+     * `aria-pressed` is the source of truth.
+     */
+    function noteReviewWrapClick(event) {
+      if (event.isTrusted !== true) return;
+      const toggle = event.target.closest?.('[data-review-tool="wrap"]');
+      if (toggle === null || toggle === undefined) return;
+      const root = toggle.closest("[data-changes-review]");
+      if (root === null) return;
+      const pane = root.closest("[data-dockkit-pane]");
+      clearTimeout(reviewWrapProbeTimer);
+      reviewWrapProbeTimer = setTimeout(() => {
+        const liveRoot = pane !== null && pane.isConnected ? pane.querySelector("[data-changes-review]") : root;
+        if (liveRoot === null || liveRoot.isConnected !== true) return;
+        const current = liveRoot.querySelector('[data-review-tool="wrap"]');
+        if (current === null) return;
+        if (current.getAttribute("aria-pressed") === "true") allowReviewWrap(liveRoot);
+        else suppressReviewWrap(liveRoot);
+        scheduleDecorate();
+      }, 0);
+    }
+
+    /** The preview menu currently owned by the kebab (null when closed). */
+    let previewMenu = null;
+    let previewMenuAnchor = null;
+    let previewMenuHeader = null;
+    let previewMenuDismiss = null;
+    let previewMenuSignature = "";
+    let previewMenuSeq = 0;
+
+    /**
+     * The header that owns a text preview: the path's direct parent, and only
+     * when it also carries Reload. Climbing further could mistake a container
+     * holding several previews for one header.
+     */
+    function previewHeaderOf(path) {
+      const header = path.parentElement;
+      if (header === null || header === document.body) return null;
+      return header.querySelector?.('[data-textpreview-tool="reload"]') !== null && header.querySelector?.('[data-textpreview-tool="reload"]') !== undefined
+        ? header
+        : null;
+    }
+
+    function previewActionLabel(button) {
+      const aria = button.getAttribute("aria-label");
+      if (aria !== null && aria.trim() !== "") return aria.trim();
+      const title = button.getAttribute("title");
+      if (title !== null && title.trim() !== "") return title.trim();
+      return (button.textContent || "").trim().replace(/\s+/g, " ");
+    }
+
+    /**
+     * Buttons the kebab may offer.
+     *
+     * The path and the viewer picker stay in the header (the picker renders
+     * the current renderer's name and its upstream Menu is anchored to the
+     * visible button). Wrap is excluded on purpose: the phone stylesheet
+     * already forces text previews to wrap, so the stock toggle is hidden by
+     * the same query and would be a dead control. `#33`'s native open targets
+     * and upstream's deliberately-hidden auto-refresh stay out too.
+     */
+    function previewSecondaryButtons(header) {
+      return [...header.querySelectorAll("button")].filter((button) => {
+        if (button.hasAttribute("data-rdsh-preview-kebab")) return false;
+        if (button.hasAttribute("data-document-viewer-menu")) return false;
+        if (button.getAttribute("data-textpreview-tool") === "wrap") return false;
+        if (button.closest("[hidden]") !== null) return false;
+        if (button.closest(OPEN_TARGET_SELECTOR) !== null) return false;
+        return previewActionLabel(button) !== "";
+      });
+    }
+
+    function previewMenuSignatureOf(header) {
+      return previewSecondaryButtons(header)
+        .map((button) => `${previewActionLabel(button)}:${button.disabled === true ? "1" : "0"}:${button.getAttribute("aria-pressed") ?? ""}`)
+        .join("|");
+    }
+
+    function closePreviewMenu({ restore = false } = {}) {
+      if (previewMenu === null) return false;
+      const menu = previewMenu;
+      const anchor = previewMenuAnchor;
+      menu.remove();
+      if (previewMenuDismiss !== null) {
+        document.removeEventListener("pointerdown", previewMenuDismiss.pointer, true);
+        document.removeEventListener("keydown", previewMenuDismiss.key, true);
+        window.removeEventListener("resize", previewMenuDismiss.resize);
+        previewMenuDismiss = null;
+      }
+      anchor?.setAttribute("aria-expanded", "false");
+      anchor?.removeAttribute("aria-controls");
+      previewMenu = null;
+      previewMenuAnchor = null;
+      previewMenuHeader = null;
+      previewMenuSignature = "";
+      if (restore && anchor !== null && anchor !== undefined && anchor.isConnected) anchor.focus({ preventScroll: true });
+      return true;
+    }
+
+    function livePreviewAction(header, button) {
+      if (header.isConnected !== true) return null;
+      // Resolve by the visible label first: a rerender may reuse an action id
+      // for a different control, and calling the wrong one is worse than not
+      // finding it. The id remains a fallback for an unlabelled icon button.
+      const label = previewActionLabel(button);
+      const byLabel = previewSecondaryButtons(header).find((entry) => previewActionLabel(entry) === label);
+      if (byLabel !== undefined) return byLabel;
+      const id = button.getAttribute("data-rdsh-preview-action");
+      if (id === null) return null;
+      return header.querySelector(`[data-rdsh-preview-action="${cssValue(id)}"]`);
+    }
+
+    function focusPreviewMenuItem(index) {
+      if (previewMenu === null) return;
+      const items = [...previewMenu.querySelectorAll('[role="menuitem"]')].filter((item) => item.disabled !== true);
+      if (items.length === 0) return;
+      const at = Math.max(0, Math.min(items.length - 1, index));
+      items[at].focus({ preventScroll: true });
+    }
+
+    function onPreviewMenuKey(event) {
+      if (previewMenu === null) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        closePreviewMenu({ restore: true });
+        return;
+      }
+      const active = document.activeElement;
+      if (active === null || !previewMenu.contains(active)) return;
+      const items = [...previewMenu.querySelectorAll('[role="menuitem"]')].filter((item) => item.disabled !== true);
+      if (items.length === 0) return;
+      const at = items.indexOf(active);
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        focusPreviewMenuItem(at < 0 ? 0 : (at + 1) % items.length);
+      } else if (event.key === "ArrowUp") {
+        event.preventDefault();
+        focusPreviewMenuItem(at < 0 ? items.length - 1 : (at - 1 + items.length) % items.length);
+      } else if (event.key === "Home") {
+        event.preventDefault();
+        focusPreviewMenuItem(0);
+      } else if (event.key === "End") {
+        event.preventDefault();
+        focusPreviewMenuItem(items.length - 1);
+      } else if (event.key === "Tab") {
+        // Let the browser move focus, but do not leave a floating menu behind.
+        closePreviewMenu({ restore: false });
+      }
+    }
+
+    function openPreviewMenu(header, kebab, focusLast = false) {
+      closePreviewMenu();
+      const buttons = previewSecondaryButtons(header);
+      if (buttons.length === 0) return false;
+      const menu = document.createElement("div");
+      menu.className = "rdsh-mux-preview-menu";
+      menu.setAttribute("role", "menu");
+      menu.setAttribute("aria-label", t("mux.preview.menu"));
+      menu.setAttribute("data-rdsh-preview-menu", "");
+      menu.id = `rdsh-preview-menu-${++previewMenuSeq}`;
+      for (const button of buttons) {
+        const item = document.createElement("button");
+        item.type = "button";
+        item.setAttribute("role", "menuitem");
+        item.setAttribute("tabindex", "-1");
+        item.textContent = previewActionLabel(button);
+        item.disabled = button.disabled === true;
+        if (item.disabled) item.setAttribute("aria-disabled", "true");
+        item.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const live = livePreviewAction(header, button);
+          closePreviewMenu({ restore: true });
+          if (live !== null && live.disabled !== true) live.click();
+        });
+        menu.append(item);
+      }
+      // The listener is registered before the menu is shown so a tap on the
+      // very next frame cannot miss it; closing removes both listeners.
+      const dismiss = (event) => {
+        if (previewMenu?.contains(event.target)) return;
+        if (previewMenuAnchor?.contains(event.target)) return;
+        closePreviewMenu({ restore: false });
+      };
+      const key = (event) => onPreviewMenuKey(event);
+      const resize = () => closePreviewMenu({ restore: false });
+      previewMenu = menu;
+      previewMenuAnchor = kebab;
+      previewMenuHeader = header;
+      previewMenuSignature = previewMenuSignatureOf(header);
+      previewMenuDismiss = { pointer: dismiss, key, resize };
+      document.addEventListener("pointerdown", dismiss, true);
+      document.addEventListener("keydown", key, true);
+      window.addEventListener("resize", resize);
+      document.body.append(menu);
+      const rect = kebab.getBoundingClientRect();
+      const width = Math.min(240, window.innerWidth - 24);
+      menu.style.width = `${width}px`;
+      menu.style.left = `${Math.round(Math.max(12, Math.min(rect.right - width, window.innerWidth - width - 12)))}px`;
+      const height = menu.getBoundingClientRect().height;
+      let top = rect.bottom + 6;
+      if (top + height > window.innerHeight - 12) top = Math.max(12, rect.top - height - 6);
+      menu.style.top = `${Math.round(top)}px`;
+      kebab.setAttribute("aria-expanded", "true");
+      kebab.setAttribute("aria-controls", menu.id);
+      const enabled = [...menu.querySelectorAll('[role="menuitem"]')].filter((item) => item.disabled !== true);
+      const target = focusLast ? enabled[enabled.length - 1] : enabled[0];
+      target?.focus({ preventScroll: true });
+      return true;
+    }
+
+    function togglePreviewMenu(header, kebab) {
+      if (previewMenu !== null && previewMenuAnchor === kebab) {
+        closePreviewMenu({ restore: true });
+        return;
+      }
+      openPreviewMenu(header, kebab);
+    }
+
+    /**
+     * Keep an open menu in step with upstream instead of closing it.
+     *
+     * A rerender can disable a control (busy reload) or relabel it; mirroring
+     * that into the existing items preserves focus and avoids a menu that
+     * disappears under the user's finger. A changed item count (a new action
+     * appeared) cannot be mapped safely, so that case closes the menu.
+     */
+    function refreshPreviewMenuItems() {
+      if (previewMenu === null || previewMenuHeader === null) return false;
+      const buttons = previewSecondaryButtons(previewMenuHeader);
+      const items = [...previewMenu.querySelectorAll('[role="menuitem"]')];
+      if (items.length !== buttons.length) return false;
+      for (let index = 0; index < items.length; index += 1) {
+        const button = buttons[index];
+        const item = items[index];
+        item.textContent = previewActionLabel(button);
+        const disabled = button.disabled === true;
+        item.disabled = disabled;
+        if (disabled) item.setAttribute("aria-disabled", "true");
+        else item.removeAttribute("aria-disabled");
+      }
+      return true;
+    }
+
+    function ensurePreviewKebab(header) {
+      let kebab = [...header.children].find((child) => child.hasAttribute?.("data-rdsh-preview-kebab"));
+      if (kebab !== undefined) return kebab;
+      kebab = document.createElement("button");
+      kebab.type = "button";
+      kebab.className = "rdsh-mux-preview-kebab";
+      kebab.setAttribute("data-rdsh-preview-kebab", "");
+      kebab.setAttribute("aria-label", t("mux.preview.more"));
+      kebab.setAttribute("aria-haspopup", "menu");
+      kebab.setAttribute("aria-expanded", "false");
+      kebab.innerHTML = '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><circle cx="3" cy="8" r="1.4"/><circle cx="8" cy="8" r="1.4"/><circle cx="13" cy="8" r="1.4"/></svg>';
+      kebab.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        togglePreviewMenu(header, kebab);
+      });
+      kebab.addEventListener("keydown", (event) => {
+        if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+        event.preventDefault();
+        // The same keydown bubbles to the document handler; without this the
+        // just-opened menu would immediately advance one extra item.
+        event.stopPropagation();
+        openPreviewMenu(header, kebab, event.key === "ArrowUp");
+      });
+      header.append(kebab);
+      return kebab;
+    }
+
+    /** Tag headers, refresh moved actions and close a menu that went stale. */
+    function decoratePreviewTools() {
+      if (!phone()) {
+        clearPreviewTools();
+        return;
+      }
+      const seenHeaders = new Set();
+      for (const path of document.querySelectorAll("[data-rdsh-rightpanel] [data-textpreview-path]")) {
+        const header = previewHeaderOf(path);
+        if (header === null) continue;
+        seenHeaders.add(header);
+        header.setAttribute("data-rdsh-preview-header", "");
+        // Recompute the moved set every pass: a changed file can add or remove
+        // an upstream action in the same header.
+        const secondary = new Set(previewSecondaryButtons(header));
+        for (const old of header.querySelectorAll("[data-rdsh-preview-secondary]")) {
+          if (!secondary.has(old)) {
+            old.removeAttribute("data-rdsh-preview-secondary");
+            old.removeAttribute("data-rdsh-preview-action");
+          }
+        }
+        let index = 0;
+        for (const button of secondary) {
+          button.setAttribute("data-rdsh-preview-secondary", "");
+          button.setAttribute("data-rdsh-preview-action", String(index++));
+        }
+        ensurePreviewKebab(header);
+      }
+      if (previewMenu !== null) {
+        const alive = seenHeaders.has(previewMenuHeader)
+          && previewMenuAnchor?.isConnected === true
+          && previewMenuHeader.contains(previewMenuAnchor);
+        if (!alive) {
+          closePreviewMenu({ restore: false });
+        } else {
+          const signature = previewMenuSignatureOf(previewMenuHeader);
+          if (signature !== previewMenuSignature) {
+            if (refreshPreviewMenuItems()) previewMenuSignature = signature;
+            else closePreviewMenu({ restore: false });
+          }
+        }
+      }
+      decorateReviewWrap();
+    }
+
+    /**
+     * Remove every node, attribute and listener this section owns.
+     *
+     * Deliberately leaves the per-surface memory alone: a user's explicit OFF
+     * must survive a phone -> desktop -> phone round trip. Only dispose clears
+     * that memory.
+     */
+    function clearPreviewTools() {
+      closePreviewMenu();
+      for (const attribute of ["data-rdsh-preview-header", "data-rdsh-preview-secondary", "data-rdsh-preview-action", "data-rdsh-review", "data-rdsh-review-wrap", "data-rdsh-review-auto", "data-rdsh-review-off"]) {
+        for (const element of document.querySelectorAll(`[${attribute}]`)) element.removeAttribute(attribute);
+      }
+      for (const node of document.querySelectorAll("[data-rdsh-preview-kebab]")) node.remove();
+      // An auto-fired surface is not a user choice: after a width round trip a
+      // remounted review should get the default once again. An explicit OFF is
+      // different and stays in `reviewWrapUserOff*` until dispose.
+      reviewWrapAutoFired = new WeakSet();
+      reviewWrapAutoRootKeys = new WeakMap();
+    }
+
+    /** Full teardown: DOM plus the in-memory choices (boot dispose only). */
+    function disposePreviewTools() {
+      clearPreviewTools();
+      clearTimeout(reviewWrapProbeTimer);
+      reviewWrapProbeTimer = 0;
+      reviewWrapAutoFired = new WeakSet();
+      reviewWrapUserOff = new WeakSet();
+      reviewWrapAutoRootKeys = new WeakMap();
+      reviewWrapUserOffKeys.clear();
+    }
+
     function decorateRightPanel() {
+      // #44: the panel hooks and the open marker belong to mobile mode.
+      // Desktop drops the observer and both attributes instead of keeping a
+      // stale state that #46's stacking rule could apply there.
+      if (!phone()) {
+        forgetRightPanel();
+        return;
+      }
       const collapse = visibleCollapseButton();
       if (collapse === null) {
         // No laid-out panel anywhere: close the state instead of keeping the
@@ -2025,7 +2832,10 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
      * lives in the pointer handlers below and keys off the same attribute.
      */
     function decorateRightPanelTabs() {
-      if (!narrow()) return;
+      if (!phone()) {
+        clearOwnedAttribute("data-rdsh-rtab");
+        return;
+      }
       for (const tab of document.querySelectorAll('[data-rdsh-rightpanel] [role="tab"][data-dockkit-tab]')) {
         tab.setAttribute("data-rdsh-rtab", "");
       }
@@ -2033,24 +2843,21 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
 
     /** The plugin context, kept so the session projection can be looked up. */
     let hostCtx = null;
-    let sessionsApi;
-    let sessionsApiResolved = false;
-
-    /** `sessions` is an optional service: resolving it lazily means a late
-     *  provider still works, and an absent one only costs the used/max text. */
-    function sessionsService() {
-      if (!sessionsApiResolved && hostCtx !== null) {
-        try {
-          const service = typeof hostCtx.get === "function" ? hostCtx.get("sessions") : undefined;
-          if (service !== undefined && service !== null) {
-            sessionsApi = service;
-            sessionsApiResolved = true;
-          }
-        } catch (error) {
-          // Not provided in this profile: keep showing the percentage alone.
-        }
+    /** An optional service, without cordis' absent-service property throw. */
+    function optionalService(name) {
+      if (hostCtx === null || typeof hostCtx.get !== "function") return null;
+      try {
+        return hostCtx.get(name) ?? null;
+      } catch (error) {
+        return null;
       }
-      return sessionsApi;
+    }
+
+    /** `sessions` is optional: resolving it per call keeps a late provider and
+     *  a replaced client generation working, and an absent one only costs the
+     *  used/max text. */
+    function sessionsService() {
+      return optionalService("sessions");
     }
 
     /** Mirrors the upstream `formatTokens` so the dock and the panel agree. */
@@ -2062,6 +2869,43 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
 
     /**
+     * The `contextPressure` projection, from the public Session list snapshot.
+     *
+     * `ClientSessions.projectionValues()` is a private manager method: calling
+     * it on the service threw a TypeError, so the dock never had figures. The
+     * list snapshot carries the same finished values the upstream
+     * `useProjection("contextPressure")` seat reads — `byId[id].projectionValues`
+     * is the documented row face, and `projectionsBySession[id].values` is the
+     * same value for a row whose summary hint has not landed yet.
+     */
+    function contextPressureOf(sessions, sessionId) {
+      try {
+        const snapshot = typeof sessions.list?.getSnapshot === "function" ? sessions.list.getSnapshot() : null;
+        if (snapshot === null || typeof snapshot !== "object") return null;
+        const hint = snapshot.byId?.[sessionId]?.projectionValues?.contextPressure;
+        if (hint !== null && hint !== undefined && typeof hint === "object") return hint;
+        const values = snapshot.projectionsBySession?.[sessionId]?.values?.contextPressure;
+        return values !== null && values !== undefined && typeof values === "object" ? values : null;
+      } catch (error) {
+        return null;
+      }
+    }
+
+    /** Ask the host once per Session for a projection the list has not carried. */
+    let contextRefreshFor = null;
+    function requestContextRefresh(sessions, sessionId) {
+      if (contextRefreshFor === sessionId) return;
+      contextRefreshFor = sessionId;
+      if (typeof sessions.refreshProjections !== "function") return;
+      try {
+        const pending = sessions.refreshProjections(sessionId);
+        if (pending !== null && typeof pending?.catch === "function") pending.catch(() => {});
+      } catch (error) {
+        /* older client: the percentage alone is still correct */
+      }
+    }
+
+    /**
      * "12.3K/1M" for the context meter, read from the Session projection.
      *
      * The panel that shows these figures is only mounted while it is open, so
@@ -2070,21 +2914,23 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
      * `*_panel` CSS, any other dialog) on every update. The projection carries
      * the same numbers without touching the DOM; when it is missing the dock
      * falls back to the percentage that the button's aria-label already has.
+     *
+     * The numerator is the same pair upstream's `contextOccupancy` uses: the
+     * provider-anchored `pressureTokens` plus the heuristic reprice of what the
+     * surface gained since that sample. `contextWindow` is the route capacity.
      */
-    function contextUsageText() {
+    function contextUsageText(sessionId = decoratedSessionId()) {
       const sessions = sessionsService();
-      const sessionId = currentSessionId;
-      if (sessions === null || sessions === undefined || sessionId === null) return "";
-      try {
-        const pressure = sessions.projectionValues(sessionId)?.contextPressure;
-        if (pressure === null || typeof pressure !== "object") return "";
-        const used = pressure.projectedTokens ?? pressure.pressureTokens;
-        const window = pressure.contextWindow;
-        if (typeof used !== "number" || typeof window !== "number" || !(window > 0)) return "";
-        return `${formatTokenCount(used)}/${formatTokenCount(window)}`;
-      } catch (error) {
+      if (sessions === null || sessions === undefined || sessionId === null || sessionId === undefined) return "";
+      const pressure = contextPressureOf(sessions, sessionId);
+      if (pressure === null) {
+        requestContextRefresh(sessions, sessionId);
         return "";
       }
+      const used = pressure.projectedTokens ?? pressure.pressureTokens;
+      const window = pressure.contextWindow;
+      if (typeof used !== "number" || typeof window !== "number" || !(window > 0)) return "";
+      return `${formatTokenCount(used)}/${formatTokenCount(window)}`;
     }
 
     let settingsArrows = null;
@@ -2095,7 +2941,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
      *  is the visible "flick" on iOS. */
     function observeSettingsOptions(modal) {
       const options = modal.querySelector('[class*="VOzbGW_options"]');
-      if (options === null || options.hasAttribute("data-rdsh-options-observer")) return;
+      if (options === null || options.hasAttribute("data-rdsh-options-observer")) return null;
       options.setAttribute("data-rdsh-options-observer", "");
       const observer = new MutationObserver(() => {
         if (!settingsTabResetPending) return;
@@ -2103,6 +2949,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
         if (options.scrollTop !== 0) options.scrollTop = 0;
       });
       observer.observe(options, { childList: true, subtree: true });
+      return observer;
     }
 
     function settingsNavList() {
@@ -2140,12 +2987,33 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       list.toggleAttribute("data-rdsh-fade-right", canRight);
     }
 
-    function installSettingsNavArrows() {
-      if (!narrow()) {
-        if (settingsArrows !== null) {
-          settingsArrows.left.hidden = true;
-          settingsArrows.right.hidden = true;
+    /**
+     * Remove the settings arrows and every listener/observer that came with
+     * them. Reached on dispose and the defensive desktop boot, so a desktop
+     * gets neither the nodes nor a listener that keeps scrolling an invisible list.
+     */
+    function clearSettingsNavArrows() {
+      const state = settingsArrows;
+      if (state === null) return;
+      settingsArrows = null;
+      state.observer?.disconnect();
+      if (state.list !== null) {
+        if (state.scrollHandler !== null) state.list.removeEventListener("scroll", state.scrollHandler);
+        if (state.tabHandler !== null) state.list.removeEventListener("click", state.tabHandler, true);
+        for (const attribute of ["data-rdsh-nav-scroll", "data-rdsh-nav-tabclick", "data-rdsh-fade-left", "data-rdsh-fade-right"]) {
+          state.list.removeAttribute(attribute);
         }
+      }
+      for (const modal of document.querySelectorAll('[data-shortcut-modal="settings"]')) {
+        for (const options of modal.querySelectorAll("[data-rdsh-options-observer]")) options.removeAttribute("data-rdsh-options-observer");
+      }
+      state.left.remove();
+      state.right.remove();
+    }
+
+    function installSettingsNavArrows() {
+      if (!phone()) {
+        clearSettingsNavArrows();
         return;
       }
       const found = settingsNavList();
@@ -2174,26 +3042,42 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
           document.body.append(button);
           return button;
         };
-        settingsArrows = { left: make("left"), right: make("right"), list: found.list, modal: found.modal };
+        settingsArrows = {
+          left: make("left"),
+          right: make("right"),
+          list: null,
+          modal: null,
+          observer: null,
+          scrollHandler: null,
+          tabHandler: null,
+        };
       }
       const { list, modal } = found;
       if (settingsArrows.list !== list) {
+        // The previous modal/list is gone: its observer and listeners must go
+        // with it, not stay attached to a detached node.
+        settingsArrows.observer?.disconnect();
+        settingsArrows.observer = null;
+        settingsArrows.scrollHandler = null;
+        settingsArrows.tabHandler = null;
         settingsArrows.list = list;
         settingsArrows.modal = modal;
       }
       if (!list.hasAttribute("data-rdsh-nav-scroll")) {
         list.setAttribute("data-rdsh-nav-scroll", "");
-        list.addEventListener("scroll", positionSettingsArrows, { passive: true });
+        settingsArrows.scrollHandler = positionSettingsArrows;
+        list.addEventListener("scroll", settingsArrows.scrollHandler, { passive: true });
       }
       if (!list.hasAttribute("data-rdsh-nav-tabclick")) {
         list.setAttribute("data-rdsh-nav-tabclick", "");
-        list.addEventListener("click", (event) => {
+        settingsArrows.tabHandler = (event) => {
           if (event.target.closest("[data-rdsh-settings-nav-arrow]") !== null) return;
           if (event.target.closest("button") === null) return;
           settingsTabResetPending = true;
-        }, true);
+        };
+        list.addEventListener("click", settingsArrows.tabHandler, true);
       }
-      observeSettingsOptions(modal);
+      if (settingsArrows.observer === null) settingsArrows.observer = observeSettingsOptions(modal);
       positionSettingsArrows();
     }
 
@@ -2201,7 +3085,13 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       // `contextUsedMax` below opens the context panel to read its figures and
       // closes it again. The probe only hides itself on a phone, so on a wide
       // screen the panel would flash open on every decorate pass.
-      if (!narrow()) return;
+      if (!phone()) {
+        clearOwnedAttribute("data-rdsh-stat-text");
+        return;
+      }
+      // A projection frame has to repaint the dock even when the upstream
+      // aria-label (the percentage) did not change.
+      watchActivitySources();
       const dock = document.querySelector("[data-rdsh-composer-dock]");
       if (dock === null) return;
       const buttons = [...dock.querySelectorAll("button")].filter((button) => button.getAttribute("aria-label") !== null);
@@ -2240,12 +3130,32 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       }
     }
 
+    /**
+     * The model-search field and the pointerdown listener this module added to
+     * its row. Kept so dispose and the desktop boot can remove the listener
+     * and put `disabled` back; a desktop must not inherit the mobile disabled
+     * search.
+     */
+    let modelSearchState = null;
+
+    function clearModelSearch() {
+      const record = modelSearchState;
+      modelSearchState = null;
+      if (record === null) return;
+      if (record.row !== null) record.row.removeEventListener("pointerdown", record.handler, true);
+      if (record.input.isConnected) record.input.disabled = record.wasDisabled;
+    }
+
     function decorateModelSearch() {
-      if (!narrow()) return;
+      if (!phone()) {
+        clearModelSearch();
+        return;
+      }
       const menu = document.querySelector('[class*="_7KE1Ra_menu"]');
       if (menu === null) return;
       const input = menu.querySelector("input");
       if (input === null) return;
+      if (modelSearchState !== null && modelSearchState.input !== input) clearModelSearch();
       if (!input.hasAttribute("data-rdsh-model-search")) {
         input.setAttribute("data-rdsh-model-search", "");
         const row = input.closest('[class*="_7KE1Ra_searchRow"]') ?? input.parentElement;
@@ -2254,18 +3164,53 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
           // The picker focuses this field by itself when it opens the model
           // pane. Disabled inputs ignore .focus(), so opening the picker no
           // longer pulls focus (or the keyboard) into the search.
-          row.addEventListener("pointerdown", () => {
+          const handler = () => {
             input.disabled = false;
             requestAnimationFrame(() => input.focus({ preventScroll: true }));
-          }, true);
+          };
+          row.addEventListener("pointerdown", handler, true);
+          modelSearchState = { input, row, handler, wasDisabled: input.disabled };
         }
       }
       if (!input.disabled) input.disabled = true;
       if (document.activeElement === input) input.blur();
     }
 
+    /**
+     * The tabindex/title/role values the Todo and Goal rows had before this
+     * module wrote on them, so a resize restores upstream state instead of
+     * deleting an attribute that was not ours.
+     */
+    const detailRowOriginal = new WeakMap();
+
+    function clearDetailPanelHooks() {
+      for (const item of document.querySelectorAll("[data-rdsh-todo-item], [data-rdsh-goal-objective]")) {
+        const original = detailRowOriginal.get(item);
+        if (original !== undefined) {
+          detailRowOriginal.delete(item);
+          for (const [name, value] of Object.entries(original)) {
+            if (value === null) item.removeAttribute(name);
+            else item.setAttribute(name, value);
+          }
+        }
+      }
+      for (const attribute of ["data-rdsh-todo-item", "data-rdsh-todo-text", "data-rdsh-todo-status", "data-rdsh-goal-objective", "data-rdsh-goal-text", "data-rdsh-goal-actions", "data-rdsh-goal-editing"]) {
+        for (const element of document.querySelectorAll(`[${attribute}]`)) element.removeAttribute(attribute);
+      }
+    }
+
+    function rememberDetailRow(element, names) {
+      if (detailRowOriginal.has(element)) return;
+      const original = {};
+      for (const name of names) original[name] = element.getAttribute(name);
+      detailRowOriginal.set(element, original);
+    }
+
     function decorateTodoPanel() {
-      if (!narrow()) return;
+      if (!phone()) {
+        clearDetailPanelHooks();
+        return;
+      }
       const panel = document.querySelector('[data-testid="todo-panel"]');
       if (panel === null) return;
       for (const item of panel.querySelectorAll("li")) {
@@ -2273,6 +3218,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
         if (content === null) continue;
         const text = (content.textContent || "").trim();
         if (text === "") continue;
+        rememberDetailRow(item, ["tabindex", "title"]);
         item.setAttribute("data-rdsh-todo-item", "");
         item.setAttribute("data-rdsh-todo-text", text);
         const status = item.querySelector('[role="img"][aria-label]');
@@ -2288,13 +3234,17 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
 
     function decorateGoalBar() {
-      if (!narrow()) return;
+      if (!phone()) {
+        clearDetailPanelHooks();
+        return;
+      }
       const bar = document.querySelector("[data-goal-bar]");
       if (bar === null) return;
       const objective = bar.querySelector('[class*="_objective"]');
       if (objective !== null) {
         const text = (objective.textContent || "").trim();
         if (text !== "") {
+          rememberDetailRow(objective, ["role", "tabindex", "title"]);
           objective.setAttribute("data-rdsh-goal-objective", "");
           objective.setAttribute("data-rdsh-goal-text", text);
           objective.setAttribute("role", "button");
@@ -2460,7 +3410,11 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
      * carries the id.
      */
     function decorateHeaderTitle() {
-      if (!narrow()) return;
+      if (!phone()) {
+        clearOwnedAttribute("data-rdsh-header-title");
+        clearOwnedAttribute("data-rdsh-header-running");
+        return;
+      }
       const crumb = document.querySelector('[data-rdsh-crumbs] [class*="_crumbCurrent"]');
       if (crumb === null) return;
       crumb.setAttribute("data-rdsh-header-title", "");
@@ -2472,7 +3426,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
 
     /**
-     * Give a full-screen route heading a phone-only inset for the FAB.
+     * Give a full-screen route heading a mobile-only inset for the FAB.
      *
      * Plugins and Automation tasks render their own H1 near the left edge. On
      * a phone the floating drawer button sits over x8..48, so the heading row
@@ -2486,7 +3440,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       const clear = () => {
         for (const wrapper of tagged) wrapper.removeAttribute("data-rdsh-route-heading");
       };
-      if (!narrow()) {
+      if (!phone()) {
         clear();
         return;
       }
@@ -2531,8 +3485,19 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       }
     }
 
+    /** Cancel every running title animation and remove its overlay. */
+    function clearTypingAnimations() {
+      for (const controller of titleAnimations.values()) controller.cancel();
+      titleAnimations.clear();
+      for (const element of document.querySelectorAll("[data-rdsh-typing]")) element.removeAttribute("data-rdsh-typing");
+      for (const layer of document.querySelectorAll("[data-rdsh-typing-layer]")) layer.remove();
+    }
+
     function decorateSessionTitleTyping() {
-      if (!narrow()) return;
+      if (!phone()) {
+        clearTypingAnimations();
+        return;
+      }
       const running = globalThis.__RDSH_MOBILE_UX_RUNNING__ instanceof Set
         ? globalThis.__RDSH_MOBILE_UX_RUNNING__
         : new Set();
@@ -2604,10 +3569,36 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
      * gesture only moves the element out of sight; its timer retires it as
      * usual. Nothing here touches React's tree.
      */
+    /** Swipe listeners per toast, so desktop/dispose can remove them again. */
+    const toastSwipeState = new WeakMap();
+
+    function clearToastHooks() {
+      for (const toast of document.querySelectorAll("[data-rdsh-toast]")) {
+        toast.style.removeProperty("transform");
+        toast.style.removeProperty("opacity");
+        const handlers = toastSwipeState.get(toast);
+        if (handlers !== undefined) {
+          toastSwipeState.delete(toast);
+          toast.removeEventListener("pointerdown", handlers.down);
+          toast.removeEventListener("pointermove", handlers.move);
+          toast.removeEventListener("pointerup", handlers.up);
+          toast.removeEventListener("pointercancel", handlers.up);
+        }
+      }
+      clearOwnedAttribute("data-rdsh-toast");
+      clearOwnedAttribute("data-rdsh-toast-dismissed");
+    }
+
     function decorateToasts() {
-      if (!narrow()) return;
+      if (!phone()) {
+        clearToastHooks();
+        return;
+      }
       for (const toast of document.querySelectorAll('body > [role="alert"]')) {
-        if (toast.hasAttribute("data-rdsh-toast")) continue;
+        if (toastSwipeState.has(toast)) {
+          toast.setAttribute("data-rdsh-toast", "");
+          continue;
+        }
         toast.setAttribute("data-rdsh-toast", "");
         let startX = 0;
         let startY = 0;
@@ -2619,14 +3610,14 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
           toast.style.removeProperty("transform");
           toast.style.removeProperty("opacity");
         };
-        toast.addEventListener("pointerdown", (event) => {
+        const down = (event) => {
           if (event.pointerType === "mouse") return;
           tracking = true;
           startX = event.clientX;
           startY = event.clientY;
           offset = 0;
-        });
-        toast.addEventListener("pointermove", (event) => {
+        };
+        const move = (event) => {
           if (!tracking) return;
           const dy = event.clientY - startY;
           const dx = Math.abs(event.clientX - startX);
@@ -2638,8 +3629,8 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
           offset = dy;
           toast.style.transform = `translate(-50%, ${Math.round(dy)}px)`;
           toast.style.opacity = String(Math.max(0.15, 1 + dy / 140));
-        });
-        const finish = () => {
+        };
+        const up = () => {
           if (!tracking) return;
           if (offset <= -TOAST_SWIPE_PX) {
             toast.setAttribute("data-rdsh-toast-dismissed", "");
@@ -2648,8 +3639,11 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
           }
           release();
         };
-        toast.addEventListener("pointerup", finish);
-        toast.addEventListener("pointercancel", finish);
+        toast.addEventListener("pointerdown", down);
+        toast.addEventListener("pointermove", move);
+        toast.addEventListener("pointerup", up);
+        toast.addEventListener("pointercancel", up);
+        toastSwipeState.set(toast, { down, move, up });
       }
     }
 
@@ -2712,6 +3706,13 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
 
     function decorateQuestionCards() {
+      if (!phone()) {
+        clearQuestionArrows();
+        for (const attribute of ["data-rdsh-question-card", "data-rdsh-question-frame", "data-rdsh-question-tile"]) {
+          clearOwnedAttribute(attribute);
+        }
+        return;
+      }
       const live = new Set();
       for (const card of document.querySelectorAll('[class*="_card"]')) {
         if (card.querySelector('[class*="_options"], [class*="_strip"]') === null) continue;
@@ -2733,19 +3734,52 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
 
     /**
-     * Pin the viewport exactly as the legacy plugin did.
+     * The viewport the page shipped with, before the mobile zoom lock.
+     *
+     * #44: the lock is a mobile affordance, so a desktop keeps this exact
+     * value. `owned` records a meta this module had to create (a host that
+     * shipped none); that one is removed instead of rewritten.
+     */
+    let viewportBaseline = null;
+    let viewportMetaOwned = false;
+
+    /** Undo `enforceNoZoomViewport()`. Safe to call when nothing was written. */
+    function releaseViewportLock() {
+      if (viewportBaseline === null) return;
+      const baseline = viewportBaseline;
+      viewportBaseline = null;
+      const meta = document.querySelector('meta[name="viewport"]');
+      if (meta !== null) {
+        if (viewportMetaOwned) meta.remove();
+        else if (baseline.content === null) meta.removeAttribute("content");
+        else if (meta.getAttribute("content") !== baseline.content) meta.setAttribute("content", baseline.content);
+      }
+      viewportMetaOwned = false;
+    }
+
+    /**
+     * Pin the viewport exactly as the legacy plugin did, in mobile mode only.
      *
      * This is the shipped contract: no pinch zoom, edge-to-edge, and the
-     * composer riding above the keyboard via the fixed string. The merged
-     * build had made this additive; the reference behaviour is the override.
-     * The 16px form fields (below, in the stylesheet) remain the zoom guard.
+     * composer riding above the keyboard via the fixed string. The 16px form
+     * fields (below, in the stylesheet) remain the zoom guard. A desktop is
+     * upstream's: it keeps the host's `viewport-fit=cover` and its own zoom,
+     * and the value captured before the first lock is restored on dispose.
      */
     function enforceNoZoomViewport() {
+      if (!phone()) {
+        releaseViewportLock();
+        return;
+      }
       let meta = document.querySelector('meta[name="viewport"]');
       if (meta === null) {
         meta = document.createElement("meta");
         meta.setAttribute("name", "viewport");
         document.head.append(meta);
+        viewportMetaOwned = true;
+      }
+      if (viewportBaseline === null) {
+        viewportBaseline = { content: viewportMetaOwned ? null : meta.getAttribute("content") };
       }
       const content = "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover";
       if (meta.getAttribute("content") !== content) meta.setAttribute("content", content);
@@ -2756,42 +3790,297 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       subagent: '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="4.6" r="2.1"/><path d="M3.6 13.4c0-2.6 2-4.4 4.4-4.4s4.4 1.8 4.4 4.4"/><path d="M11.6 3.2a2.2 2.2 0 0 1 0 3.9"/></svg>',
     };
 
+    /**
+     * Remove the chips, the owned ring and the icon this module injected.
+     *
+     * A native spinner tagged by an older build keeps its identity: only the
+     * generic marker is dropped. Generated nodes and the self-drawn ring are
+     * ours, so they go together with the chip state and subscriptions.
+     */
+    function clearActivityChips() {
+      for (const tagged of document.querySelectorAll("[data-rdsh-activity-spinner]")) {
+        if (isOwnedActivityRing(tagged)) tagged.remove();
+        else tagged.removeAttribute("data-rdsh-activity-spinner");
+      }
+      for (const generated of document.querySelectorAll("[data-rdsh-activity-generated]")) generated.remove();
+      for (const icon of document.querySelectorAll("[data-rdsh-activity-icon]")) icon.remove();
+      for (const attribute of ["data-rdsh-activity-chip", "data-rdsh-activity-state", "data-rdsh-activity-running"]) {
+        for (const element of document.querySelectorAll(`[${attribute}]`)) element.removeAttribute(attribute);
+      }
+      unwatchActivitySources();
+    }
+
+    /** Upstream marks a live chip "N subagents running" / "N background jobs
+     *  running". The word is the last-resort state source when the client
+     *  services are not in this profile; it is not the state itself. */
+    const ACTIVITY_RUNNING_PROBE = probeRegex("activityRunning", "i", "running");
+
+    /** Re-read while a ring turns, so completion lands well inside one second. */
+    const ACTIVITY_POLL_MS = 500;
+    /** One live subscription per source kind; replaced with the service instance. */
+    const activityWatches = { list: null, jobs: null, status: null };
+    const activityStops = { list: null, jobs: null, status: null };
+    let activityPoll = 0;
+
+    /**
+     * Follow one public source. The unsubscriber belongs to the exact instance
+     * that minted it: a replaced service (reconnect, profile reload) drops the
+     * old one instead of leaving a stale subscription behind.
+     */
+    function watchActivitySource(kind, source) {
+      if (activityWatches[kind] === source) return;
+      const previous = activityStops[kind];
+      activityStops[kind] = null;
+      activityWatches[kind] = null;
+      if (typeof previous === "function") {
+        try {
+          previous();
+        } catch (error) {
+          /* the old generation is already gone */
+        }
+      }
+      if (source === null || source === undefined) return;
+      if (typeof source.subscribe !== "function") return;
+      try {
+        const stop = source.subscribe(() => scheduleDecorate());
+        activityWatches[kind] = source;
+        if (typeof stop === "function") activityStops[kind] = stop;
+      } catch (error) {
+        /* an unavailable source only costs live freshness */
+      }
+    }
+
+    /** Follow the projections the header chips mirror: Session list, jobs, status. */
+    function watchActivitySources() {
+      if (!phone()) return;
+      const sessions = sessionsService();
+      watchActivitySource("list", sessions?.list ?? null);
+      const jobs = optionalService("jobs");
+      watchActivitySource("jobs", jobs?.state ?? null);
+      const uiSession = optionalService("uiSession");
+      watchActivitySource("status", uiSession?.sessionStatus ?? null);
+    }
+
+    function stopActivityPoll() {
+      if (activityPoll === 0) return;
+      clearInterval(activityPoll);
+      activityPoll = 0;
+    }
+
+    function unwatchActivitySources() {
+      for (const kind of Object.keys(activityWatches)) {
+        const stop = activityStops[kind];
+        activityStops[kind] = null;
+        activityWatches[kind] = null;
+        if (typeof stop !== "function") continue;
+        try {
+          stop();
+        } catch (error) {
+          /* already disposed with its service */
+        }
+      }
+      stopActivityPoll();
+    }
+
+    /** Poll only while something is running; idle chips own no timer. */
+    function syncActivityPoll(running) {
+      if (!running) {
+        stopActivityPoll();
+        return;
+      }
+      if (activityPoll !== 0) return;
+      activityPoll = setInterval(() => {
+        if (!phone()) {
+          stopActivityPoll();
+          return;
+        }
+        scheduleDecorate();
+      }, ACTIVITY_POLL_MS);
+    }
+
+    /** Running (or stopping) shell jobs of one Session, from the jobs service. */
+    function runningShellJobs(sessionId) {
+      if (sessionId === null || sessionId === undefined) return null;
+      const jobs = optionalService("jobs");
+      if (jobs === null) return null;
+      try {
+        const rows = jobs.state?.getSnapshot?.()?.rows?.[sessionId];
+        if (!Array.isArray(rows)) return null;
+        return rows.filter((job) => job?.status === "running" || job?.status === "stopping").length;
+      } catch (error) {
+        return null;
+      }
+    }
+
+    /**
+     * Running direct children of one root Session: the Session's own
+     * `subagentCatalog` filtered by the public `sessionStatus` map. Counting
+     * the whole client would spin this chip for another Session's child (#40).
+     */
+    function runningSubagents(sessionId) {
+      if (sessionId === null || sessionId === undefined) return null;
+      const uiSession = optionalService("uiSession");
+      const sessions = sessionsService();
+      let statuses;
+      let snapshot;
+      try {
+        statuses = uiSession?.sessionStatus?.getSnapshot?.();
+        snapshot = sessions?.list?.getSnapshot?.();
+      } catch (error) {
+        return null;
+      }
+      const catalog = snapshot?.projectionsBySession?.[sessionId]?.values?.subagentCatalog;
+      if (statuses === null || statuses === undefined || typeof statuses.get !== "function" || !Array.isArray(catalog)) return null;
+      let count = 0;
+      for (const entry of catalog) {
+        if (entry === null || entry === undefined) continue;
+        const running = statuses.get(entry.id)?.running ?? snapshot?.byId?.[entry.id]?.running;
+        if (running === true) count += 1;
+      }
+      return count;
+    }
+
+    /**
+     * The Session the decorators follow: the slot's own id when it has run,
+     * otherwise upstream's `[data-conversation-session]` (the same DOM fact
+     * `shownSessionId()` reads for notification routing).
+     */
+    function decoratedSessionId() {
+      if (currentSessionId !== null) return currentSessionId;
+      const shown = shownSessionId();
+      return shown === "" ? null : shown;
+    }
+
+    /** The two real running facts behind the chips; `null` means "unknown". */
+    function activityState(sessionId = decoratedSessionId()) {
+      return { shell: runningShellJobs(sessionId), subagent: runningSubagents(sessionId) };
+    }
+
+    /**
+     * Upstream count chips start with their number ("3 subagents running",
+     * "3 个子智能体"). The label vocabulary is a probe table because the shell
+     * translates it; the running word inside it is probed separately.
+     */
+    const ACTIVITY_CHIP_LABEL = (() => {
+      const labels = probeValues("activityChip", [
+        "subagent", "subagents",
+        "background job", "background jobs",
+        "shell command", "shell commands",
+      ]);
+      if (labels.length === 0) return null;
+      return new RegExp(`^\\d[\\d,.]*\\s+(?:${labels.join("|")})`, "i");
+    })();
+
+    /** The subagent nouns, so a non-English label still picks the right glyph. */
+    const ACTIVITY_SUBAGENT_PROBE = probeRegex("activitySubagentChip", "i", "subagent");
+
+    function headerActivityChips() {
+      if (ACTIVITY_CHIP_LABEL === null) return [];
+      return [...document.querySelectorAll("header button[aria-label]")]
+        .filter((button) => ACTIVITY_CHIP_LABEL.test((button.getAttribute("aria-label") || "").trim()));
+    }
+
+    function activityChipOf(target) {
+      if (target === null || target === undefined || typeof target.closest !== "function") return null;
+      return target.closest("[data-rdsh-activity-chip]") ?? null;
+    }
+
+    /**
+     * A second tap on the chip of an open panel closes it (#41).
+     *
+     * Both upstream triggers carry `aria-expanded`; the jobs chip toggles on
+     * its own click, the subagent catalog only opens. Their roots already
+     * close on Escape, which restores focus to the trigger, so the tap
+     * synthesizes that key rather than depending on a hash-named close button.
+     * A click on another chip, or inside the open panel, is left to upstream.
+     */
+    function handleActivityChipClick(chip, event) {
+      if (!phone() || chip === null || chip === undefined) return false;
+      if (chip.getAttribute("aria-expanded") !== "true") return false;
+      if (event !== null && event !== undefined) {
+        if (typeof event.preventDefault === "function") event.preventDefault();
+        if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+        else if (typeof event.stopPropagation === "function") event.stopPropagation();
+      }
+      try {
+        chip.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+      } catch (error) {
+        /* a detached trigger has nothing to close */
+      }
+      return true;
+    }
+
+    /**
+     * Whether a tagged node is the ring this plugin created.
+     *
+     * Older builds set `data-rdsh-activity-generated` on every ring they made
+     * (a fallback span or a clone); the current build marks a self-drawn span
+     * with `rdsh-activity-ring`. A node with only the generic
+     * `data-rdsh-activity-spinner` is an upstream spinner the old build
+     * adopted in place: it belongs to upstream and must keep its identity.
+     */
+    function isOwnedActivityRing(node) {
+      if (node === null || node === undefined) return false;
+      if (node.hasAttribute("data-rdsh-activity-generated")) return true;
+      return node.tagName === "SPAN" && String(node.className || "").split(/\s+/).includes("rdsh-activity-ring");
+    }
+
+    /** The ring is ours; never adopt or clone an upstream spinner. */
+    function ensureActivityRing(button) {
+      let ring = button.querySelector("[data-rdsh-activity-spinner]");
+      if (ring !== null && ring !== undefined) {
+        if (!isOwnedActivityRing(ring)) {
+          // An older build tagged the upstream spinner in place. Give the node
+          // back to upstream (drop only our marker) and draw a separate ring.
+          ring.removeAttribute("data-rdsh-activity-spinner");
+          ring = null;
+        } else if (ring.tagName !== "SPAN") {
+          // An older build cloned a spinner into a generated SVG; that clone
+          // is ours to replace, unlike the upstream node above.
+          ring.remove();
+          ring = null;
+        }
+      }
+      if (ring !== null && ring !== undefined) {
+        if (!String(ring.className || "").split(/\s+/).includes("rdsh-activity-ring")) {
+          ring.className = "rdsh-activity-ring";
+          ring.innerHTML = "";
+        }
+        return ring;
+      }
+      ring = document.createElement("span");
+      ring.className = "rdsh-activity-ring";
+      ring.setAttribute("data-rdsh-activity-spinner", "");
+      ring.setAttribute("aria-hidden", "true");
+      button.prepend(ring);
+      return ring;
+    }
+
     /** Header shell/subagent chips become icon-only live indicators. */
-    function decorateHeaderActivityChips() {
-      if (!narrow()) return;
-      const buttons = [...document.querySelectorAll("header button[aria-label]")]
-        .filter((button) => /subagents?|background jobs?|shell command/i.test(button.getAttribute("aria-label") || ""));
-      if (buttons.length === 0) return;
-      const runningSubagents = Number(document.documentElement.getAttribute("data-rdsh-running-subagents") || "0") || 0;
-      const sourceSpinner = [...document.querySelectorAll("header [class*='_spinner_']")]
-        .find((spinner) => !spinner.hasAttribute("data-rdsh-activity-generated")) ?? null;
+    function decorateHeaderActivityChips(buttons = headerActivityChips()) {
+      if (!phone()) {
+        clearActivityChips();
+        return;
+      }
+      if (buttons.length === 0) {
+        stopActivityPoll();
+        return;
+      }
+      watchActivitySources();
+      const state = activityState();
+      let runningAny = false;
       for (const button of buttons) {
         const label = button.getAttribute("aria-label") || "";
-        const kind = /subagent/i.test(label) ? "subagent" : "shell";
+        const kind = ACTIVITY_SUBAGENT_PROBE !== null && ACTIVITY_SUBAGENT_PROBE.test(label) ? "subagent" : "shell";
         button.setAttribute("data-rdsh-activity-chip", kind);
-        const ownNative = [...button.querySelectorAll("svg[class*='_spinner_']")]
-          .find((spinner) => !spinner.hasAttribute("data-rdsh-activity-generated")) ?? null;
-        const active = kind === "subagent" ? runningSubagents > 0 : ownNative !== null;
-        let spinner = button.querySelector("[data-rdsh-activity-spinner]");
-        if (!active) {
-          if (spinner !== null && spinner.hasAttribute("data-rdsh-activity-generated")) spinner.remove();
-          spinner = null;
-        }
-        if (active && spinner === null) {
-          if (ownNative !== null) {
-            spinner = ownNative;
-          } else if (sourceSpinner !== null && !button.contains(sourceSpinner)) {
-            spinner = sourceSpinner.cloneNode(true);
-            spinner.classList.remove("QsffPG_triggerDot");
-            spinner.setAttribute("data-rdsh-activity-generated", "");
-          } else {
-            spinner = document.createElement("span");
-            spinner.className = "rdsh-activity-ring";
-            spinner.setAttribute("data-rdsh-activity-generated", "");
-          }
-          spinner.setAttribute("data-rdsh-activity-spinner", "");
-          button.prepend(spinner);
-        }
+        const projected = kind === "subagent" ? state.subagent : state.shell;
+        const running = projected === null
+          ? ACTIVITY_RUNNING_PROBE !== null && ACTIVITY_RUNNING_PROBE.test(label)
+          : projected > 0;
+        runningAny = runningAny || running;
+        button.setAttribute("data-rdsh-activity-state", running ? "running" : "idle");
+        button.toggleAttribute("data-rdsh-activity-running", running);
+        ensureActivityRing(button);
         if (button.querySelector("[data-rdsh-activity-icon]") === null) {
           const icon = document.createElement("span");
           icon.setAttribute("data-rdsh-activity-icon", "");
@@ -2800,18 +4089,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
           button.append(icon);
         }
       }
-      // The first chip can be decorated before the other chip has rendered its
-      // native spinner. Upgrade our fallback once the native one exists.
-      const native = document.querySelector("header svg[class*='_spinner_']:not([data-rdsh-activity-generated])");
-      if (native !== null) {
-        for (const fallback of document.querySelectorAll("header [data-rdsh-activity-spinner].rdsh-activity-ring")) {
-          const replacement = native.cloneNode(true);
-          replacement.classList.remove("QsffPG_triggerDot");
-          replacement.setAttribute("data-rdsh-activity-spinner", "");
-          replacement.setAttribute("data-rdsh-activity-generated", "");
-          fallback.replaceWith(replacement);
-        }
-      }
+      syncActivityPoll(runningAny);
     }
 
     /** Add a Settings row to the sidebar panel list, matching Plugins. */
@@ -2826,13 +4104,12 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
 
     function decorateSidebarSettingsRow() {
-      // #17: the replacement row belongs to the phone drawer. In a narrow
-      // desktop window the stock account row is still reachable, and swapping
-      // it there only loses the stock menu.
+      // #17: the replacement row belongs to the mobile drawer. Desktop keeps
+      // the stock account row, and swapping it there only loses the stock menu.
       if (!phone()) {
-        // A resize out of the phone layout must undo the swap, or the tagged
-        // account row stays hidden by the phone stylesheet (its rule is inside
-        // the width query) and Settings becomes unreachable.
+        // Desktop mode and dispose must undo the swap, or the tagged account
+        // row stays hidden by the mobile stylesheet and Settings becomes
+        // unreachable.
         for (const tagged of document.querySelectorAll("[data-rdsh-more-row]")) tagged.removeAttribute("data-rdsh-more-row");
         for (const injected of document.querySelectorAll("[data-rdsh-settings-row]")) injected.remove();
         return;
@@ -2895,17 +4172,17 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
 
     /**
-     * Tag the drawer's own header toggle for the phone stylesheet.
+     * Tag the drawer's own header toggle for the mobile stylesheet.
      *
      * The reference styled that button through an upstream hash class. This
      * package never names a hash: the sidebar slot bounds the search and the
      * action label identifies the button, with the drag-header structure as
      * the fallback for a localised label. Scoping to the sidebar keeps close,
-     * right-panel and composer buttons on their stock paint. A wide window
-     * drops the tag, so the stock control and its tooltip come back.
+     * right-panel and composer buttons on their stock paint. Desktop drops
+     * the tag, so the stock control and its tooltip come back.
      */
     function decorateSidebarToggle() {
-      if (!narrow()) {
+      if (!phone()) {
         for (const element of document.querySelectorAll("[data-rdsh-sidebar-toggle]")) {
           element.removeAttribute("data-rdsh-sidebar-toggle");
         }
@@ -2950,7 +4227,25 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       return button !== null && button === addButton() ? button : null;
     }
 
+    /**
+     * Put the "+" label back and drop the composer hooks. Only a label this
+     * module wrote is restored: an upstream label that already said the stock
+     * text is left exactly as it is.
+     */
+    function clearComposerHooks() {
+      const add = addButton();
+      if (add !== null && add.getAttribute("aria-label") === ADD_LABEL) add.setAttribute("aria-label", ADD_STOCK_LABEL);
+      for (const attribute of ["data-rdsh-model-button", "data-rdsh-add", "data-rdsh-composer-root", "data-rdsh-composer-dock", "data-rdsh-has-dock"]) {
+        for (const element of document.querySelectorAll(`[${attribute}]`)) element.removeAttribute(attribute);
+      }
+      document.documentElement.removeAttribute("data-rdsh-has-dock");
+    }
+
     function decorateComposer() {
+      if (!phone()) {
+        clearComposerHooks();
+        return;
+      }
       for (const model of document.querySelectorAll('button[aria-label^="Select model"]')) {
         model.setAttribute("data-rdsh-model-button", "");
       }
@@ -2961,13 +4256,8 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       }
       add.setAttribute("data-rdsh-add", "");
       // #17: the short "attach only" label and the picker hijack below are a
-      // phone affordance. A narrow desktop window keeps the stock label and
-      // the stock command list behind "+".
-      if (phone()) {
-        if (add.getAttribute("aria-label") !== ADD_LABEL) add.setAttribute("aria-label", ADD_LABEL);
-      } else if (add.getAttribute("aria-label") === ADD_LABEL) {
-        add.setAttribute("aria-label", ADD_STOCK_LABEL);
-      }
+      // mobile-device affordance, the same condition as `phone()`.
+      if (add.getAttribute("aria-label") !== ADD_LABEL) add.setAttribute("aria-label", ADD_LABEL);
       const card = add.closest('[class*="_card"]');
       if (card === null || card.parentElement === null) {
         document.documentElement.removeAttribute("data-rdsh-has-dock");
@@ -2993,7 +4283,10 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
 
     function markScrollers() {
-      if (!narrow()) return;
+      if (!phone()) {
+        clearOwnedAttribute("data-rdsh-scroll");
+        return;
+      }
       for (const element of document.querySelectorAll("[data-rdsh-frame] div")) {
         if (element.hasAttribute("data-rdsh-scroll")) continue;
         if (element.scrollHeight <= element.clientHeight + 4) continue;
@@ -3006,33 +4299,55 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     let lastSlowAt = 0;
 
     function decorateFast() {
+      // One mode decision per pass. Every tag below belongs to the mobile
+      // surface; on desktop the same pass only removes leftovers, so a
+      // MutationObserver firing between frames cannot re-create a hook.
+      const onPhone = phone();
       const root = frame();
       if (root !== null) {
-        root.setAttribute("data-rdsh-frame", "");
-        // The app switches these columns to auto-placement while its sidebar is
-        // open. Our drawer takes that column out of flow, so auto-placement
-        // shifts everything one column left: the chat lands on the 0px column
-        // and the empty right column fills the screen. Pin them instead.
-        for (const child of root.children) {
-          const cls = typeof child.className === "string" ? child.className : "";
-          if (cls.includes("_centerCol")) child.setAttribute("data-rdsh-center-col", "");
-          else if (cls.includes("_rightbarCol")) child.setAttribute("data-rdsh-rightbar-col", "");
+        if (onPhone) {
+          root.setAttribute("data-rdsh-frame", "");
+          // The app switches these columns to auto-placement while its sidebar is
+          // open. Our drawer takes that column out of flow, so auto-placement
+          // shifts everything one column left: the chat lands on the 0px column
+          // and the empty right column fills the screen. Pin them instead.
+          for (const child of root.children) {
+            const cls = typeof child.className === "string" ? child.className : "";
+            if (cls.includes("_centerCol")) child.setAttribute("data-rdsh-center-col", "");
+            else if (cls.includes("_rightbarCol")) child.setAttribute("data-rdsh-rightbar-col", "");
+          }
+          const sidebar = document.querySelector('[data-slot="sidebar"]');
+          if (sidebar && sidebar.parentElement) sidebar.parentElement.setAttribute("data-rdsh-sidebar", "");
+          const open = !root.hasAttribute("data-sidebar-collapsed");
+          if (open !== state.drawerOpen) emit({ drawerOpen: open });
+          document.documentElement.setAttribute("data-rdsh-drawer", open ? "open" : "closed");
+        } else {
+          for (const attribute of ["data-rdsh-frame", "data-rdsh-center-col", "data-rdsh-rightbar-col", "data-rdsh-sidebar", "data-rdsh-drawer"]) {
+            clearOwnedAttribute(attribute);
+          }
         }
-        const sidebar = document.querySelector('[data-slot="sidebar"]');
-        if (sidebar && sidebar.parentElement) sidebar.parentElement.setAttribute("data-rdsh-sidebar", "");
-        const open = !root.hasAttribute("data-sidebar-collapsed");
-        if (open !== state.drawerOpen) emit({ drawerOpen: open });
-        document.documentElement.setAttribute("data-rdsh-drawer", open ? "open" : "closed");
       }
       const header = document.querySelector("header[data-window-drag]");
-      if (header !== null) header.setAttribute("data-rdsh-header", "");
+      if (header !== null) {
+        if (onPhone) header.setAttribute("data-rdsh-header", "");
+        else header.removeAttribute("data-rdsh-header");
+      }
+      if (onPhone) {
+        if (document.documentElement.getAttribute("data-rdsh-anim") !== ANIMATION) {
+          document.documentElement.setAttribute("data-rdsh-anim", ANIMATION);
+        }
+      } else {
+        document.documentElement.removeAttribute("data-rdsh-anim");
+      }
       // Decorate the image lightbox on the same mutation that creates it. The
       // slow pass is throttled (900ms), which can leave a freshly opened
       // lightbox without the crop/safe-area hooks.
       decorateLightbox();
       decorateRightPanel();
       decorateRightPanelTabs();
+      decorateWorkspaceFiles();
       decorateCodePreview();
+      decoratePreviewTools();
       decorateQuestionCards();
       decorateTodoPanel();
       decorateGoalBar();
@@ -3043,15 +4358,19 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       installSettingsNavArrows();
       decorateStatsDock();
       enforceNoZoomViewport();
-      const crumbs = document.querySelector('nav[aria-label="Session hierarchy"]');
-      if (crumbs !== null) crumbs.setAttribute("data-rdsh-crumbs", "");
-      for (const slot of document.querySelectorAll('[data-slot="main.conversation"], [data-slot="conversation"]')) {
-        slot.setAttribute("data-rdsh-conversation", "");
+      if (onPhone) {
+        const crumbs = document.querySelector('nav[aria-label="Session hierarchy"]');
+        if (crumbs !== null) crumbs.setAttribute("data-rdsh-crumbs", "");
+        for (const slot of document.querySelectorAll('[data-slot="main.conversation"], [data-slot="conversation"]')) {
+          slot.setAttribute("data-rdsh-conversation", "");
+        }
+      } else {
+        clearOwnedAttribute("data-rdsh-crumbs");
+        clearOwnedAttribute("data-rdsh-conversation");
       }
-      // The reference decorates session rows at every width. Most hooks are
-      // spent by CSS inside the phone query, but the colour-frame hook is
-      // deliberately outside it: a desktop sidebar keeps showing the frame the
-      // user chose. Gating this on `narrow()` removed the hook and the frame.
+      // Session rows are decorated at every width, but the function itself
+      // writes the colour frame and every other row hook only in the phone
+      // layout (#44); on a desktop it clears leftovers from a narrower pass.
       decorateSessionRows();
       decorateRouteHeading();
       decorateQueueDock();
@@ -3065,11 +4384,10 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       // nothing. The dock strip is the real signal: it sits on-screen only
       // while the panel is open.
       const hideListDisabled = hideDisabled();
-      // The hidden-rows attribute follows the same width contract as the list
+      // The hidden-rows attribute follows the same mode contract as the list
       // itself, so the JS writer and the stylesheet scope cannot drift apart.
-      const onPhone = phone();
       if (onPhone !== state.phone) emit({ phone: onPhone });
-      document.documentElement.toggleAttribute("data-rdsh-hide-settings", !hideListDisabled && narrow());
+      document.documentElement.toggleAttribute("data-rdsh-hide-settings", onPhone && !hideListDisabled);
       applyHideList(hideListDisabled);
       maybeOpenSettings();
     }
@@ -3079,6 +4397,11 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
      * transcript): keep it to about once a second.
      */
     function decorateTranscript() {
+      if (!phone()) {
+        clearOwnedAttribute("data-rdsh-transcript");
+        clearOwnedAttribute("data-rdsh-transcript-column");
+        return;
+      }
       const scroller = document.querySelector('[class*="scrollBody"]');
       if (scroller === null) return;
       for (const node of scroller.querySelectorAll('[class*="_scroll"], [class*="_column"]')) {
@@ -3101,6 +4424,11 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
 
     function decorateUserBubbles() {
+      if (!phone()) {
+        clearOwnedAttribute("data-rdsh-user-stack");
+        clearOwnedAttribute("data-rdsh-user-bubble");
+        return;
+      }
       for (const item of document.querySelectorAll('[data-chat-flow-kind="user"]')) {
         const stack = item.querySelector('[class*="userStack"]');
         if (stack !== null) stack.setAttribute("data-rdsh-user-stack", "");
@@ -3129,11 +4457,18 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       }
     }
 
+    /**
+     * Whether the boot effect is still mounted. A decorate frame queued before
+     * dispose must not run after it: it would re-lock the viewport and re-add
+     * the phone hooks that dispose just removed.
+     */
+    let live = false;
     let scheduled = false;
     function scheduleDecorate() {
-      if (scheduled) return;
+      if (!live || scheduled) return;
       scheduled = true;
       requestAnimationFrame(() => {
+        if (!live) return;
         scheduled = false;
         try {
           decorate();
@@ -3186,7 +4521,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
      *
      * A phone send is marked automatically. On a desktop that is the #15
      * opt-in: without it the host's `onlyMobileTurns` default means a PC send
-     * is never notified, and a narrow window silently changing that would be
+     * is never notified, and a desktop window silently changing that would be
      * the same width-based behaviour #17 removes.
      */
     function markMobileSession(sessionId = currentSessionId) {
@@ -3243,9 +4578,9 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
         const total = countSessionStatuses(statuses, null);
         const main = countSessionStatuses(statuses, mainIds);
         applyNotificationCount(main);
-        // How many subagent sessions are actually running right now. The header
-        // subagent chip also exists for finished subagents, so its icon must
-        // not spin unless this is above zero.
+        // Cross-Session running-subagent diagnostic. The header chips read the
+        // scoped jobs/sessionStatus projections instead, so a running child of
+        // another Session cannot spin this Session's chip (#40).
         let runningSubagents = 0;
         const runningIds = new Set();
         if (byId !== null && byId !== undefined && typeof byId === "object" && statuses !== null && statuses !== undefined && typeof statuses.get === "function") {
@@ -3265,7 +4600,12 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       return null;
     }
 
+    /**
+     * The drawer's floating button and backdrop, created only in mobile mode
+     * (#44): a desktop has no injected nodes to leave behind.
+     */
     function installDrawer() {
+      if (fab !== null) return;
       fab = document.createElement("button");
       fab.type = "button";
       fab.className = "rdsh-mux-fab";
@@ -3279,6 +4619,14 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       backdrop.addEventListener("click", closeDrawer);
 
       document.body.append(backdrop, fab);
+      applyNotificationCount(notificationTotal);
+    }
+
+    function removeDrawerNodes() {
+      fab?.remove();
+      backdrop?.remove();
+      fab = null;
+      backdrop = null;
     }
 
     let toastTimer = 0;
@@ -3343,6 +4691,24 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     /** The right panel tab under the finger, for the same replay as a row. */
     let tabCandidate = null;
     let tabReplayTimer = 0;
+    /**
+     * Right-panel tab drag is gated on a long press.
+     *
+     * dockkit starts its tab drag from `pointerdown` + a 4px `pointermove`
+     * (`DRAG_THRESHOLD = 4` in the shipped bundle), and its strip is
+     * `touch-action: none`, so a plain tap or a sideways swipe used to become a
+     * reorder. Until this timer fires, every `pointermove` for the touch is
+     * stopped before the app's window-level listener sees it; the upstream
+     * listener stays armed from the original pointerdown, so once the hold
+     * fires the next move starts the *real* reorder (no order of our own).
+     */
+    const TAB_HOLD_MS = 450;
+    /** Movement before the hold is cancelled; wind, not a drag. */
+    const TAB_HOLD_SLOP_PX = 10;
+    let tabHoldTimer = 0;
+    /** The tab a completed hold-drag belonged to, for its release click. */
+    let tabDraggedTab = null;
+    let tabDragSuppressUntil = 0;
     /** The row whose long press opened its menu, so the release click is eaten. */
     let menuOpenedUntil = 0;
     /** Long-press: held still this long and it opens the row menu. */
@@ -3566,6 +4932,63 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     // ---------------------------------------------------------------------
     let workspacePickerPending = false;
     let workspacePickerState = null;
+    let workspacePickerWatch = null;
+    let workspacePickerWatchTimer = 0;
+
+    /**
+     * Stop watching for the picker's portal.
+     *
+     * The observer exists only between the trigger click and the first
+     * decorated panel: the search row has to be in the menu before its first
+     * visible paint, otherwise upstream's anchor pass measures the old height
+     * and the panel jumps on the next frame.
+     */
+    function stopWorkspacePickerWatch() {
+      if (workspacePickerWatchTimer !== 0) {
+        clearTimeout(workspacePickerWatchTimer);
+        workspacePickerWatchTimer = 0;
+      }
+      workspacePickerWatch?.disconnect();
+      workspacePickerWatch = null;
+    }
+
+    /**
+     * Mark the next menu as the workspace chooser and catch its mount.
+     *
+     * `decorateWorkspacePicker()` used to run only from the rAF decorate pass,
+     * which can land after the panel's first paint. A MutationObserver
+     * callback runs at the microtask checkpoint of the commit that mounts the
+     * portal, so the search row and its attributes are in place before the
+     * upstream rAF anchor pass measures the panel.
+     */
+    function beginWorkspacePicker() {
+      workspacePickerPending = true;
+      if (workspacePickerWatch !== null) return;
+      workspacePickerWatch = new MutationObserver(() => {
+        decorateWorkspacePicker();
+        if (workspacePickerState !== null && workspacePickerState.menu.isConnected) {
+          stopWorkspacePickerWatch();
+        } else if (!workspacePickerPending) {
+          // The panel was found but had no list (or closed again): there is
+          // nothing left to wait for, so do not keep a body observer alive.
+          stopWorkspacePickerWatch();
+        }
+      });
+      workspacePickerWatch.observe(document.body, { childList: true, subtree: true });
+      // A menu that was already mounted (a re-open that reuses the portal) is
+      // decorated without waiting for another mutation.
+      decorateWorkspacePicker();
+      if (workspacePickerState !== null && workspacePickerState.menu.isConnected) {
+        stopWorkspacePickerWatch();
+        return;
+      }
+      workspacePickerWatchTimer = setTimeout(() => {
+        workspacePickerWatchTimer = 0;
+        workspacePickerPending = false;
+        stopWorkspacePickerWatch();
+        scheduleDecorate();
+      }, 1500);
+    }
 
     function clearWorkspacePicker() {
       const state = workspacePickerState;
@@ -3595,13 +5018,15 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
 
     function decorateWorkspacePicker() {
-      if (!narrow()) {
+      if (!phone()) {
         clearWorkspacePicker();
         return;
       }
       const menu = workspacePickerMenu();
       if (menu === null) {
-        clearWorkspacePicker();
+        // While the trigger's observer is still waiting, a menu-less mutation
+        // (focus, aria-expanded) must not cancel the pending picker.
+        if (!workspacePickerPending) clearWorkspacePicker();
         return;
       }
       if (workspacePickerState !== null && workspacePickerState.menu === menu) {
@@ -3619,15 +5044,15 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       search.setAttribute("data-rdsh-workspace-search", "");
       const input = document.createElement("input");
       input.type = "search";
-      input.placeholder = "Search workspaces";
-      input.setAttribute("aria-label", "Search workspaces");
+      input.placeholder = t("workspace.search.placeholder");
+      input.setAttribute("aria-label", t("workspace.search.placeholder"));
       input.autocomplete = "off";
       input.spellcheck = false;
       search.append(input);
       const empty = document.createElement("div");
       empty.className = "rdsh-mux-workspace-empty";
       empty.setAttribute("data-rdsh-workspace-empty", "");
-      empty.textContent = "No matches";
+      empty.textContent = t("workspace.search.noMatches");
       empty.hidden = true;
       const apply = () => {
         const query = input.value.trim().toLowerCase();
@@ -3658,9 +5083,10 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       };
       input.addEventListener("input", apply);
       input.addEventListener("keydown", keydown);
-      menu.insertBefore(search, menu.firstChild);
+      // Directly before the viewport: the search row is part of the panel's
+      // measured height, while "Add workspace…" stays outside the scroller.
+      menu.insertBefore(search, viewport);
       viewport.append(empty);
-      viewport.before(search);
       menu.setAttribute("data-rdsh-workspace-menu", "");
       viewport.setAttribute("data-rdsh-workspace-viewport", "");
       workspacePickerState = { menu, viewport, wrappers, input, search, empty, keydown };
@@ -3669,7 +5095,701 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       requestAnimationFrame(() => input.focus({ preventScroll: true }));
     }
 
+    /**
+     * The title/tabindex values the queue preview had before this module wrote
+     * on them (usually none), so a resize restores upstream's own attributes
+     * rather than deleting whatever was there.
+     */
+    const queuePreviewOriginal = new WeakMap();
+
+    function clearQueueDockHooks() {
+      for (const dock of document.querySelectorAll("[data-rdsh-queue-dock]")) dock.style.removeProperty("margin-bottom");
+      for (const preview of document.querySelectorAll("[data-rdsh-queue-preview]")) {
+        const original = queuePreviewOriginal.get(preview);
+        if (original === undefined) continue;
+        queuePreviewOriginal.delete(preview);
+        if (original.title === null) preview.removeAttribute("title");
+        else preview.setAttribute("title", original.title);
+        if (original.tabindex === null) preview.removeAttribute("tabindex");
+        else preview.setAttribute("tabindex", original.tabindex);
+      }
+      for (const attribute of ["data-rdsh-queue-dock", "data-rdsh-queue-panel", "data-rdsh-queue-row", "data-rdsh-queue-index", "data-rdsh-queue-preview", "data-rdsh-queue-for", "data-rdsh-queue-text"]) {
+        for (const element of document.querySelectorAll(`[${attribute}]`)) element.removeAttribute(attribute);
+      }
+    }
+
+    // ---------------------------------------------------------------------
+    // Right-panel workspace files: long-press copy and explicit search.
+    //
+    // The tree is upstream's, and its stable hooks (verified against
+    // @deepseek-ai/dsh-client-ui-sidebar-files 0.2.1-rc.2) are:
+    //   [data-files-state="tree"][data-files-root="<absolute root>"]
+    //   [data-files-body] > ul li[data-files-entry="file|directory"]
+    //     with data-files-path="<absolute path>"
+    //   header PathLabel: [data-path-label][data-files-path]
+    //     title="<absolute root>"
+    // A row's path is already absolute; a relative one is joined to the real
+    // root the tree reports instead of inventing a path.
+    // ---------------------------------------------------------------------
+    const FILES_HIGHLIGHT = "rdsh-files-search";
+    const FILES_PRESS_MS = 500;
+    const FILES_PRESS_SLOP_PX = 10;
+    let filesRoot = null;
+    let filesSearch = null;
+    let filesPress = null;
+    let filesMenu = null;
+    let filesClickGuard = null;
+    let filesRootTrigger = null;
+    let filesRootTriggerSaved = null;
+    let workspaceToolsInstalled = false;
+
+    /** An absolute path from the tree's real root and one of its entry paths. */
+    function filesAbsolutePath(root, path) {
+      const value = String(path ?? "").replace(/\\/g, "/").trim();
+      if (value === "") return "";
+      if (value.startsWith("/") || value.startsWith("//") || /^[A-Za-z]:\//.test(value)) {
+        return value.length > 1 ? value.replace(/\/+$/, "") : value;
+      }
+      const base = String(root?.getAttribute?.("data-files-root") ?? "")
+        .replace(/\\/g, "/")
+        .replace(/\/+$/, "");
+      if (base === "") return "";
+      return `${base}/${value}`.replace(/\/+$/, "");
+    }
+
+    function filesBaseName(path) {
+      const parts = String(path ?? "").replace(/\\/g, "/").split("/").filter((part) => part !== "");
+      return parts.length === 0 ? "" : parts[parts.length - 1];
+    }
+
+    function filesTreeRoot() {
+      for (const root of document.querySelectorAll('[data-files-state="tree"]')) {
+        // An open panel carries the panel hook; a closed one is clipped to a
+        // zero-width column, so its tree is still mounted but not visible.
+        if (root.closest("[data-rdsh-rightpanel]") !== null) return root;
+        const rect = root.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) return root;
+      }
+      return null;
+    }
+
+    function filesRowPath(root, row) {
+      return filesAbsolutePath(root, row.getAttribute("data-files-path"));
+    }
+
+    /**
+     * The name span upstream draws inside a row's button.
+     *
+     * Structure only: the icon is an SVG child and the name is the last
+     * element child without children of its own. A missing span degrades to
+     * the basename for filtering and skips highlighting.
+     */
+    function filesRowLabel(row) {
+      const button = row.querySelector("button");
+      if (button === null) return null;
+      const spans = [...button.children].filter((child) => child.tagName === "SPAN" && child.children.length === 0);
+      return spans.length === 0 ? null : spans[spans.length - 1];
+    }
+
+    function filesRowName(root, row) {
+      const label = filesRowLabel(row);
+      const text = label === null ? "" : (label.textContent || "").trim();
+      return text === "" ? filesBaseName(filesRowPath(root, row)) : text;
+    }
+
+    function filesTextNodes(node, out) {
+      for (const child of node.childNodes) {
+        if (child.nodeType === 3) out.push(child);
+        else filesTextNodes(child, out);
+      }
+      return out;
+    }
+
+    /**
+     * A case-insensitive matcher over the original string.
+     *
+     * Lowercasing first is wrong for highlighting: characters such as `İ`
+     * expand to two code units when lowercased, so an index taken from the
+     * lowered string can point past the original text node. Matching on the
+     * original string keeps every offset in Range's coordinate space.
+     */
+    function filesQueryPattern(query, flags) {
+      const source = String(query).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      try {
+        return new RegExp(source, `${flags}u`);
+      } catch (error) {
+        try {
+          return new RegExp(source, flags);
+        } catch (fallbackError) {
+          return null;
+        }
+      }
+    }
+
+    function clearFilesHighlight() {
+      const api = globalThis.CSS;
+      if (api === null || typeof api !== "object" || api.highlights === undefined) return;
+      if (typeof api.highlights.delete === "function") api.highlights.delete(FILES_HIGHLIGHT);
+    }
+
+    /**
+     * Highlight the query inside one row's name without touching its DOM.
+     *
+     * CSS Custom Highlight ranges paint over the existing text nodes, so
+     * upstream's React tree, its button handlers and its text selection are
+     * all left exactly as they were.
+     */
+    function filesHighlightRanges(row, query) {
+      const api = globalThis.CSS;
+      if (api === null || typeof api !== "object" || api.highlights === undefined) return [];
+      if (typeof globalThis.Highlight !== "function" || typeof document.createRange !== "function") return [];
+      const label = filesRowLabel(row);
+      if (label === null || query === "") return [];
+      const pattern = filesQueryPattern(query, "gi");
+      if (pattern === null) return [];
+      const ranges = [];
+      for (const node of filesTextNodes(label, [])) {
+        const text = node.textContent || "";
+        for (const match of text.matchAll(pattern)) {
+          if (match[0].length === 0) continue;
+          const range = document.createRange();
+          range.setStart(node, match.index);
+          range.setEnd(node, match.index + match[0].length);
+          ranges.push(range);
+        }
+      }
+      return ranges;
+    }
+
+    /** Filter the mounted tree, keeping ancestors of a matching row visible. */
+    function runFilesSearch(value) {
+      const state = filesSearch;
+      if (state === null) return;
+      const query = String(value ?? "").trim();
+      const body = state.root.querySelector("[data-files-body]") ?? state.root;
+      const rows = [...body.querySelectorAll('li[data-files-entry]')];
+      clearFilesHighlight();
+      for (const row of rows) row.removeAttribute("data-rdsh-files-hidden");
+      state.query = query;
+      if (query === "") {
+        state.empty.hidden = true;
+        return;
+      }
+      const direct = new Set();
+      const keep = new Set();
+      const matcher = filesQueryPattern(query, "i");
+      if (matcher === null) {
+        state.empty.hidden = true;
+        return;
+      }
+      for (const row of rows) {
+        const name = filesRowName(state.root, row);
+        if (!matcher.test(name)) continue;
+        direct.add(row);
+        let parent = row.parentElement;
+        while (parent !== null && parent !== body) {
+          if (parent.tagName === "LI" && parent.hasAttribute("data-files-entry")) keep.add(parent);
+          parent = parent.parentElement;
+        }
+      }
+      const ranges = [];
+      for (const row of rows) {
+        const hit = direct.has(row);
+        row.toggleAttribute("data-rdsh-files-hidden", !hit && !keep.has(row));
+        if (hit) ranges.push(...filesHighlightRanges(row, query));
+      }
+      if (ranges.length > 0) {
+        const api = globalThis.CSS;
+        if (api !== null && typeof api === "object" && api.highlights !== undefined && typeof api.highlights.set === "function") {
+          const highlight = new globalThis.Highlight(...ranges);
+          api.highlights.set(FILES_HIGHLIGHT, highlight);
+        }
+      }
+      state.empty.hidden = direct.size !== 0;
+    }
+
+    function onFilesSearchSubmit() {
+      runFilesSearch(filesSearch?.input.value ?? "");
+    }
+
+    function onFilesSearchKeyDown(event) {
+      const state = filesSearch;
+      if (state === null) return;
+      if (event.key === "Escape") {
+        // A non-empty field clears on Escape; an empty one lets the shell
+        // handle the key (usually closing the panel).
+        if (state.input.value !== "") {
+          state.input.value = "";
+          runFilesSearch("");
+          event.preventDefault();
+          event.stopPropagation();
+        }
+        return;
+      }
+      // Explicit submission only: typing never filters.
+      event.stopPropagation();
+      if (event.key === "Enter") {
+        event.preventDefault();
+        runFilesSearch(state.input.value);
+      }
+    }
+
+    /**
+     * Insert the search row between the header and the scrolling tree.
+     *
+     * It lives outside [data-files-body], so scrolling the tree never moves
+     * the field, and the no-hit line stays visible while the tree is empty.
+     */
+    function ensureFilesSearch(root) {
+      if (filesSearch !== null && filesSearch.root === root && filesSearch.search.isConnected !== false) return filesSearch;
+      if (filesSearch !== null) {
+        filesSearch.input.removeEventListener("keydown", onFilesSearchKeyDown);
+        filesSearch.button.removeEventListener("click", onFilesSearchSubmit);
+        filesSearch.search.remove();
+        filesSearch = null;
+      }
+      clearFilesHighlight();
+      const search = document.createElement("div");
+      search.className = "rdsh-mux-files-search";
+      search.setAttribute("data-rdsh-files-search", "");
+      const input = document.createElement("input");
+      input.type = "search";
+      input.placeholder = t("files.search.placeholder");
+      input.setAttribute("aria-label", t("files.search.placeholder"));
+      input.autocomplete = "off";
+      input.spellcheck = false;
+      input.setAttribute("data-rdsh-files-search-input", "");
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = "🔍";
+      button.setAttribute("aria-label", t("files.search.submit"));
+      button.title = t("files.search.submit");
+      button.setAttribute("data-rdsh-files-search-button", "");
+      const empty = document.createElement("div");
+      empty.className = "rdsh-mux-files-empty";
+      empty.setAttribute("data-rdsh-files-empty", "");
+      empty.textContent = t("files.search.noMatches");
+      empty.hidden = true;
+      search.append(input, button, empty);
+      input.addEventListener("keydown", onFilesSearchKeyDown);
+      button.addEventListener("click", onFilesSearchSubmit);
+      const body = root.querySelector("[data-files-body]");
+      if (body === null) root.append(search);
+      else root.insertBefore(search, body);
+      filesSearch = { root, search, input, button, empty, query: "" };
+      return filesSearch;
+    }
+
+    /** Tag the open tree and keep its injected row in sync with a live route. */
+    function decorateWorkspaceFiles() {
+      if (!phone()) {
+        teardownWorkspaceFiles();
+        return;
+      }
+      const root = filesTreeRoot();
+      if (root === null) {
+        teardownWorkspaceFiles();
+        return;
+      }
+      if (filesRoot !== null && filesRoot !== root) teardownWorkspaceFiles();
+      filesRoot = root;
+      root.setAttribute("data-rdsh-files-tree", "");
+      const pathLabel = root.querySelector("[data-path-label][data-files-path]");
+      if (pathLabel === null) restoreFilesRootTrigger();
+      else ensureFilesRootTrigger(pathLabel);
+      ensureFilesSearch(root);
+      if (filesSearch !== null && filesSearch.query !== "") runFilesSearch(filesSearch.query);
+    }
+
+    /**
+     * Restore the root path's own attributes after a phone session.
+     *
+     * The label is a plain `<span>` upstream. On a phone it briefly becomes a
+     * keyboard-reachable menu trigger; every attribute this module adds is
+     * removed (or put back to its original value) on desktop, panel close and
+     * dispose.
+     */
+    function restoreFilesRootTrigger() {
+      const trigger = filesRootTrigger;
+      const saved = filesRootTriggerSaved;
+      filesRootTrigger = null;
+      filesRootTriggerSaved = null;
+      if (trigger === null || saved === null) return;
+      trigger.removeEventListener("keydown", onFilesRootKeyDown);
+      trigger.removeAttribute("data-rdsh-files-root-path");
+      for (const [name, value] of Object.entries(saved)) {
+        if (value === null) trigger.removeAttribute(name);
+        else trigger.setAttribute(name, value);
+      }
+    }
+
+    function ensureFilesRootTrigger(pathLabel) {
+      if (filesRootTrigger === pathLabel) return;
+      restoreFilesRootTrigger();
+      filesRootTrigger = pathLabel;
+      filesRootTriggerSaved = {
+        tabindex: pathLabel.getAttribute("tabindex"),
+        role: pathLabel.getAttribute("role"),
+        "aria-haspopup": pathLabel.getAttribute("aria-haspopup"),
+        "aria-expanded": pathLabel.getAttribute("aria-expanded"),
+        "aria-label": pathLabel.getAttribute("aria-label"),
+      };
+      pathLabel.setAttribute("data-rdsh-files-root-path", "");
+      pathLabel.setAttribute("tabindex", "0");
+      if (!pathLabel.hasAttribute("role")) pathLabel.setAttribute("role", "button");
+      pathLabel.setAttribute("aria-haspopup", "menu");
+      pathLabel.setAttribute("aria-expanded", "false");
+      if (!pathLabel.hasAttribute("aria-label")) {
+        const title = pathLabel.getAttribute("title");
+        if (title !== null && title !== "") pathLabel.setAttribute("aria-label", title);
+      }
+      pathLabel.addEventListener("keydown", onFilesRootKeyDown);
+    }
+
+    function onFilesRootKeyDown(event) {
+      if (filesRootTrigger === null) return;
+      const opens = event.key === "Enter"
+        || event.key === " "
+        || event.key === "Spacebar"
+        || event.key === "ContextMenu"
+        || (event.key === "F10" && event.shiftKey === true);
+      if (!opens) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const root = filesRoot;
+      const label = filesRootTrigger;
+      if (root === null || label === null) return;
+      const path = filesAbsolutePath(
+        root,
+        label.getAttribute("title") || root.getAttribute("data-files-root") || "",
+      );
+      if (path === "") return;
+      closeFilesMenu();
+      openFilesMenu({ kind: "root", path, anchor: label });
+    }
+
+    function cancelFilesPress() {
+      if (filesPress === null) return;
+      if (filesPress.timer !== 0) clearTimeout(filesPress.timer);
+      filesPress = null;
+    }
+
+    /** What a long press on the tree would act on: a row or the root path. */
+    function filesAnchorAt(target) {
+      if (!phone() || filesRoot === null) return null;
+      if (target === null || target.closest === undefined) return null;
+      // Another tree/panel may be mounted (a hidden route, a second tab, a
+      // future split view). Only rows inside the tree this module decorated
+      // are copy targets.
+      if (!filesRoot.contains(target)) return null;
+      const row = target.closest("li[data-files-entry]");
+      if (row !== null) {
+        const entry = row.getAttribute("data-files-entry");
+        if (entry !== "file" && entry !== "directory") return null;
+        const path = filesRowPath(filesRoot, row);
+        if (path === "") return null;
+        return { kind: "entry", path, row, anchor: row.querySelector("button") ?? row };
+      }
+      const label = target.closest("[data-path-label][data-files-path]");
+      if (label !== null) {
+        const path = filesAbsolutePath(
+          filesRoot,
+          label.getAttribute("title") || filesRoot.getAttribute("data-files-root") || "",
+        );
+        if (path === "") return null;
+        return { kind: "root", path, anchor: label };
+      }
+      return null;
+    }
+
+    /** Is this event still the finger that started the long press? */
+    function filesSamePointer(event) {
+      if (filesPress === null) return false;
+      if (filesPress.pointerId === null) return true;
+      return typeof event.pointerId !== "number" || event.pointerId === filesPress.pointerId;
+    }
+
+    function onFilesPointerDown(event) {
+      if (!phone() || event.pointerType === "mouse" || event.isPrimary === false) return;
+      // A second finger must not replace or cancel the press already running.
+      if (filesPress !== null && !filesSamePointer(event)) return;
+      if (filesMenu !== null) closeFilesMenu();
+      const hit = filesAnchorAt(event.target);
+      if (hit === null) return;
+      cancelFilesPress();
+      filesPress = {
+        ...hit,
+        x: typeof event.clientX === "number" ? event.clientX : 0,
+        y: typeof event.clientY === "number" ? event.clientY : 0,
+        pointerId: typeof event.pointerId === "number" ? event.pointerId : null,
+        timer: 0,
+      };
+      filesPress.timer = setTimeout(() => {
+        if (filesPress === null) return;
+        const press = filesPress;
+        filesPress = null;
+        // Open first: openFilesMenu() retires an older guard, so the row that
+        // started this press must be armed afterwards.
+        openFilesMenu(press);
+        if (press.row !== undefined) armFilesClickGuard(press.row);
+      }, FILES_PRESS_MS);
+    }
+
+    function onFilesPointerMove(event) {
+      if (!filesSamePointer(event) || event.isPrimary === false) return;
+      const dx = (typeof event.clientX === "number" ? event.clientX : 0) - filesPress.x;
+      const dy = (typeof event.clientY === "number" ? event.clientY : 0) - filesPress.y;
+      if (Math.hypot(dx, dy) > FILES_PRESS_SLOP_PX) cancelFilesPress();
+    }
+
+    function onFilesPointerUp(event) {
+      if (!filesSamePointer(event)) return;
+      cancelFilesPress();
+    }
+
+    function onFilesPointerCancel(event) {
+      if (!filesSamePointer(event)) return;
+      cancelFilesPress();
+    }
+
+    function onFilesScroll(event) {
+      const target = event === undefined || event === null ? undefined : event.target;
+      // The transcript behind the right panel streams and scrolls constantly.
+      // Only a scroll that can move the tree (or our fixed menu) may cancel a
+      // press or close the menu.
+      const related = target === undefined
+        || target === null
+        || target === document
+        || target === document.documentElement
+        || target === document.body
+        || target === window
+        || (filesRoot !== null && filesRoot.contains(target))
+        || (filesMenu !== null && filesMenu.node.contains(target));
+      if (!related) return;
+      cancelFilesPress();
+      if (filesMenu !== null) closeFilesMenu();
+    }
+
+    /**
+     * Right-click on a narrow window and Android's long-press context menu.
+     *
+     * The pointer timer excludes the mouse (a mouse hold is not a touch
+     * gesture), so the contextmenu event is the mouse/keyboard route. It is
+     * also what suppresses Android's native menu on rows that opt out of text
+     * selection.
+     */
+    function onFilesContextMenu(event) {
+      if (!phone() || filesRoot === null) return;
+      const target = event.target;
+      if (target === null || target === undefined || target.closest === undefined) return;
+      if (filesMenu !== null && filesMenu.node.contains(target)) {
+        event.preventDefault();
+        return;
+      }
+      const hit = filesAnchorAt(target);
+      if (hit === null) return;
+      event.preventDefault();
+      if (typeof event.stopPropagation === "function") event.stopPropagation();
+      cancelFilesPress();
+      if (filesMenu !== null && filesMenu.anchor === hit.anchor) return;
+      closeFilesMenu();
+      openFilesMenu(hit);
+    }
+
+    /**
+     * A long press ends in a click; never let that click open or toggle the
+     * row. The listener is scoped to the pressed row and retires itself, so no
+     * document-level click handler is left behind (which would also compete
+     * with the app's own click handling on every page).
+     */
+    function onFilesRowClickGuard(event) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+      clearFilesClickGuard();
+    }
+
+    function clearFilesClickGuard() {
+      const guard = filesClickGuard;
+      filesClickGuard = null;
+      if (guard === null) return;
+      if (guard.timer !== 0) clearTimeout(guard.timer);
+      guard.row.removeEventListener("click", onFilesRowClickGuard, true);
+    }
+
+    function armFilesClickGuard(row) {
+      clearFilesClickGuard();
+      const guard = { row, timer: 0 };
+      filesClickGuard = guard;
+      guard.timer = setTimeout(clearFilesClickGuard, 900);
+      row.addEventListener("click", onFilesRowClickGuard, true);
+    }
+
+    function copyFilesText(text) {
+      void copyText(text).then((copied) => {
+        if (copied) notify(t("files.copied"));
+      });
+    }
+
+    function addFilesMenuItem(menu, label, action) {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.setAttribute("role", "menuitem");
+      item.setAttribute("data-rdsh-files-menu-item", "");
+      item.textContent = label;
+      item.addEventListener("click", () => {
+        action();
+        closeFilesMenu(true);
+      });
+      menu.append(item);
+      return item;
+    }
+
+    function openFilesMenu(hit) {
+      closeFilesMenu();
+      const menu = document.createElement("div");
+      menu.className = "rdsh-mux-files-menu";
+      menu.setAttribute("data-rdsh-file-menu", "");
+      menu.setAttribute("role", "menu");
+      menu.setAttribute("aria-label", hit.kind === "root" ? t("files.menu.root") : t("files.menu.entry"));
+      const items = [addFilesMenuItem(menu, t("files.menu.copyPath"), () => copyFilesText(hit.path))];
+      if (hit.kind === "entry") {
+        items.push(addFilesMenuItem(menu, t("files.menu.copyName"), () => copyFilesText(filesBaseName(hit.path))));
+      }
+      document.body.append(menu);
+      const rect = typeof hit.anchor.getBoundingClientRect === "function"
+        ? hit.anchor.getBoundingClientRect()
+        : { left: 12, top: 12, bottom: 12, right: 12 };
+      const width = Math.min(240, Math.max(160, window.innerWidth - 24));
+      menu.style.width = `${width}px`;
+      const height = typeof menu.getBoundingClientRect === "function" ? menu.getBoundingClientRect().height : 0;
+      let top = rect.bottom + 6;
+      if (height > 0 && top + height > window.innerHeight - 12) top = Math.max(12, rect.top - height - 6);
+      const left = Math.min(Math.max(12, rect.left), Math.max(12, window.innerWidth - width - 12));
+      menu.style.top = `${Math.round(top)}px`;
+      menu.style.left = `${Math.round(left)}px`;
+      filesMenu = { node: menu, anchor: hit.anchor, items };
+      if (hit.kind === "root" && hit.anchor === filesRootTrigger) hit.anchor.setAttribute("aria-expanded", "true");
+      items[0]?.focus?.();
+      document.addEventListener("pointerdown", onFilesMenuPointerDown, true);
+      document.addEventListener("keydown", onFilesMenuKeyDown, true);
+    }
+
+    function closeFilesMenu(restoreFocus = false) {
+      const current = filesMenu;
+      filesMenu = null;
+      clearFilesClickGuard();
+      if (current === null) return;
+      document.removeEventListener("pointerdown", onFilesMenuPointerDown, true);
+      document.removeEventListener("keydown", onFilesMenuKeyDown, true);
+      current.node.remove();
+      if (current.anchor === filesRootTrigger) current.anchor.setAttribute("aria-expanded", "false");
+      if (restoreFocus && current.anchor.isConnected !== false && typeof current.anchor.focus === "function") {
+        current.anchor.focus({ preventScroll: true });
+      }
+    }
+
+    function onFilesMenuPointerDown(event) {
+      if (filesMenu === null) return;
+      if (filesMenu.node.contains(event.target)) return;
+      closeFilesMenu();
+    }
+
+    function onFilesMenuKeyDown(event) {
+      const current = filesMenu;
+      if (current === null) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        closeFilesMenu(true);
+        return;
+      }
+      const items = current.items;
+      if (items.length === 0) return;
+      const at = items.indexOf(document.activeElement);
+      if (event.key === "Tab") {
+        // A menu is not a focus trap: close it, put focus back on the trigger
+        // and let the browser's default Tab move to the next element.
+        event.stopPropagation();
+        closeFilesMenu(true);
+        return;
+      }
+      if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      let next;
+      if (event.key === "Home") next = 0;
+      else if (event.key === "End") next = items.length - 1;
+      else if (at === -1) next = event.key === "ArrowDown" ? 0 : items.length - 1;
+      else next = (at + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+      items[next]?.focus?.();
+    }
+
+    /** Remove the injected search, hooks and menu, restoring upstream rows. */
+    function teardownWorkspaceFiles() {
+      closeFilesMenu();
+      cancelFilesPress();
+      restoreFilesRootTrigger();
+      if (filesSearch !== null) {
+        filesSearch.input.removeEventListener("keydown", onFilesSearchKeyDown);
+        filesSearch.button.removeEventListener("click", onFilesSearchSubmit);
+        filesSearch.search.remove();
+        filesSearch = null;
+      }
+      clearFilesHighlight();
+      for (const element of document.querySelectorAll("[data-rdsh-files-hidden]")) element.removeAttribute("data-rdsh-files-hidden");
+      for (const element of document.querySelectorAll("[data-rdsh-files-tree]")) element.removeAttribute("data-rdsh-files-tree");
+      for (const element of document.querySelectorAll("[data-rdsh-files-root-path]")) element.removeAttribute("data-rdsh-files-root-path");
+      filesRoot = null;
+    }
+
+    /**
+     * Document-level pointer listeners for the tree.
+     *
+     * Phone-only and installed once. Delegation means React can replace rows
+     * without this plugin attaching anything to them; the listeners are
+     * removed on leaving the phone layout, on pagehide and on boot teardown.
+     */
+    function installWorkspaceTools() {
+      if (workspaceToolsInstalled || !phone()) return;
+      workspaceToolsInstalled = true;
+      document.addEventListener("pointerdown", onFilesPointerDown, true);
+      document.addEventListener("pointermove", onFilesPointerMove, true);
+      document.addEventListener("pointerup", onFilesPointerUp, true);
+      document.addEventListener("pointercancel", onFilesPointerCancel, true);
+      document.addEventListener("scroll", onFilesScroll, true);
+      document.addEventListener("contextmenu", onFilesContextMenu, true);
+      window.addEventListener("pagehide", onWorkspacePageHide);
+    }
+
+    function onWorkspacePageHide(event) {
+      // A bfcache entry keeps its listeners and DOM; only a real unload tears
+      // the workspace resources down.
+      if (event !== undefined && event !== null && event.persisted === true) return;
+      disposeWorkspaceTools();
+    }
+
+    function disposeWorkspaceTools() {
+      if (workspaceToolsInstalled) {
+        workspaceToolsInstalled = false;
+        document.removeEventListener("pointerdown", onFilesPointerDown, true);
+        document.removeEventListener("pointermove", onFilesPointerMove, true);
+        document.removeEventListener("pointerup", onFilesPointerUp, true);
+        document.removeEventListener("pointercancel", onFilesPointerCancel, true);
+        document.removeEventListener("scroll", onFilesScroll, true);
+        document.removeEventListener("contextmenu", onFilesContextMenu, true);
+        window.removeEventListener("pagehide", onWorkspacePageHide);
+      }
+      stopWorkspacePickerWatch();
+      clearWorkspacePicker();
+      teardownWorkspaceFiles();
+    }
     function decorateQueueDock() {
+      if (!phone()) {
+        if (queuePreview !== null || queueMenu !== null) closeQueueUi();
+        clearQueueDockHooks();
+        return;
+      }
       const dock = document.querySelector("[data-queue-dock]");
       if (dock === null) {
         if (queuePreview !== null || queueMenu !== null) closeQueueUi();
@@ -3682,7 +5802,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       // card is never moved and never reshaped. The composer stack is a flex
       // column whose gap is 6px in a session and 8px in the hero, so cancel
       // whatever the parent actually uses instead of guessing a constant.
-      if (narrow() && panel !== null && dock.parentElement !== null) {
+      if (panel !== null && dock.parentElement !== null) {
         const gapPx = Number.parseFloat(getComputedStyle(dock.parentElement).rowGap);
         // 1px past the card's top edge so its 0.5px outline cannot draw a
         // line across the join.
@@ -3695,6 +5815,12 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
         row.setAttribute("data-rdsh-queue-row", "");
         row.setAttribute("data-rdsh-queue-index", String(index));
         const text = (preview.textContent || "").trim().replace(/\s+/g, " ");
+        if (!queuePreviewOriginal.has(preview)) {
+          queuePreviewOriginal.set(preview, {
+            title: preview.getAttribute("title"),
+            tabindex: preview.getAttribute("tabindex"),
+          });
+        }
         preview.setAttribute("data-rdsh-queue-preview", "");
         preview.setAttribute("data-rdsh-queue-for", String(index));
         preview.setAttribute("data-rdsh-queue-text", text);
@@ -3704,8 +5830,48 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       }
     }
 
+    /** Drop the pending tab hold and its lift styling (not the block). */
+    function cancelTabHold() {
+      if (tabHoldTimer !== 0) {
+        clearTimeout(tabHoldTimer);
+        tabHoldTimer = 0;
+      }
+      tabCandidate?.tab.removeAttribute("data-rdsh-tab-hold");
+    }
+
+    /**
+     * Restore the strip's own `scroll-behavior` after a manual pan.
+     *
+     * dockkit ships `scroll-behavior: smooth` (it focuses a tab by scrolling);
+     * a finger pan must not inherit that easing, so it is forced to auto only
+     * while this gesture owns the strip.
+     */
+    function releaseTabStrip(candidate) {
+      if (candidate === null || candidate === undefined || candidate.strip === null) return;
+      if (candidate.scrollBehavior === undefined) return;
+      if (candidate.scrollBehavior === "") candidate.strip.style.removeProperty("scroll-behavior");
+      else candidate.strip.style.scrollBehavior = candidate.scrollBehavior;
+      candidate.scrollBehavior = undefined;
+    }
+
+    /**
+     * The finger stayed put for {@link TAB_HOLD_MS}: release the move gate.
+     *
+     * The upstream drag was armed by the original pointerdown and only waits
+     * for a move; keeping its listener means the reorder lands in dockkit's own
+     * state, so the plugin never owns a second tab order.
+     */
+    function fireTabHold() {
+      tabHoldTimer = 0;
+      const candidate = tabCandidate;
+      if (candidate === null || candidate.cancelled || candidate.held) return;
+      candidate.held = true;
+      candidate.blocking = false;
+      candidate.tab.setAttribute("data-rdsh-tab-hold", "");
+    }
+
     function onPointerDown(event) {
-      if (!narrow()) return;
+      if (!phone()) return;
       // xterm keeps its real input in a visually hidden textarea. Focusing it
       // from the tap/pointerdown gesture is what asks iOS for the keyboard.
       const queuePreviewTarget = event.target.closest && event.target.closest("[data-rdsh-queue-preview]");
@@ -3732,13 +5898,44 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       if (send !== null && send !== undefined && send.disabled !== true && !STOP_PROBE.test(send.getAttribute("aria-label") || "")) {
         markMobileSession();
       }
-      // Right panel tabs: same native-drag problem as the session rows below.
-      // Upstream starts a tab drag after 4px, so a finger that moves slightly
-      // never produces the click that switches tabs.
+      // Right panel tabs: dockkit arms a reorder on pointerdown and starts it
+      // after 4px, so a tap or a sideways swipe became a drag. Block the move
+      // until the hold fires; the app's own listener stays armed and completes
+      // the reorder from the moves that follow.
       const tab = event.target.closest && event.target.closest("[data-rdsh-rtab]");
-      if (tab !== null && tab !== undefined && event.pointerType !== "mouse") {
-        clearTimeout(tabReplayTimer);
-        tabCandidate = { tab, at: Date.now(), x: event.clientX, y: event.clientY, fired: false };
+      // A second finger is not a new tab gesture: the first pointer already
+      // owns the hold/drag state, and `pointerId` keeps its moves separate.
+      if (tab !== null && tab !== undefined && event.pointerType !== "mouse" && event.isPrimary !== false) {
+        const close = event.target.closest && event.target.closest("[data-dockkit-tab-close]");
+        if (close === null || close === undefined) {
+          clearTimeout(tabReplayTimer);
+          clearTimeout(tabHoldTimer);
+          if (tabCandidate !== null) {
+            tabCandidate.tab.removeAttribute("data-rdsh-tab-hold");
+            releaseTabStrip(tabCandidate);
+          }
+          const strip = tab.closest("[data-dockkit-strip-tabs]") ?? tab.closest('[role="tablist"]')?.querySelector("[data-dockkit-strip-tabs]") ?? null;
+          const scrollBehavior = strip === null ? undefined : (strip.style.scrollBehavior ?? "");
+          if (strip !== null) strip.style.scrollBehavior = "auto";
+          tabCandidate = {
+            tab,
+            at: Date.now(),
+            x: event.clientX,
+            y: event.clientY,
+            fired: false,
+            held: false,
+            blocking: true,
+            cancelled: false,
+            pointerId: event.pointerId,
+            // dockkit's strip is `touch-action: none`, so the finger cannot
+            // pan it natively. Keep the real scroller and pan it ourselves.
+            strip,
+            scrollBehavior,
+            lastX: event.clientX,
+            lastY: event.clientY,
+          };
+          tabHoldTimer = setTimeout(fireTabHold, TAB_HOLD_MS);
+        }
       }
       const row = event.target.closest && event.target.closest('[data-row-key^="session:"]');
       if (row === null || row === undefined) return;
@@ -3753,6 +5950,33 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
 
     /** Movement cancels the long press and leaves the drag to the app. */
     function onPointerMove(event) {
+      const tabMove = tabCandidate;
+      if (tabMove !== null && (tabMove.pointerId === undefined || event.pointerId === undefined || event.pointerId === tabMove.pointerId)) {
+        if (!tabMove.held) {
+          const distance = Math.abs(event.clientX - tabMove.x) + Math.abs(event.clientY - tabMove.y);
+          const dx = event.clientX - tabMove.lastX;
+          const dy = event.clientY - tabMove.lastY;
+          tabMove.lastX = event.clientX;
+          tabMove.lastY = event.clientY;
+          if (distance > TAB_HOLD_SLOP_PX && !tabMove.cancelled) {
+            tabMove.cancelled = true;
+            cancelTabHold();
+          }
+          // A clearly sideways finger pans the strip; a vertical one belongs
+          // to the panel content and is left to the browser (the stylesheet
+          // re-enables only the vertical axis on the strip).
+          if (tabMove.cancelled && tabMove.strip !== null && Math.abs(dx) > Math.abs(dy)) {
+            tabMove.strip.scrollLeft -= dx;
+          }
+        }
+        if (tabMove.blocking) {
+          // Reaches dockkit's window-level pointermove before it can start the
+          // 4px drag. The original pointerdown is untouched, so a held finger
+          // is still driving the app's drag when this gate opens.
+          event.stopImmediatePropagation();
+        }
+        return;
+      }
       if (queuePress !== null && Math.abs(event.clientX - queuePress.x) + Math.abs(event.clientY - queuePress.y) > LONG_PRESS_SLOP_PX) {
         cancelQueuePress();
       }
@@ -3765,21 +5989,43 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       cancelQueuePress();
       cancelLongPress();
       const tabTap = tabCandidate;
-      if (tabTap !== null) {
-        const moved = Math.abs(event.clientX - tabTap.x) + Math.abs(event.clientY - tabTap.y) > 14;
-        if (moved || Date.now() - tabTap.at > 600) {
+      if (tabTap !== null && (tabTap.pointerId === undefined || event.pointerId === undefined || event.pointerId === tabTap.pointerId)) {
+        if (tabTap.held) {
+          // The app just reordered with its own drag. Its release click would
+          // now switch (or re-select) a tab, so eat exactly that one.
+          cancelTabHold();
+          tabTap.tab.removeAttribute("data-rdsh-tab-hold");
+          releaseTabStrip(tabTap);
+          tabDraggedTab = tabTap.tab;
+          tabDragSuppressUntil = Date.now() + 400;
           tabCandidate = null;
         } else {
-          // One replay, only if the app did not deliver the click itself: a
-          // pointerdown that became a tab drag leaves the active tab unchanged
-          // and the tap would otherwise do nothing at all.
-          clearTimeout(tabReplayTimer);
-          tabReplayTimer = window.setTimeout(() => {
-            if (tabCandidate === tabTap) tabCandidate = null;
-            if (tabTap.fired || !tabTap.tab.isConnected) return;
-            tabTap.fired = true;
-            tabTap.tab.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
-          }, 250);
+          const moved = Math.abs(event.clientX - tabTap.x) + Math.abs(event.clientY - tabTap.y) > 14;
+          releaseTabStrip(tabTap);
+          if (moved || tabTap.cancelled || Date.now() - tabTap.at > 600) {
+            if (moved || tabTap.cancelled) {
+              // A pan is not a tap: eat the click the browser may still
+              // synthesise for the release, but only on this tab.
+              tabDraggedTab = tabTap.tab;
+              tabDragSuppressUntil = Date.now() + 400;
+            }
+            tabCandidate = null;
+          } else {
+            // One replay, only if the app did not deliver the click itself: a
+            // pointerdown that became a tab drag leaves the active tab unchanged
+            // and the tap would otherwise do nothing at all.
+            clearTimeout(tabReplayTimer);
+            tabReplayTimer = window.setTimeout(() => {
+              if (tabCandidate === tabTap) tabCandidate = null;
+              if (tabTap.fired || !tabTap.tab.isConnected) return;
+              tabTap.fired = true;
+              tabTap.tab.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+            }, 250);
+          }
+        }
+        if (tabHoldTimer !== 0) {
+          clearTimeout(tabHoldTimer);
+          tabHoldTimer = 0;
         }
       }
       const candidate = tapCandidate;
@@ -3796,6 +6042,19 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       }, 260);
     }
 
+    function onPointerCancel() {
+      cancelQueuePress();
+      if (tabHoldTimer !== 0) {
+        clearTimeout(tabHoldTimer);
+        tabHoldTimer = 0;
+      }
+      if (tabCandidate !== null) {
+        tabCandidate.tab.removeAttribute("data-rdsh-tab-hold");
+        releaseTabStrip(tabCandidate);
+        tabCandidate = null;
+      }
+    }
+
     function onDragStartCapture(event) {
       cancelLongPress();
       if (tapCandidate !== null) tapCandidate.cancelled = true;
@@ -3810,17 +6069,17 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
 
     /** Mobile long-press must only reorder; the app's dblclick rename is off. */
     function onSessionTitleDoubleClick(event) {
-      if (!narrow()) return;
+      if (!phone()) return;
       if (event.target.closest === undefined || event.target.closest("[data-rdsh-session-title]") === null) return;
       event.preventDefault();
       event.stopImmediatePropagation();
     }
 
-    /** Suppress the iOS text callout/context menu on the session title. */
+    /** Suppress the iOS text callout/context menu on session titles and tabs. */
     function onSessionContextMenu(event) {
-      if (!narrow()) return;
+      if (!phone()) return;
       if (event.target.closest === undefined) return;
-      if (event.target.closest("[data-rdsh-session-title], [data-rdsh-session]") === null) return;
+      if (event.target.closest("[data-rdsh-session-title], [data-rdsh-session], [data-rdsh-rtab], [data-dockkit-tab]") === null) return;
       event.preventDefault();
     }
 
@@ -3842,12 +6101,27 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       return null;
     }
 
+    /**
+     * Starts that belong to the panel's own chrome, not its body.
+     *
+     * The tab strip is a horizontal scroller with a reorder gesture of its own
+     * (#31); a left/right swipe there must never be read as "close the panel".
+     * dockkit puts the collapse button in the same strip chrome, so excluding
+     * the strip also excludes that row, while the ✕ itself keeps its click.
+     */
+    function rightPanelChromeStart(target) {
+      if (target === null || target === undefined || typeof target.closest !== "function") return false;
+      return target.closest(
+        `${RIGHT_PANEL_ROOT} [role="tablist"], ${RIGHT_PANEL_ROOT} [data-dockkit-strip], ${RIGHT_PANEL_ROOT} [data-dockkit-tab], ${RIGHT_PANEL_ROOT} header`,
+      ) !== null;
+    }
+
     // Edge swipe from the left opens the session drawer; from the right it
     // pulls the preview/right sidebar (the app's own "Open right sidebar").
     // While the preview is open the left-to-right gesture closes it instead.
     let edgeSwipe = null;
     function onEdgeSwipeStart(event) {
-      if (!narrow() || event.touches.length !== 1) return;
+      if (!phone() || event.touches.length !== 1) return;
       if (document.querySelector("[data-rdsh-lightbox], [data-rdsh-crop-overlay], [data-shortcut-modal=settings]") !== null) return;
       const touch = event.touches[0];
       const target = event.target;
@@ -3861,6 +6135,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       // only once it is already open.
       if (panelOpen && !drawerOpen) {
         if (target instanceof Element) {
+          if (rightPanelChromeStart(target)) return;
           if (scrolledLeftAncestor(target) !== null) return;
           if (target.closest("input, textarea, [contenteditable=true], .xterm, [class*='xterm']") !== null) return;
         }
@@ -3888,9 +6163,9 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
     function onEdgeSwipeMove(event) {
       if (edgeSwipe === null || event.touches.length !== 1) return;
-      // A rotation can end the phone layout in the middle of a gesture; the
-      // stored start point then belongs to a layout that no longer exists.
-      if (!narrow()) {
+      // The mode is fixed, but a gesture can outlive the layout it started
+      // in; a desktop page must not continue it.
+      if (!phone()) {
         edgeSwipe = null;
         return;
       }
@@ -3938,16 +6213,19 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
      * A rotation (or the keyboard opening) can swallow the `touchend` that
      * would have cleared these, and a stale start point turns the next
      * touchmove into a jump-sized swipe: the drawer opens or the preview
-     * closes without a gesture. Also called when the phone layout turns off,
-     * so coordinates from the old layout cannot fire in the new one.
+     * closes without a gesture. Also called on dispose and the desktop boot,
+     * so coordinates from a previous mount cannot fire in the next one.
      */
     function resetGestures() {
       cancelQueuePress();
       edgeSwipe = null;
       touchStart = null;
       terminalDrag = null;
-      tapCandidate = null;
+      cancelTabHold();
+      releaseTabStrip(tabCandidate);
       tabCandidate = null;
+      tabDraggedTab = null;
+      tapCandidate = null;
       clearTimeout(tabReplayTimer);
       cancelLongPress();
     }
@@ -4005,8 +6283,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
 
     function onKeyDownCapture(event) {
-      // The legacy phone default follows the same width contract as the
-      // layout: a narrow window (mouse or finger) gets Enter = newline. A wide
+      // Enter follows the device mode: mobile gets newline by default, a
       // desktop stays stock unless the #15 opt-in is on.
       const finger = phone();
       if (event.key !== "Enter" || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return;
@@ -4134,6 +6411,119 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       terminalDrag = null;
     }
 
+    // ---------------------------------------------------------------------
+    // Terminal: keep the screen inside the visual viewport
+    //
+    // The bundled terminal mounts xterm in a div and fits it from a
+    // ResizeObserver on that div (`fitScreen`: `fit.proposeDimensions()` then
+    // `xterm.resize` + `model.resize`, so the Host grid follows too). On iOS
+    // the keyboard shrinks `visualViewport` without shrinking the layout
+    // viewport, so that observer never fires and the last rows stay behind the
+    // keyboard. There is no public handle on the xterm instance and no fit
+    // event to call; the observable path is geometry. Shrinking the mount node
+    // to the visible band makes the app's own observer run the real fit.
+    //
+    // There is deliberately no synthetic scroll here. xterm 6 builds a
+    // `SmoothScrollableElement`, whose `setScrollPosition` feeds an internal
+    // `Scrollable` and re-renders rows; `.xterm-scrollable-element` is only a
+    // `position: relative` wrapper with no overflow (see client.terminal.js
+    // `AbstractScrollableElement`). Its `HTMLElement.scrollTop` is not the
+    // terminal's scroll position, and a wheel event is application input for
+    // mouse-tracking / alternate-buffer programs. Fit alone is what this
+    // plugin may do; the upstream `xterm.resize` keeps the viewport where the
+    // terminal itself decides.
+    //
+    // `fitScreen` is gated on the screen being writable, so a read-only
+    // terminal keeps its Host grid and does not refit.
+    // ---------------------------------------------------------------------
+    let terminalFitFrame = 0;
+    let terminalFitHeight = 0;
+    let terminalFitMount = null;
+
+    function clearTerminalFit() {
+      if (terminalFitFrame !== 0) {
+        cancelAnimationFrame(terminalFitFrame);
+        terminalFitFrame = 0;
+      }
+      terminalFitHeight = 0;
+      terminalFitMount = null;
+      for (const mount of document.querySelectorAll("[data-rdsh-terminal-fit]")) {
+        mount.style.removeProperty("height");
+        mount.style.removeProperty("flex");
+        mount.removeAttribute("data-rdsh-terminal-fit");
+      }
+    }
+
+    /**
+     * Fit the mounted terminal to the part of it the visual viewport shows.
+     *
+     * Runs in one rAF and only writes when the measured height changes, so the
+     * ResizeObserver the app installed cannot bounce.
+     */
+    function applyTerminalFit() {
+      terminalFitFrame = 0;
+      if (!phone() || !document.documentElement.hasAttribute("data-rdsh-rightpanel-open")) {
+        clearTerminalFit();
+        return;
+      }
+      const viewport = window.visualViewport;
+      if (viewport === null || viewport === undefined) {
+        clearTerminalFit();
+        return;
+      }
+      // Android resizes the layout viewport, so the app's observer already
+      // fits; only the iOS-style "layout stays, visual viewport shrinks" case
+      // needs this path. A URL bar alone is a smaller inset but still real.
+      const layoutHeight = Number.isFinite(window.innerHeight) ? window.innerHeight : 0;
+      if (!(layoutHeight - viewport.height > 1)) {
+        clearTerminalFit();
+        return;
+      }
+      let mount = null;
+      for (const section of document.querySelectorAll("[data-sidebar-terminal]")) {
+        if (section.closest("[hidden]") !== null) continue;
+        const xterm = section.querySelector(".xterm");
+        if (xterm === null || xterm.parentElement === null) continue;
+        const rect = xterm.parentElement.getBoundingClientRect();
+        if (!(rect.width > 0) || !(rect.height > 0)) continue;
+        mount = xterm.parentElement;
+        break;
+      }
+      if (mount === null) {
+        clearTerminalFit();
+        return;
+      }
+      const rect = mount.getBoundingClientRect();
+      const visibleBottom = viewport.offsetTop + viewport.height;
+      const height = Math.floor(visibleBottom - rect.top);
+      if (!(height >= 24)) {
+        clearTerminalFit();
+        return;
+      }
+      if (terminalFitMount !== null && terminalFitMount !== mount) {
+        terminalFitMount.style.removeProperty("height");
+        terminalFitMount.style.removeProperty("flex");
+        terminalFitMount.removeAttribute("data-rdsh-terminal-fit");
+      }
+      if (Math.abs(height - terminalFitHeight) > 0.5 || terminalFitMount !== mount) {
+        terminalFitHeight = height;
+        terminalFitMount = mount;
+        mount.setAttribute("data-rdsh-terminal-fit", "");
+        mount.style.height = `${height}px`;
+        mount.style.flex = "0 0 auto";
+      }
+    }
+
+    function scheduleTerminalFit() {
+      if (!phone()) {
+        clearTerminalFit();
+        return;
+      }
+      if (typeof requestAnimationFrame !== "function") return;
+      if (terminalFitFrame !== 0) return;
+      terminalFitFrame = requestAnimationFrame(applyTerminalFit);
+    }
+
     function scrollableAncestor(target) {
       let node = target;
       while (node !== null && node !== undefined && node !== document.body) {
@@ -4157,6 +6547,22 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
 
     function onTouchMove(event) {
       if (moveTerminalDrag(event)) return;
+      const tabMove = tabCandidate;
+      if (tabMove !== null) {
+        if (event.touches.length === 1) {
+          const touch = event.touches[0];
+          if (!tabMove.held && !tabMove.cancelled
+            && Math.abs(touch.clientX - tabMove.x) + Math.abs(touch.clientY - tabMove.y) > TAB_HOLD_SLOP_PX) {
+            tabMove.cancelled = true;
+            cancelTabHold();
+          }
+          // The hold owns the gesture now: stop the browser from scrolling
+          // the panel under a reorder. Before the hold, the strip is
+          // `touch-action: pan-y`, so a vertical drag still scrolls content.
+          if (tabMove.held && event.cancelable) event.preventDefault();
+        }
+        return;
+      }
       if (touchStart === null || event.touches.length !== 1) return;
       const touch = event.touches[0];
       const dy = touch.clientY - touchStart.y;
@@ -4320,16 +6726,43 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       const target = event.target;
       if (target === null || target.closest === undefined) return;
 
+      // A header activity chip whose own panel is open closes it on the second
+      // tap; any other chip click (including the first one) stays upstream so
+      // the old panel's outside-pointer close switches panels naturally.
+      const activityChip = activityChipOf(target);
+      if (activityChip !== null && handleActivityChipClick(activityChip, event)) return;
+
+      // A completed hold-drag is a reorder, not a tab selection. The browser
+      // can still synthesise the release click on the tab that was dragged;
+      // eat that one only, and only for a moment so the next tap works.
+      if (tabDraggedTab !== null) {
+        if (Date.now() >= tabDragSuppressUntil) {
+          tabDraggedTab = null;
+        } else if (target.closest("[data-rdsh-rtab]") === tabDraggedTab) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          return;
+        }
+      }
+
       // The app delivered the tab click itself; the replay must stay cancelled.
       if (tabCandidate !== null && target.closest("[data-rdsh-rtab]") === tabCandidate.tab) tabCandidate.fired = true;
 
+      // #34: a real click on a review's wrap toggle is the user's choice. The
+      // trusted check keeps this plugin's own default-on click out of the
+      // record, so OFF is respected on every later render pass.
+      noteReviewWrapClick(event);
+
       // Workspace picker: remember that the next visible menu is the
-      // new-session workspace chooser, then decorate it with search.
-      if (target.closest && target.closest('[aria-label="Choose workspace"]') !== null) {
+      // new-session workspace chooser, then decorate it with search. The
+      // search row is a mobile affordance, so desktop only opens the stock
+      // menu.
+      if (phone() && target.closest && target.closest('[aria-label="Choose workspace"]') !== null) {
         const trigger = target.closest('[data-rdsh-workspace-trigger], [aria-label="Choose workspace"]');
         if (trigger !== null) trigger.setAttribute("data-rdsh-workspace-trigger", "");
-        workspacePickerPending = true;
-        scheduleDecorate();
+        // The same control closes an open menu; only the opening click starts
+        // the observer. aria-expanded still carries the pre-click state here.
+        if (trigger === null || trigger.getAttribute("aria-expanded") !== "true") beginWorkspacePicker();
       }
       // Queued message: tap toggles the full-text preview. The native row still
       // owns its edit/remove/steer buttons; this branch only wraps the preview.
@@ -4347,7 +6780,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       }
       // xterm's helper textarea is the actual input; a click gesture focusing it
       // asks iOS to show the keyboard.
-      if (narrow()) {
+      if (phone()) {
         const terminal = target.closest(".xterm, [class*='xterm']");
         if (terminal !== null) {
           const input = terminal.querySelector("textarea.xterm-helper-textarea, textarea");
@@ -4374,14 +6807,14 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       // Todo rows and the goal objective are truncated in the dock; tapping
       // opens a read-only popover with the full text.
       const todoItem = target.closest("[data-rdsh-todo-item]");
-      if (todoItem !== null && narrow()) {
+      if (todoItem !== null && phone()) {
         event.preventDefault();
         event.stopImmediatePropagation();
         showDetailPopover(todoItem, t("mux.detail.todo"), todoItem.getAttribute("data-rdsh-todo-text"), todoItem.getAttribute("data-rdsh-todo-status"));
         return;
       }
       const goalObjective = target.closest("[data-rdsh-goal-objective]");
-      if (goalObjective !== null && narrow()) {
+      if (goalObjective !== null && phone()) {
         event.preventDefault();
         event.stopImmediatePropagation();
         const goalBar = goalObjective.closest("[data-goal-bar]");
@@ -4402,7 +6835,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       // workspace's "+") opens a blank session behind the drawer, so the drawer
       // closes just as it does for a tapped session row. Match by label, not
       // by hashed class; a session row never carries one of these buttons.
-      if (narrow() && isNewSessionButton(target)) {
+      if (phone() && isNewSessionButton(target)) {
         setTimeout(closeDrawer, 0);
         return;
       }
@@ -4410,14 +6843,14 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       // Plugins / Automation tasks open a full-screen route. Close the drawer
       // after the app has handled the click, so the route is not left under an
       // open drawer (and the FAB comes back). A desktop sidebar is never
-      // touched: this branch is width-gated.
-      if (narrow() && isPanelRouteButton(target)) {
+      // touched: this branch is mode-gated.
+      if (phone() && isPanelRouteButton(target)) {
         setTimeout(closeDrawer, 0);
         return;
       }
 
       const row = target.closest('[data-row-key^="session:"]');
-      if (row !== null && narrow()) {
+      if (row !== null && phone()) {
         // Only the release click is a target: the click this module sends to
         // the row's own "..." trigger starts inside its actions, and eating that
         // one left every long press after the first without a menu.
@@ -4437,7 +6870,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       if (target.closest('[data-shortcut-modal="settings"]') !== null) return;
 
       const crumbs = target.closest("[data-rdsh-crumbs]");
-      if (crumbs !== null && narrow()) {
+      if (crumbs !== null && phone()) {
         showTitlePopover(crumbs);
         return;
       }
@@ -4463,14 +6896,14 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
 
     function onFocusPointer(event) {
-      if (!narrow()) return;
+      if (!phone()) return;
       const field = textBoxOf(event.target);
       allowFocusElement = field;
       allowFocusUntil = field === null ? 0 : Date.now() + 1500;
     }
 
     function onModelFocusOut(event) {
-      if (!narrow()) return;
+      if (!phone()) return;
       const target = event.target;
       if (target === null || target === undefined || target.closest === undefined) return;
       const root = target.closest('[class*="_7KE1Ra_root"]');
@@ -4486,7 +6919,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
 
     function onFocusInGuard(event) {
-      if (!narrow()) return;
+      if (!phone()) return;
       const field = textBoxOf(event.target);
       if (field === null) return;
       // Popovers (the model picker's search, dialogs, etc.) focus their own
@@ -4552,7 +6985,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
         closeDetailPopover();
         return;
       }
-      if (!narrow() || (event.key !== "Enter" && event.key !== " ")) return;
+      if (!phone() || (event.key !== "Enter" && event.key !== " ")) return;
       const target = event.target;
       if (target === null || target === undefined || target.closest === undefined) return;
       const todoItem = target.closest("[data-rdsh-todo-item]");
@@ -4645,6 +7078,10 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       const menuState = typeof props.useMenuOpenState === "function" ? props.useMenuOpenState() : null;
       const setMenuOpen = Array.isArray(menuState) ? menuState[1] : null;
       if (typeof sessionId !== "string") return null;
+      // The frame is painted by the mobile stylesheet, so the row that sets it
+      // is a mobile affordance too (#44). A desktop menu keeps upstream's rows
+      // exactly as they were.
+      if (!phone()) return null;
       return h("button", {
         type: "button",
         role: "menuitem",
@@ -4680,8 +7117,19 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       return null;
     }
 
+    /**
+     * Dialogs whose swipe listeners were attached. A WeakSet, not the
+     * attribute: `clearLightboxHooks()` removes the attribute on desktop, and
+     * re-entering mobile mode must not add a second set of listeners.
+     */
+    const lightboxSwipeAttached = new WeakSet();
+
     function attachLightboxSwipe(dialog) {
-      if (dialog.hasAttribute("data-rdsh-swipe")) return;
+      if (lightboxSwipeAttached.has(dialog)) {
+        dialog.setAttribute("data-rdsh-swipe", "");
+        return;
+      }
+      lightboxSwipeAttached.add(dialog);
       dialog.setAttribute("data-rdsh-swipe", "");
       const stage = dialog.querySelector('[class*="_stage_"]');
       const close = dialog.querySelector('[class*="_close_"]');
@@ -5025,10 +7473,29 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       document.body.append(overlay);
     }
 
+    /** Close the phone crop editor through its own cancel path (revokes URLs). */
+    function closeCropOverlay() {
+      for (const overlay of document.querySelectorAll("[data-rdsh-crop-overlay]")) {
+        const cancel = overlay.querySelector(".rdsh-crop-cancel");
+        if (cancel !== null) cancel.click();
+        else overlay.remove();
+      }
+    }
+
+    /** Remove the crop button and the hooks this module put on a dialog. */
+    function clearLightboxHooks() {
+      for (const button of document.querySelectorAll("[data-rdsh-crop-button]")) button.remove();
+      for (const dialog of document.querySelectorAll("[data-rdsh-lightbox]")) dialog.removeAttribute("data-rdsh-lightbox");
+      for (const dialog of document.querySelectorAll("[data-rdsh-swipe]")) dialog.removeAttribute("data-rdsh-swipe");
+    }
+
     function decorateLightbox() {
       // The crop button and the full-bleed styling are phone affordances: a
       // desktop viewer keeps its own chrome and its own close button.
-      if (!narrow()) return;
+      if (!phone()) {
+        clearLightboxHooks();
+        return;
+      }
       const dialog = lightboxDialog();
       if (dialog === null) return;
       if (!dialog.hasAttribute("data-rdsh-lightbox")) dialog.setAttribute("data-rdsh-lightbox", "");
@@ -5542,8 +8009,8 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
 
     function MobileSection() {
       const s = useStore();
-      // #15: the phone-only rows and the "hidden controls" card are decided by
-      // the device, not the window width, so a desktop never reads "this is
+      // #15: the mobile-only rows and the "hidden controls" card are decided
+      // by the device, not the window width, so a desktop never reads "this is
       // what we hide from you" about controls that are all visible.
       const onPhone = s.phone === true;
       const [message, setMessage] = useState("");
@@ -5879,10 +8346,9 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
         // #15: the PWA and Input sections are registered as their own tabs.
         // Inlining them into "Mobile" as well duplicated every heading on a
         // desktop, where none of the three tabs are merged. Both halves of the
-        // merge must agree: `applyHideList` hides those tabs under the same
-        // `narrow() && phone()` condition.
-        s.narrow && onPhone ? h(InputSection) : null,
-        s.narrow && onPhone && typeof globalThis.__RDSH_PWA_SETTINGS_SECTION__ === "function"
+        // merge must agree: `applyHideList` hides those tabs under `phone()`.
+        onPhone ? h(InputSection) : null,
+        onPhone && typeof globalThis.__RDSH_PWA_SETTINGS_SECTION__ === "function"
           ? h(globalThis.__RDSH_PWA_SETTINGS_SECTION__)
           : null,
         s.bootError !== "" ? h("p", { className: "rdsh-mux-note" }, t("mux.bootError", { error: s.bootError })) : null,
@@ -5917,10 +8383,10 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
 
     function LiveSpeed({ sessionId }) {
-      // Re-render on media changes (boot emits `narrow`), so the label appears
-      // and disappears with the layout instead of polling on a desktop.
+      // The label belongs to the mobile surface, not to a window width: it
+      // appears whenever this device runs the mobile UI, at any viewport size.
       const store = useStore();
-      const phone = store.narrow;
+      const phone = store.phone;
       const [speed, setSpeed] = useState(null);
       useEffect(() => {
         currentSessionId = typeof sessionId === "string" && sessionId !== "" ? sessionId : null;
@@ -5964,198 +8430,22 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
 
     // ---------------------------------------------------------------------
     // Styles
+    //
+    // The layout stylesheet is split in two. The mobile half is inserted as a
+    // separate <style> only when the bootstrapped mode is "mobile": no rule is
+    // enabled by a max-width wrapper, and a resize cannot add or remove it.
+    //
+    //   CSS_DEVICE  the plugin's own chrome that is not device-specific: the
+    //               shared toast and the Settings cards.
+    //   CSS_PHONE   everything that reshapes upstream on a mobile device:
+    //               drawer, right panel, composer, transcript, question cards,
+    //               queue, workspace picker, settings navigation, animations,
+    //               the session colour frame and the safe-area root padding.
+    //
+    // A mobile rule belongs in CSS_PHONE; the mobile-mode style node is the
+    // contract.
     // ---------------------------------------------------------------------
-    const CSS = `
-.rdsh-mux-live-speed { color: var(--dsw-alias-label-secondary, #a1a1aa); font-size: 11px; white-space: nowrap; }
-.rdsh-mux-fab {
-  position: fixed; left: 8px; top: calc(env(safe-area-inset-top, 0px) + 8px);
-  width: 40px; height: 40px; border: 0; border-radius: 12px; z-index: 40;
-  display: none; align-items: center; justify-content: center;
-  color: var(--dsw-alias-label-primary, #f9fafb);
-  background: var(--dsw-alias-bg-module-platform, #26262a);
-  box-shadow: var(--dsw-shadow-lv2, 0 4px 12px rgba(0,0,0,.08));
-  -webkit-tap-highlight-color: transparent; cursor: pointer;
-}
-.rdsh-mux-fab:active { transform: scale(.96); }
-.rdsh-mux-fab-badge {
-  position: absolute; top: -5px; right: -5px;
-  min-width: 18px; height: 18px; padding: 0 4px;
-  border-radius: 9px; box-sizing: border-box;
-  background: var(--dsw-alias-state-error-primary, #ef4444);
-  color: var(--dsw-alias-toast-label, #fff);
-  font: 700 10px/14px -apple-system, BlinkMacSystemFont, "Hiragino Sans", sans-serif;
-  text-align: center; white-space: nowrap;
-  border: 2px solid var(--dsw-alias-bg-base, #151517);
-  box-shadow: var(--dsw-shadow-lv1, 0 2px 4px rgba(0,0,0,.05));
-  display: none; pointer-events: none;
-}
-.rdsh-mux-fab-badge[data-visible] { display: block; }
-/* The session colour frame is part of the plugin's desktop surface too: the
-   legacy build painted it outside the phone query. */
-[data-rdsh-session-frame] {
-  box-shadow: inset 0 0 0 2px var(--rdsh-session-frame) !important;
-}
-.rdsh-frame-menu-item {
-  width: 100%; display: flex; align-items: center; gap: 10px;
-  padding: 8px 12px; border: 0; border-radius: 8px;
-  background: transparent; color: var(--dsw-alias-label-primary, #f9fafb);
-  font: inherit; font-size: 13px; text-align: left; cursor: pointer;
-}
-.rdsh-frame-menu-item:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,.08)); }
-.rdsh-frame-menu-icon { display: grid; place-items: center; width: 16px; height: 16px; opacity: .9; }
-.rdsh-frame-backdrop { position: fixed; inset: 0; z-index: 900; background: transparent; }
-.rdsh-frame-pop {
-  position: fixed; z-index: 901; width: 252px; box-sizing: border-box;
-  padding: 12px; border-radius: 14px;
-  background: var(--dsw-alias-bg-layer-2, #2c2c2e); color: var(--dsw-alias-label-primary, #f9fafb);
-  border: .5px solid var(--dsw-alias-border-l3, rgba(0,0,0,.12));
-  box-shadow: var(--dsw-elevation-prominent, 0 14px 40px rgba(0,0,0,.3));
-}
-.rdsh-frame-pop-title { font-size: 12px; color: var(--dsw-alias-label-secondary, #cfd3d6); margin-bottom: 10px; }
-.rdsh-frame-swatches { display: flex; flex-wrap: wrap; gap: 8px; }
-.rdsh-frame-swatch {
-  width: 30px; height: 30px; border-radius: 999px !important;
-  border: 2px solid transparent; padding: 0; cursor: pointer;
-}
-.rdsh-frame-swatch[data-current="true"] { border-color: var(--dsw-alias-label-primary, #f9fafb); box-shadow: 0 0 0 2px var(--dsw-alias-bg-layer-2, #2c2c2e), 0 0 0 3px var(--dsw-alias-label-primary, #f9fafb); }
-.rdsh-frame-clear {
-  width: 100%; margin-top: 12px; padding: 8px 10px;
-  border: .5px solid var(--dsw-alias-border-l3, rgba(255,255,255,.16)); border-radius: 8px;
-  background: transparent; color: var(--dsw-alias-label-primary, #f9fafb);
-  font: inherit; font-size: 12px; cursor: pointer;
-}
-
-.rdsh-mux-backdrop {
-  position: fixed; inset: 0; z-index: 45; display: none;
-  /* The reference dim (rgba(0,0,0,.35)), not a theme token whose alpha can
-     drift with the palette. No fade: the dimming is a state change, and
-     fading it looked like a second sheet sliding in behind the drawer. */
-  background: rgba(0,0,0,.35); opacity: 0; pointer-events: none;
-}
-
-.rdsh-mux-detail {
-  position: fixed; z-index: 990; box-sizing: border-box;
-  padding: 10px 12px 12px; border-radius: 12px;
-  background: var(--dsw-alias-bg-layer-2, #2c2c2e) !important;
-  color: var(--dsw-alias-label-primary, #f9fafb);
-  border: .5px solid var(--dsw-alias-border-l3, rgba(0,0,0,.12));
-  box-shadow: var(--dsw-elevation-prominent, 0 10px 30px rgba(0,0,0,.3));
-  font-size: 13px; line-height: 1.55; overflow-wrap: anywhere;
-  max-height: min(50dvh, 380px); overflow-y: auto;
-  animation: rdsh-mux-pop .14s ease-out;
-}
-.rdsh-mux-detail-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-.rdsh-mux-detail-title {
-  font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
-  color: var(--dsw-alias-label-tertiary, #a1a1aa);
-}
-.rdsh-mux-detail-meta {
-  font-size: 11px; color: var(--dsw-alias-label-tertiary, #a1a1aa);
-  border: .5px solid var(--dsw-alias-border-l3, rgba(255,255,255,.16));
-  border-radius: 999px; padding: 1px 6px;
-}
-.rdsh-mux-detail-body { white-space: pre-wrap; }
-
-.rdsh-mux-titlepop {
-  position: fixed; z-index: 980; box-sizing: border-box;
-  padding: 10px 12px; border-radius: 12px;
-  background: var(--dsw-alias-bg-layer-2, #2c2c2e) !important;
-  color: var(--dsw-alias-label-primary, #f9fafb);
-  border: .5px solid var(--dsw-alias-border-l3, rgba(0,0,0,.12));
-  box-shadow: var(--dsw-elevation-prominent, 0 10px 30px rgba(0,0,0,.3));
-  font-size: 13px; line-height: 1.5; overflow-wrap: anywhere;
-  animation: rdsh-mux-pop .14s ease-out;
-}
-@keyframes rdsh-mux-pop { from { opacity: 0; transform: translateY(-4px) } to { opacity: 1; transform: none } }
-
-/* Image lightbox: keep the close/crop controls below the camera housing,
-   shrink the image into the remaining safe area, and darken the backdrop.
-   The viewer is a desktop surface too, so these stay on the phone. */
-@media ${NARROW_QUERY} {
-  [data-rdsh-lightbox] { background: rgba(0,0,0,.96) !important; }
-  [data-rdsh-lightbox] [class*="_mask_"] { background: rgba(0,0,0,.96) !important; }
-  [data-rdsh-lightbox] [class*="_close_"] {
-    z-index: 5;
-    top: calc(env(safe-area-inset-top, 0px) + 12px) !important;
-    right: 16px !important;
-    width: 40px !important; height: 40px !important;
-    border-radius: 50% !important;
-    background: rgba(44,44,46,.95) !important;
-  }
-  [data-rdsh-lightbox] [class*="_image_"] {
-    max-height: calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 104px) !important;
-    max-width: calc(100vw - 24px) !important;
-  }
-  [data-rdsh-crop-button] {
-    position: absolute; z-index: 5; top: calc(env(safe-area-inset-top, 0px) + 12px); left: 16px;
-    width: 40px; height: 40px; border: 0; border-radius: 50%;
-    background: rgba(44,44,46,.95); color: #f9fafb;
-    display: grid; place-items: center; z-index: 2; padding: 0;
-  }
-}
-.rdsh-crop-overlay {
-  position: fixed; inset: 0; z-index: 1200;
-  display: flex; flex-direction: column;
-  background: #000; color: #f9fafb;
-  padding-top: env(safe-area-inset-top, 0px);
-  padding-bottom: env(safe-area-inset-bottom, 0px);
-}
-.rdsh-crop-head {
-  position: relative; z-index: 3;
-  flex: 0 0 auto; height: 52px; padding: 0 12px 0 16px;
-  display: flex; align-items: center; justify-content: space-between;
-  font-size: 15px;
-}
-.rdsh-crop-close {
-  width: 40px; height: 40px; border: 0; border-radius: 50%;
-  background: rgba(44,44,46,.95); color: #f9fafb; font-size: 22px; line-height: 1;
-}
-.rdsh-crop-head-actions { display: flex; align-items: center; gap: 4px; }
-.rdsh-crop-rotate {
-  width: 40px; height: 40px; border: 0; border-radius: 50%;
-  background: rgba(44,44,46,.95); color: #f9fafb;
-  display: grid; place-items: center; padding: 0;
-}
-.rdsh-crop-stage {
-  flex: 1 1 auto; min-height: 0; display: flex;
-  align-items: center; justify-content: center; padding: 12px;
-}
-.rdsh-crop-wrap { position: relative; line-height: 0; max-width: 100%; max-height: 100%; }
-.rdsh-crop-image {
-  display: block; max-width: 100%; max-height: 100%;
-  user-select: none; -webkit-user-select: none; -webkit-user-drag: none;
-}
-.rdsh-crop-box {
-  position: absolute; box-sizing: border-box;
-  border: 1.5px solid #fff; cursor: move; touch-action: none;
-  box-shadow: 0 0 0 9999px rgba(0,0,0,.55);
-}
-.rdsh-crop-box::before {
-  content: ""; position: absolute; inset: 0; pointer-events: none;
-  background-image:
-    linear-gradient(to right, transparent calc(33.33% - .5px), rgba(255,255,255,.35) calc(33.33% - .5px), rgba(255,255,255,.35) calc(33.33% + .5px), transparent calc(33.33% + .5px), transparent calc(66.66% - .5px), rgba(255,255,255,.35) calc(66.66% - .5px), rgba(255,255,255,.35) calc(66.66% + .5px), transparent calc(66.66% + .5px)),
-    linear-gradient(to bottom, transparent calc(33.33% - .5px), rgba(255,255,255,.35) calc(33.33% - .5px), rgba(255,255,255,.35) calc(33.33% + .5px), transparent calc(33.33% + .5px), transparent calc(66.66% - .5px), rgba(255,255,255,.35) calc(66.66% - .5px), rgba(255,255,255,.35) calc(66.66% + .5px), transparent calc(66.66% + .5px));
-}
-.rdsh-crop-handle {
-  position: absolute; width: 24px; height: 24px; box-sizing: border-box;
-  border: 2px solid #fff; border-radius: 50%;
-  background: rgba(0,0,0,.35); touch-action: none;
-}
-.rdsh-crop-handle[data-corner="nw"] { left: -12px; top: -12px; cursor: nwse-resize; }
-.rdsh-crop-handle[data-corner="ne"] { right: -12px; top: -12px; cursor: nesw-resize; }
-.rdsh-crop-handle[data-corner="sw"] { left: -12px; bottom: -12px; cursor: nesw-resize; }
-.rdsh-crop-handle[data-corner="se"] { right: -12px; bottom: -12px; cursor: nwse-resize; }
-.rdsh-crop-actions {
-  position: relative; z-index: 3;
-  flex: 0 0 auto; display: flex; gap: 10px; padding: 12px 16px;
-}
-.rdsh-crop-actions button {
-  flex: 1 1 0; height: 46px; border: 0; border-radius: 12px;
-  font: inherit; font-size: 15px; font-weight: 600;
-}
-.rdsh-crop-cancel { background: #2c2c2e; color: #f9fafb; }
-.rdsh-crop-save { background: #f9fafb; color: #151517; }
-
+    const CSS_DEVICE = `
 .rdsh-mux-toast {
   position: fixed; z-index: 960; left: 50%;
   bottom: calc(max(env(safe-area-inset-bottom, 0px), var(--rdsh-safe-bottom, 0px)) + 104px);
@@ -6168,6 +8458,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
   transition: opacity .16s ease, transform .16s ease;
 }
 .rdsh-mux-toast[data-show] { opacity: 1; transform: translateX(-50%); }
+
 
 .rdsh-mux-section { display: flex; flex-direction: column; gap: 12px; color: var(--dsw-alias-label-primary, #f9fafb); }
 .rdsh-mux-card {
@@ -6244,13 +8535,207 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
   border: .5px solid var(--dsw-alias-border-l3, rgba(255,255,255,.16));
 }
 
-/* Everything from here to the safe-area block below dresses upstream DOM the
-   phone view rearranges: the running-session animation, the open row's fill,
-   the header sheen, toasts and the typing effect. None of it has a meaning on
-   a desktop sidebar, so it is inside the phone query rather than wrapped
-   around it. The body is not re-indented: this is a scope change, and keeping
-   the lines untouched keeps the review to the two braces. */
-@media ${NARROW_QUERY} {
+`;
+
+    const CSS_PHONE = `
+/* Controls the hide list matched. The attribute these selectors key off is
+   written only while phone() holds (see applyHideList), and the rules sit in
+   the mobile sheet as well: a desktop keeps every control. */
+html[data-rdsh-hide-settings] [data-rdsh-hidden],
+html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !important; }
+
+/* Session colour frames and their menu/palette. The frame is a phone
+   affordance in the #44 contract: a desktop sidebar is upstream's, unchanged. */
+[data-rdsh-session-frame] {
+  box-shadow: inset 0 0 0 2px var(--rdsh-session-frame) !important;
+}
+.rdsh-frame-menu-item {
+  width: 100%; display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px; border: 0; border-radius: 8px;
+  background: transparent; color: var(--dsw-alias-label-primary, #f9fafb);
+  font: inherit; font-size: 13px; text-align: left; cursor: pointer;
+}
+.rdsh-frame-menu-item:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,.08)); }
+.rdsh-frame-menu-icon { display: grid; place-items: center; width: 16px; height: 16px; opacity: .9; }
+.rdsh-frame-backdrop { position: fixed; inset: 0; z-index: 900; background: transparent; }
+.rdsh-frame-pop {
+  position: fixed; z-index: 901; width: 252px; box-sizing: border-box;
+  padding: 12px; border-radius: 14px;
+  background: var(--dsw-alias-bg-layer-2, #2c2c2e); color: var(--dsw-alias-label-primary, #f9fafb);
+  border: .5px solid var(--dsw-alias-border-l3, rgba(0,0,0,.12));
+  box-shadow: var(--dsw-elevation-prominent, 0 14px 40px rgba(0,0,0,.3));
+}
+.rdsh-frame-pop-title { font-size: 12px; color: var(--dsw-alias-label-secondary, #cfd3d6); margin-bottom: 10px; }
+.rdsh-frame-swatches { display: flex; flex-wrap: wrap; gap: 8px; }
+.rdsh-frame-swatch {
+  width: 30px; height: 30px; border-radius: 999px !important;
+  border: 2px solid transparent; padding: 0; cursor: pointer;
+}
+.rdsh-frame-swatch[data-current="true"] { border-color: var(--dsw-alias-label-primary, #f9fafb); box-shadow: 0 0 0 2px var(--dsw-alias-bg-layer-2, #2c2c2e), 0 0 0 3px var(--dsw-alias-label-primary, #f9fafb); }
+.rdsh-frame-clear {
+  width: 100%; margin-top: 12px; padding: 8px 10px;
+  border: .5px solid var(--dsw-alias-border-l3, rgba(255,255,255,.16)); border-radius: 8px;
+  background: transparent; color: var(--dsw-alias-label-primary, #f9fafb);
+  font: inherit; font-size: 12px; cursor: pointer;
+}
+
+.rdsh-mux-live-speed { color: var(--dsw-alias-label-secondary, #a1a1aa); font-size: 11px; white-space: nowrap; }
+.rdsh-mux-fab {
+  position: fixed; left: 8px; top: calc(env(safe-area-inset-top, 0px) + 8px);
+  width: 40px; height: 40px; border: 0; border-radius: 12px; z-index: 40;
+  display: none; align-items: center; justify-content: center;
+  color: var(--dsw-alias-label-primary, #f9fafb);
+  background: var(--dsw-alias-bg-module-platform, #26262a);
+  box-shadow: var(--dsw-shadow-lv2, 0 4px 12px rgba(0,0,0,.08));
+  -webkit-tap-highlight-color: transparent; cursor: pointer;
+}
+.rdsh-mux-fab:active { transform: scale(.96); }
+.rdsh-mux-fab-badge {
+  position: absolute; top: -5px; right: -5px;
+  min-width: 18px; height: 18px; padding: 0 4px;
+  border-radius: 9px; box-sizing: border-box;
+  background: var(--dsw-alias-state-error-primary, #ef4444);
+  color: var(--dsw-alias-toast-label, #fff);
+  font: 700 10px/14px -apple-system, BlinkMacSystemFont, "Hiragino Sans", sans-serif;
+  text-align: center; white-space: nowrap;
+  border: 2px solid var(--dsw-alias-bg-base, #151517);
+  box-shadow: var(--dsw-shadow-lv1, 0 2px 4px rgba(0,0,0,.05));
+  display: none; pointer-events: none;
+}
+.rdsh-mux-fab-badge[data-visible] { display: block; }
+
+.rdsh-mux-backdrop {
+  position: fixed; inset: 0; z-index: 45; display: none;
+  /* The reference dim (rgba(0,0,0,.35)), not a theme token whose alpha can
+     drift with the palette. No fade: the dimming is a state change, and
+     fading it looked like a second sheet sliding in behind the drawer. */
+  background: rgba(0,0,0,.35); opacity: 0; pointer-events: none;
+}
+
+.rdsh-mux-detail {
+  position: fixed; z-index: 990; box-sizing: border-box;
+  padding: 10px 12px 12px; border-radius: 12px;
+  background: var(--dsw-alias-bg-layer-2, #2c2c2e) !important;
+  color: var(--dsw-alias-label-primary, #f9fafb);
+  border: .5px solid var(--dsw-alias-border-l3, rgba(0,0,0,.12));
+  box-shadow: var(--dsw-elevation-prominent, 0 10px 30px rgba(0,0,0,.3));
+  font-size: 13px; line-height: 1.55; overflow-wrap: anywhere;
+  max-height: min(50dvh, 380px); overflow-y: auto;
+  animation: rdsh-mux-pop .14s ease-out;
+}
+.rdsh-mux-detail-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.rdsh-mux-detail-title {
+  font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--dsw-alias-label-tertiary, #a1a1aa);
+}
+.rdsh-mux-detail-meta {
+  font-size: 11px; color: var(--dsw-alias-label-tertiary, #a1a1aa);
+  border: .5px solid var(--dsw-alias-border-l3, rgba(255,255,255,.16));
+  border-radius: 999px; padding: 1px 6px;
+}
+.rdsh-mux-detail-body { white-space: pre-wrap; }
+
+.rdsh-mux-titlepop {
+  position: fixed; z-index: 980; box-sizing: border-box;
+  padding: 10px 12px; border-radius: 12px;
+  background: var(--dsw-alias-bg-layer-2, #2c2c2e) !important;
+  color: var(--dsw-alias-label-primary, #f9fafb);
+  border: .5px solid var(--dsw-alias-border-l3, rgba(0,0,0,.12));
+  box-shadow: var(--dsw-elevation-prominent, 0 10px 30px rgba(0,0,0,.3));
+  font-size: 13px; line-height: 1.5; overflow-wrap: anywhere;
+  animation: rdsh-mux-pop .14s ease-out;
+}
+@keyframes rdsh-mux-pop { from { opacity: 0; transform: translateY(-4px) } to { opacity: 1; transform: none } }
+
+/* Image lightbox: keep the close/crop controls below the camera housing,
+   shrink the image into the remaining safe area, and darken the backdrop.
+   The viewer is a desktop surface too, so these stay on the phone. */
+
+  [data-rdsh-lightbox] { background: rgba(0,0,0,.96) !important; }
+  [data-rdsh-lightbox] [class*="_mask_"] { background: rgba(0,0,0,.96) !important; }
+  [data-rdsh-lightbox] [class*="_close_"] {
+    z-index: 5;
+    top: calc(env(safe-area-inset-top, 0px) + 12px) !important;
+    right: 16px !important;
+    width: 40px !important; height: 40px !important;
+    border-radius: 50% !important;
+    background: rgba(44,44,46,.95) !important;
+  }
+  [data-rdsh-lightbox] [class*="_image_"] {
+    max-height: calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 104px) !important;
+    max-width: calc(100vw - 24px) !important;
+  }
+  [data-rdsh-crop-button] {
+    position: absolute; z-index: 5; top: calc(env(safe-area-inset-top, 0px) + 12px); left: 16px;
+    width: 40px; height: 40px; border: 0; border-radius: 50%;
+    background: rgba(44,44,46,.95); color: #f9fafb;
+    display: grid; place-items: center; z-index: 2; padding: 0;
+  }
+
+.rdsh-crop-overlay {
+  position: fixed; inset: 0; z-index: 1200;
+  display: flex; flex-direction: column;
+  background: #000; color: #f9fafb;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.rdsh-crop-head {
+  position: relative; z-index: 3;
+  flex: 0 0 auto; height: 52px; padding: 0 12px 0 16px;
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 15px;
+}
+.rdsh-crop-close {
+  width: 40px; height: 40px; border: 0; border-radius: 50%;
+  background: rgba(44,44,46,.95); color: #f9fafb; font-size: 22px; line-height: 1;
+}
+.rdsh-crop-head-actions { display: flex; align-items: center; gap: 4px; }
+.rdsh-crop-rotate {
+  width: 40px; height: 40px; border: 0; border-radius: 50%;
+  background: rgba(44,44,46,.95); color: #f9fafb;
+  display: grid; place-items: center; padding: 0;
+}
+.rdsh-crop-stage {
+  flex: 1 1 auto; min-height: 0; display: flex;
+  align-items: center; justify-content: center; padding: 12px;
+}
+.rdsh-crop-wrap { position: relative; line-height: 0; max-width: 100%; max-height: 100%; }
+.rdsh-crop-image {
+  display: block; max-width: 100%; max-height: 100%;
+  user-select: none; -webkit-user-select: none; -webkit-user-drag: none;
+}
+.rdsh-crop-box {
+  position: absolute; box-sizing: border-box;
+  border: 1.5px solid #fff; cursor: move; touch-action: none;
+  box-shadow: 0 0 0 9999px rgba(0,0,0,.55);
+}
+.rdsh-crop-box::before {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background-image:
+    linear-gradient(to right, transparent calc(33.33% - .5px), rgba(255,255,255,.35) calc(33.33% - .5px), rgba(255,255,255,.35) calc(33.33% + .5px), transparent calc(33.33% + .5px), transparent calc(66.66% - .5px), rgba(255,255,255,.35) calc(66.66% - .5px), rgba(255,255,255,.35) calc(66.66% + .5px), transparent calc(66.66% + .5px)),
+    linear-gradient(to bottom, transparent calc(33.33% - .5px), rgba(255,255,255,.35) calc(33.33% - .5px), rgba(255,255,255,.35) calc(33.33% + .5px), transparent calc(33.33% + .5px), transparent calc(66.66% - .5px), rgba(255,255,255,.35) calc(66.66% - .5px), rgba(255,255,255,.35) calc(66.66% + .5px), transparent calc(66.66% + .5px));
+}
+.rdsh-crop-handle {
+  position: absolute; width: 24px; height: 24px; box-sizing: border-box;
+  border: 2px solid #fff; border-radius: 50%;
+  background: rgba(0,0,0,.35); touch-action: none;
+}
+.rdsh-crop-handle[data-corner="nw"] { left: -12px; top: -12px; cursor: nwse-resize; }
+.rdsh-crop-handle[data-corner="ne"] { right: -12px; top: -12px; cursor: nesw-resize; }
+.rdsh-crop-handle[data-corner="sw"] { left: -12px; bottom: -12px; cursor: nesw-resize; }
+.rdsh-crop-handle[data-corner="se"] { right: -12px; bottom: -12px; cursor: nwse-resize; }
+.rdsh-crop-actions {
+  position: relative; z-index: 3;
+  flex: 0 0 auto; display: flex; gap: 10px; padding: 12px 16px;
+}
+.rdsh-crop-actions button {
+  flex: 1 1 0; height: 46px; border: 0; border-radius: 12px;
+  font: inherit; font-size: 15px; font-weight: 600;
+}
+.rdsh-crop-cancel { background: #2c2c2e; color: #f9fafb; }
+.rdsh-crop-save { background: #f9fafb; color: #151517; }
+
+
 /* Running session: animate the label itself, never the whole row. */
 html:not([data-rdsh-anim="none"]) [data-rdsh-running] [data-rdsh-status] { display: none !important; }
 [data-rdsh-running] [data-rdsh-session-title] {
@@ -6476,27 +8961,7 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   [data-rdsh-running] [data-rdsh-session-title]::after { animation: none }
   html[data-rdsh-anim="breathing"] [data-rdsh-running] [data-rdsh-session-title] { animation: none; color: var(--dsw-alias-label-primary, #f9fafb) }
 }
-}
 
-/* Safe-area insets measured at runtime: apply them even when the browser's
-   display-mode query does not report standalone (iOS home-screen apps). */
-html[data-rdsh-safe-top] #root { box-sizing: border-box; padding-top: env(safe-area-inset-top, 0px); }
-html[data-rdsh-safe-bottom] #root { box-sizing: border-box; padding-bottom: env(safe-area-inset-bottom, 0px); }
-/* iOS 26 standalone native gap: the home indicator is in the unpainted strip
-   below the web view, so an inner bottom safe-area pad only widens the blank. */
-html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !important; }
-
-/* Controls the hide list matched. The attribute these selectors key off is
-   only written while the phone predicate holds (see applyHideList), so the
-   rule can live outside the width query: a landscape phone and a
-   coarse-pointer tablet are phones at any width. On a narrow desktop window
-   the attribute is absent, so nothing here applies (#17). The merged-tab
-   attribute is different: it follows the phone *layout*, so its rule stays
-   inside the width query below. */
-html[data-rdsh-hide-settings] [data-rdsh-hidden],
-html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !important; }
-
-@media ${NARROW_QUERY} {
   /* The mockup proved 100% is the layout viewport (844) while the native web
      view is 797 on iOS 26; the body could pan 47px. 100dvh is the web view
      height, and the grid makes the app fill exactly that one row. */
@@ -6580,10 +9045,9 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
      inside the panel list, so the original row is hidden. */
   [data-rdsh-more-row] { display: none !important; }
 
-  /* The phone layout merges the App and Input tabs into Mobile (the section
-     inlines them). This attribute is only written under the same
-     narrow-and-phone condition, so a narrow desktop window keeps all three
-     tabs. */
+  /* Mobile mode merges the App and Input tabs into Mobile (the section
+     inlines them). This attribute is only written under phone(), so a
+     desktop keeps all three tabs. */
   [data-rdsh-settings-tab-hidden] { display: none !important; }
 
   [data-rdsh-settings-nav-arrow] {
@@ -6789,12 +9253,22 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
   }
   [data-rdsh-activity-chip] [data-rdsh-activity-icon] svg { width: 13px; height: 13px; }
   .rdsh-activity-ring {
-    display: block; border: 1.6px solid var(--dsw-alias-border-l3, rgba(0,0,0,.12));
-    border-top-color: var(--dsw-alias-state-success-primary, #22c55e);
+    display: block; border: 1.6px solid var(--dsw-alias-state-success-primary, #22c55e);
     border-radius: 50%;
+    animation: none;
+  }
+  /* Only a running projection turns. A completed chip keeps the same ring,
+     static and fully green, so it never looks busy again (#40). */
+  [data-rdsh-activity-chip][data-rdsh-activity-running] .rdsh-activity-ring {
+    border-color: var(--dsw-alias-border-l3, rgba(0,0,0,.12));
+    border-top-color: var(--dsw-alias-state-success-primary, #22c55e);
     animation: rdsh-activity-spin 1s linear infinite;
   }
   @keyframes rdsh-activity-spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) {
+    /* The running ring already differs by its hollow track; no motion needed. */
+    [data-rdsh-activity-chip][data-rdsh-activity-running] .rdsh-activity-ring { animation: none; }
+  }
 
   /* Settings: full screen, stacked navigation, nothing narrowed. */
   /* Close lives on the top row with the Settings title, as a round button. */
@@ -6874,7 +9348,7 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
      "Open configuration file" (a desktop action). Collapse it so the content
      begins directly at the tab strip. Tied to the hide list: with "stop
      hiding" the header (and that action) comes back, which is also how the
-     debug switch can be checked. A narrow desktop window has no
+     debug switch can be checked. A desktop has no
      data-rdsh-hide-settings, so it keeps the stock header (#17). */
   html[data-rdsh-hide-settings] [data-shortcut-modal="settings"] > nav + div > div:first-child {
     height: 0 !important; min-height: 0 !important; padding: 0 !important;
@@ -7054,21 +9528,94 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
   }
   [data-rdsh-workspace-menu] [data-rdsh-workspace-hidden] { display: none !important; }
   .rdsh-mux-workspace-search {
-    flex: none; box-sizing: border-box; padding: 8px 10px;
+    flex: none; box-sizing: border-box; padding: 6px 0;
     border-bottom: .5px solid var(--dsw-alias-border-l1, rgba(255,255,255,.1));
     background: var(--dsw-alias-bg-layer-2, #2c2c2e);
   }
   .rdsh-mux-workspace-search input {
-    box-sizing: border-box; width: 100%; height: 34px;
-    padding: 0 10px; border-radius: 8px;
+    display: block; box-sizing: border-box; width: 100%; height: 32px;
+    margin: 0; padding: 0 8px; border-radius: 8px;
     border: .5px solid var(--dsw-alias-border-l3, rgba(255,255,255,.16));
     background: var(--dsw-alias-bg-base, #1b1b1d);
     color: var(--dsw-alias-label-primary, #f9fafb);
-    font: inherit; font-size: 16px;
+    font: inherit; font-size: 16px; line-height: 20px;
+    outline: none;
+  }
+  .rdsh-mux-workspace-search input:focus-visible {
+    border-color: var(--dsw-alias-state-business-primary, #4d6bfe);
+    /* The field spans the menu edge, so keep the ring inside the clip. */
+    outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary, #4d6bfe));
+    outline-offset: -2px;
   }
   .rdsh-mux-workspace-empty {
     padding: 14px 12px; color: var(--dsw-alias-label-tertiary, #adb2b8);
     font-size: 13px;
+  }
+  /* Right-panel file tree: a long press must not select text or raise the
+     iOS callout, and the explicit search row sits between the header and the
+     scrolling body. Both are phone-only. */
+  [data-rdsh-files-tree] [data-files-entry],
+  [data-rdsh-files-tree] [data-files-entry] *,
+  [data-rdsh-files-root-path],
+  [data-rdsh-files-root-path] * {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+  [data-rdsh-files-hidden] { display: none !important; }
+  .rdsh-mux-files-search {
+    flex: none; box-sizing: border-box; display: flex;
+    align-items: center; gap: 6px; padding: 6px 4px;
+    border-bottom: .5px solid var(--dsw-alias-border-l1, rgba(255,255,255,.1));
+    background: var(--dsw-alias-bg-layer-2, #2c2c2e);
+  }
+  .rdsh-mux-files-search input {
+    min-width: 0; flex: 1; box-sizing: border-box; height: 32px;
+    margin: 0; padding: 0 8px; border-radius: 8px;
+    border: .5px solid var(--dsw-alias-border-l3, rgba(255,255,255,.16));
+    background: var(--dsw-alias-bg-base, #1b1b1d);
+    color: var(--dsw-alias-label-primary, #f9fafb);
+    font: inherit; font-size: 16px; line-height: 20px;
+    outline: none;
+  }
+  .rdsh-mux-files-search input:focus-visible {
+    border-color: var(--dsw-alias-state-business-primary, #4d6bfe);
+    outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary, #4d6bfe));
+    outline-offset: 0;
+  }
+  .rdsh-mux-files-search button {
+    flex: none; box-sizing: border-box; width: 32px; height: 32px;
+    padding: 0; border-radius: 8px; border: .5px solid var(--dsw-alias-border-l3, rgba(255,255,255,.16));
+    background: var(--dsw-alias-button-elevated-fill, rgba(255,255,255,.08));
+    color: var(--dsw-alias-label-primary, #f9fafb);
+    font: inherit; font-size: 15px; line-height: 1;
+  }
+  .rdsh-mux-files-empty {
+    padding: 10px 12px; color: var(--dsw-alias-label-tertiary, #adb2b8);
+    font-size: 13px;
+  }
+  .rdsh-mux-files-menu {
+    position: fixed; z-index: 990; box-sizing: border-box;
+    display: flex; flex-direction: column; gap: 1px; padding: 6px;
+    border: .5px solid var(--dsw-alias-border-l3, rgba(0,0,0,.12));
+    border-radius: 12px;
+    background: var(--dsw-alias-bg-layer-2, #2c2c2e);
+    color: var(--dsw-alias-label-primary, #f9fafb);
+    box-shadow: var(--dsw-elevation-prominent, 0 12px 32px rgba(0,0,0,.35));
+  }
+  .rdsh-mux-files-menu button {
+    width: 100%; min-height: 38px; padding: 6px 10px;
+    border: 0; border-radius: 8px; background: transparent;
+    color: inherit; font: inherit; font-size: 14px; text-align: left;
+  }
+  .rdsh-mux-files-menu button:focus-visible {
+    outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary, #4d6bfe));
+    outline-offset: -2px;
+  }
+  /* CSS Custom Highlight: painted over the upstream text nodes, no DOM edit. */
+  ::highlight(rdsh-files-search) {
+    background-color: var(--dsw-alias-state-business-secondary, rgba(77,107,254,.35));
+    color: inherit;
   }
   /* Direct children only. [class*="_header"] also matches _headerActions,
      [class*="_footer"] matches _footerActions and [class*="_option"] matches
@@ -7110,6 +9657,11 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
   /* Right panel: never wider than the phone, wide tables scroll inside it. */
   [data-rdsh-rightpanel] {
     max-width: 100vw !important; overflow-x: hidden;
+    /* #46: a stacking context of its own, without touching upstream's
+       absolute positioning on the panel root (rewriting it would pull the
+       fullscreen sheet into flow). The column and that root are raised below;
+       this layer only has to stay in the sheet's own context. */
+    isolation: isolate;
     box-sizing: border-box;
     padding-top: 0 !important;
     padding-bottom: calc(env(safe-area-inset-bottom, 0px) + var(--rdsh-native-gap-px, 0px)) !important;
@@ -7127,16 +9679,43 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
   }
   html { --rdsh-close-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M3.6 3.6 12.4 12.4M12.4 3.6 3.6 12.4' stroke='black' stroke-width='1.7' stroke-linecap='round'/></svg>"); }
 
-  /* The preview sheet covers the app header; keeping the mobile header in flow
-     left a dead band above the full-screen preview. */
-  html[data-rdsh-rightpanel-open] header[data-rdsh-header] { display: none !important; }
+  /* #46: the preview sheet covers the header; the header itself stays in
+     flow. Hiding it removed the header from layout (the chat jumped up by the
+     header height on open and back on close). Raise the panel's positioned
+     column and its upstream root above the header instead of rewriting the
+     sheet's own position, so the header's rect is identical open or closed. */
+  [data-rdsh-frame] [data-rdsh-rightbar-col] { z-index: 60; }
+  [data-rdsh-frame] [data-sidebar-right-panel] { z-index: 60; }
   [data-rdsh-rightpanel] table { display: block; overflow-x: auto; max-width: 100%; }
   [data-rdsh-rightpanel] pre { max-width: 100%; }
 
   /* Right panel tabs (dockkit's file/preview strip).
      The reference build leaves their dimensions and hover affordances to
      upstream (28px rows, hover-only close). The tap replay in the pointer
-     handlers is kept, but it must not restyle the tab strip. */
+     handlers is kept, but it must not restyle the tab strip.
+     dockkit sets touch-action: none on the tab, the strip and the scroller
+     because a finger drag is its reorder gesture. touch-action is the
+     intersection along every ancestor up to the scroll container, so all
+     three layers must be reopened; the plugin owns the horizontal pan
+     (pointermove -> scrollLeft) and leaves only the vertical axis to the
+     browser. The hold cancels that pan in the touch handler. */
+  [data-sidebar-right-panel] [data-dockkit-strip],
+  [data-sidebar-right-panel] [data-dockkit-strip-tabs],
+  [data-sidebar-right-panel] [data-dockkit-tab] { touch-action: pan-y; }
+  /* A long press must reach the reorder gate, not start a selection/callout. */
+  [data-rdsh-rtab] {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  /* The hold lifts the tab without changing its box: dockkit measures tab
+     rects to choose a drop index, so no transform here. */
+  [data-rdsh-rtab][data-rdsh-tab-hold] {
+    position: relative;
+    z-index: 3;
+    opacity: .92;
+    box-shadow: var(--dsw-elevation-prominent, 0 2px 8px rgba(0, 0, 0, .28));
+  }
 
   /* Code files: wrap every line, including a single long token (URLs,
      minified lines). Wrapping only at spaces left those overflowing, which
@@ -7159,6 +9738,26 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
      anything. Hide it rather than leave a control that does nothing. */
   [data-rdsh-rightpanel] [data-textpreview-tool="wrap"] { display: none !important; }
 
+  /* #33: the host's native "open in <app>" split button. The wrapper carries
+     data-open-target and both halves carry data-open-path-*; hiding it takes
+     the dead half, the chevron and the missing-label case together. Only the
+     native target, not browser preview controls in the same header. */
+  [data-open-target] { display: none !important; }
+
+  /* #35: the phone header keeps the path and the viewer picker visible. Every
+     other action is offered by the kebab, which calls the original button. */
+  [data-rdsh-preview-header] [data-rdsh-preview-secondary] { display: none !important; }
+
+  /* #34: long unbroken tokens wrap only while upstream's own wrap state says
+     ON. With wrap OFF (a user's explicit choice) the stock horizontal travel
+     stays, so this rule cannot override that choice. */
+  [data-rdsh-rightpanel] [data-changes-review] [data-review-wrap] [data-diff-line],
+  [data-rdsh-rightpanel] [data-changes-review] [data-review-wrap] [data-diff-code] {
+    white-space: pre-wrap !important;
+    overflow-wrap: anywhere !important;
+    word-break: break-word !important;
+  }
+
   /* Two controls in the panel header duplicate what the phone already is or
      cannot do: "Exit fullscreen" closes the panel exactly like the ✕ next to
      it, and "Split" needs width the phone does not have. Keep only the ✕. */
@@ -7169,8 +9768,74 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
   html[data-rdsh-native-gap] [data-rdsh-sidebar],
   html[data-rdsh-native-gap] [data-rdsh-rightpanel],
   html[data-rdsh-native-gap] [data-shortcut-modal="settings"] { padding-bottom: 0 !important; }
+/* Safe-area insets measured at runtime: the attributes/style this module
+   writes are mobile-only (#44) and releaseSafeArea() strips them on dispose.
+   The values themselves come from env() so a notched phone still draws under
+   the status bar. */
+html[data-rdsh-safe-top] #root { box-sizing: border-box; padding-top: env(safe-area-inset-top, 0px); }
+html[data-rdsh-safe-bottom] #root { box-sizing: border-box; padding-bottom: env(safe-area-inset-bottom, 0px); }
+/* iOS 26 standalone native gap: the home indicator is in the unpainted strip
+   below the web view, so an inner bottom safe-area pad only widens the blank. */
+html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !important; }
+
+/* #35: the kebab and its menu. The kebab is only ever created inside the
+   phone query by decoratePreviewTools; the wide desktop has no node. */
+.rdsh-mux-preview-kebab {
+  flex: none; box-sizing: border-box; width: 30px; height: 30px;
+  margin-left: 2px; padding: 0; border: 0; border-radius: 8px;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--dsw-alias-label-secondary, #cfd3d6);
+  background: transparent; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
+.rdsh-mux-preview-kebab:hover,
+.rdsh-mux-preview-kebab[aria-expanded="true"] {
+  color: var(--dsw-alias-label-primary, #f9fafb);
+  background: var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,.08));
+}
+.rdsh-mux-preview-kebab:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary, #7aaaff);
+  outline-offset: 1px;
+}
+.rdsh-mux-preview-kebab svg { fill: currentColor; }
+.rdsh-mux-preview-menu {
+  position: fixed; z-index: 995; box-sizing: border-box;
+  padding: 6px; border-radius: 12px;
+  display: flex; flex-direction: column; gap: 2px;
+  background: var(--dsw-alias-bg-layer-2, #2c2c2e);
+  border: .5px solid var(--dsw-alias-border-l3, rgba(255,255,255,.16));
+  box-shadow: var(--dsw-elevation-prominent, 0 14px 40px rgba(0,0,0,.3));
+}
+.rdsh-mux-preview-menu button {
+  box-sizing: border-box; width: 100%; min-height: 40px;
+  margin: 0; padding: 8px 10px; border: 0; border-radius: 8px;
+  display: block; text-align: left; overflow: hidden; white-space: nowrap;
+  text-overflow: ellipsis; font: inherit; font-size: 14px;
+  color: var(--dsw-alias-label-primary, #f9fafb); background: transparent;
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.rdsh-mux-preview-menu button:hover,
+.rdsh-mux-preview-menu button:focus-visible {
+  background: var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,.08));
+  outline: none;
+}
+.rdsh-mux-preview-menu button:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary, #7aaaff);
+  outline-offset: -2px;
+}
+.rdsh-mux-preview-menu button[disabled] {
+  color: var(--dsw-alias-label-tertiary, #a1a1aa);
+  cursor: default;
+}
+
 `;
+
+    // The device half is always present. The mobile half is inserted as its
+    // own stylesheet only when the host bootstrap selected "mobile"; there is
+    // no width wrapper and a resize never adds or removes it. Sizing tweaks
+    // that genuinely need a breakpoint stay inside CSS_PHONE (the 380px
+    // composer rule is the only one today).
+    const CSS = CSS_DEVICE;
 
     // ---------------------------------------------------------------------
     // Wiring
@@ -7183,13 +9848,30 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
       hostCtx = ctx;
 
       ctx.effect(() => {
+        live = true;
         const style = document.createElement("style");
-        style.setAttribute("data-rdsh-mux-style", "");
+        style.setAttribute("data-rdsh-mux-style", "device");
         style.textContent = CSS;
         document.head.append(style);
+        // The mobile surface is enabled by the bootstrapped mode, not by the
+        // viewport: a 1024px iPad gets this sheet, a 390px desktop does not.
+        let phoneStyle = null;
+        if (phone()) {
+          phoneStyle = document.createElement("style");
+          phoneStyle.setAttribute("data-rdsh-mux-style", "phone");
+          phoneStyle.textContent = CSS_PHONE;
+          document.head.append(phoneStyle);
+        }
 
-        installDrawer();
-        document.documentElement.setAttribute("data-rdsh-anim", ANIMATION);
+        // #44: the drawer nodes and the animation attribute belong to the
+        // mobile surface. A desktop boot injects neither; a mobile boot
+        // installs them once and a resize never tears them down.
+        if (phone()) {
+          installDrawer();
+          document.documentElement.setAttribute("data-rdsh-anim", ANIMATION);
+        } else {
+          clearPhoneHooks();
+        }
 
         const observer = new MutationObserver(scheduleDecorate);
         // `data-sidebar-collapsed` / `data-rightbar-collapsed` are upstream's
@@ -7202,9 +9884,12 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
         document.addEventListener("pointermove", onPointerMove, true);
         document.addEventListener("focusout", onModelFocusOut, true);
         document.addEventListener("pointerup", onPointerUp, true);
-        document.addEventListener("pointercancel", cancelQueuePress, true);
+        document.addEventListener("pointercancel", onPointerCancel, true);
         document.addEventListener("mousedown", onMouseDownCapture, true);
         document.addEventListener("click", onClickCapture, true);
+        // Phone-only tree long-press and search listeners; installed here so
+        // the teardown below can remove exactly one set.
+        if (phone()) installWorkspaceTools();
         // Window capture runs before the app's document-level key adapter. That
         // adapter treats a keyCode 229 Return as IME input and consumes it, so a
         // listener on document never gets the chance to insert a newline.
@@ -7224,14 +9909,17 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
         // and decorate twice: once now (so the drawer/button state follows the
         // new width) and once after the transition has settled.
         //
-        // Gestures are dropped only when the width really changed, on
-        // orientationchange, or when the phone layout is left. A keyboard or a
-        // collapsing URL bar changes the height alone and must not cancel a
-        // swipe that is already in flight; the legacy handler did not reset at
-        // all.
+        // Gestures are dropped only when the width really changed or on
+        // orientationchange; a desktop has none. A keyboard or a collapsing
+        // URL bar changes the height alone and must not cancel a swipe that is
+        // already in flight; the legacy handler did not reset at all.
         let rotationTimer = 0;
         let gestureWidth = window.innerWidth;
+        // Geometry/keyboard work belongs to the mobile surface. A desktop
+        // resize only updates the Settings width readout via the media query;
+        // it never measures insets, decorates or fits mobile chrome.
         const onLayoutResize = () => {
+          if (!phone()) return;
           // Do not close the attach sheet here: opening it blurs the composer,
           // and the resulting keyboard-close resize would remove it instantly.
           measureSafeArea();
@@ -7240,7 +9928,11 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
           rotationTimer = window.setTimeout(() => {
             measureSafeArea();
             scheduleDecorate();
+            scheduleTerminalFit();
           }, 350);
+          // The keyboard inset has already changed when this runs; fit the
+          // terminal (if one is open) on the same coalesced frame.
+          scheduleTerminalFit();
         };
         const onResize = () => {
           if (window.innerWidth !== gestureWidth) {
@@ -7251,6 +9943,7 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
         };
         const onOrientation = () => {
           gestureWidth = window.innerWidth;
+          if (!phone()) return;
           resetGestures();
           onLayoutResize();
         };
@@ -7261,6 +9954,9 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
         // the covered viewport. It must not reset gestures: it fires for
         // height-only changes during a swipe.
         window.visualViewport?.addEventListener("resize", onLayoutResize);
+        // The visual viewport can move without resizing (the browser scrolls a
+        // focused field above the keyboard); both events share the rAF fit.
+        window.visualViewport?.addEventListener("scroll", onLayoutResize);
         patchCommandUi(ctx);
         document.addEventListener("dragstart", onDragStartCapture, true);
         document.addEventListener("dragend", onDragEndCapture, true);
@@ -7273,18 +9969,23 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
         document.addEventListener("keydown", onKeyDown);
         document.addEventListener("pointerdown", onFocusPointer, true);
         document.addEventListener("focusin", onFocusInGuard, true);
-        if (narrow()) {
+        if (phone()) {
           const initial = textBoxOf(document.activeElement);
           if (initial !== null) setTimeout(() => { if (document.activeElement === initial) initial.blur(); }, 0);
         }
         const media = window.matchMedia(NARROW_QUERY);
-        const onMedia = () => {
-          emit({ narrow: media.matches, phone: phone() });
-          if (!media.matches) {
-            resetGestures();
-            clearPhoneHooks();
-          }
+        // Width is geometry only. Crossing 767px updates the readout and, on a
+        // mobile device, re-measures the new geometry; it never installs or
+        // tears down the mobile surface and never changes the mode.
+        const applyWidthBoundary = () => {
+          emit({ narrow: narrow() });
+          if (!phone()) return;
+          resetGestures();
+          measureSafeArea();
           scheduleDecorate();
+        };
+        const onMedia = () => {
+          applyWidthBoundary();
         };
         media.addEventListener("change", onMedia);
 
@@ -7306,8 +10007,17 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
           readViewportMetrics,
           autoSettings: true,
           decorate: scheduleDecorate,
+          // Re-reads the window width for the Settings readout and re-measures
+          // mobile geometry. It cannot change the device mode.
+          syncWidth: applyWidthBoundary,
+
+          // Diagnostics used by the unit tests: the bootstrapped mode, the
+          // layout predicate and the restored scroll hooks are observable
+          // without a browser.
+          get mode() { return DEVICE_MODE; },
           // Diagnostics used by the unit tests: the layout predicate and the
           // restored scroll hooks have to be observable without a browser.
+          decorateNow: decorate,
           phone,
           markMobileSession,
           closeDrawer,
@@ -7319,9 +10029,11 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
         return () => {
           try {
             observer.disconnect();
+            unwatchActivitySources();
+            contextRefreshFor = null;
             document.removeEventListener("pointerdown", onPointerDown, true);
             document.removeEventListener("pointerup", onPointerUp, true);
-            document.removeEventListener("pointercancel", cancelQueuePress, true);
+            document.removeEventListener("pointercancel", onPointerCancel, true);
             document.removeEventListener("mousedown", onMouseDownCapture, true);
             document.removeEventListener("click", onClickCapture, true);
             window.removeEventListener("keydown", onKeyDownCapture, true);
@@ -7331,6 +10043,9 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
             window.removeEventListener("resize", onResize);
             window.removeEventListener("orientationchange", onOrientation);
             window.visualViewport?.removeEventListener("resize", onLayoutResize);
+            window.visualViewport?.removeEventListener("scroll", onLayoutResize);
+            clearTerminalFit();
+            resetGestures();
             clearTimeout(rotationTimer);
             clearTimeout(sendSettleTimer);
             document.removeEventListener("dragstart", onDragStartCapture, true);
@@ -7349,24 +10064,29 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
             document.removeEventListener("pointermove", onPointerMove, true);
             document.removeEventListener("focusout", onModelFocusOut, true);
             media.removeEventListener("change", onMedia);
-            closeDetailPopover();
-            clearQuestionArrows();
-            closeQueueUi();
-            clearWorkspacePicker();
+            // Invalidate any decorate frame queued before this teardown. The
+            // frame checks `live` before touching the DOM, so it cannot undo
+            // the cleanup below.
+            live = false;
+            scheduled = false;
+            // One teardown path: every owned attribute/node/listener/style,
+            // the original viewport and the upstream palette. It runs even if
+            // the window is still narrow, so a live reload starts clean.
+            try {
+              clearPhoneHooks();
+            } catch (error) {
+              console.error("[rdsh-mobile-ux] cleanup failed", error);
+            }
+            disposePreviewTools();
             rightPanelFitPending = false;
             style.remove();
+            phoneStyle?.remove();
             rightPanelWatch?.disconnect();
             rightPanelIO?.disconnect();
             rightPanelWatch = null;
             rightPanelIO = null;
             rightPanelNode = null;
-            settingsArrows?.left.remove();
-            settingsArrows?.right.remove();
             settingsArrows = null;
-            document.documentElement.removeAttribute("data-rdsh-rightpanel-open");
-            document.documentElement.removeAttribute("data-rdsh-anim");
-            fab?.remove();
-            backdrop?.remove();
             fab = null;
             backdrop = null;
             delete globalThis.__RDSH_MOBILE_UX__;
@@ -7378,6 +10098,25 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
           }
         };
       }, "rdsh-mobile-ux: phone layout");
+    }
+
+    // Test seam. The workspace behaviours are plain DOM functions; driving
+    // them through boot() would need a whole browser, so a harness that sets
+    // this flag before loading the module gets the same closures production
+    // uses. Nothing reads it in a normal page.
+    const workspaceTestHook = globalThis.__RDSH_WORKSPACE_TEST__;
+    if (workspaceTestHook !== null && typeof workspaceTestHook === "object") {
+      workspaceTestHook.workspace = {
+        beginWorkspacePicker,
+        decorateWorkspacePicker,
+        clearWorkspacePicker,
+        decorateWorkspaceFiles,
+        runFilesSearch,
+        installWorkspaceTools,
+        disposeWorkspaceTools,
+        filesMenu: () => filesMenu,
+        filesSearch: () => filesSearch,
+      };
     }
 
     return {
@@ -7445,73 +10184,6 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
     const LABEL = t("sessionId.label");
     const COPIED = t("sessionId.copied");
     const MANUAL_PROMPT = t("sessionId.manualPrompt");
-    const TOAST_HOST_ID = "rdsh-session-id-copy-toast";
-    const TOAST_ROOT_KEY = "__rdshSessionIdCopyToastRoot";
-
-
-    // クリップボード: `navigator.clipboard` は secure context でしか生えない
-    // (127.0.0.1 は secure、Tailscale の http://100.x.y.z は非 secure)。
-    // 無い・拒否された場合は選択+execCommand に落ちる。
-    async function copyText(text) {
-      const clipboard =
-        typeof navigator === "object" && navigator !== null ? navigator.clipboard : undefined;
-      if (clipboard && typeof clipboard.writeText === "function") {
-        try {
-          await clipboard.writeText(text);
-          return true;
-        } catch (error) {
-          // 権限拒否・非フォーカスなど。下のフォールバックへ。
-        }
-      }
-      let area;
-      try {
-        area = document.createElement("textarea");
-        area.value = text;
-        area.setAttribute("readonly", "");
-        area.style.position = "fixed";
-        area.style.top = "0";
-        area.style.left = "0";
-        area.style.width = "1px";
-        area.style.height = "1px";
-        area.style.opacity = "0";
-        document.body.appendChild(area);
-        area.focus();
-        area.select();
-        area.setSelectionRange(0, text.length);
-        return typeof document.execCommand === "function" && document.execCommand("copy") === true;
-      } catch (error) {
-        return false;
-      } finally {
-        area?.remove();
-      }
-    }
-
-    // Toast は body portal。host を 1 つだけ作り、多重表示は最後の 1 件に畳む。
-    // root は window に置く: ライブ更新でこのモジュールが読み直されても、
-    // 同じ DOM ノードに 2 つ目の root を作らないため。
-    function notify(text) {
-      try {
-        const { createRoot } = require("react-dom/client");
-        let host = document.getElementById(TOAST_HOST_ID);
-        if (host === null) {
-          host = document.createElement("div");
-          host.id = TOAST_HOST_ID;
-          document.body.appendChild(host);
-        }
-        const root = (window[TOAST_ROOT_KEY] = window[TOAST_ROOT_KEY] ?? createRoot(host));
-        root.render(
-          h(primitives.Toast, {
-            text,
-            tone: "success",
-            onDone: () => {
-              root.render(null);
-            },
-          }),
-        );
-      } catch (error) {
-        // 通知が出せなくてもコピー自体は成立している。
-      }
-    }
 
     /** One "..." menu row: copy this Session's ID, then close the menu. */
     function CopySessionIdMenuItem({ sessionId, useMenuOpenState }) {

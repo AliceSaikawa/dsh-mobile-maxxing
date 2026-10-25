@@ -104,8 +104,8 @@ export const COPY = {
 		"mux.deviceTheme.dark": "Dark",
 		"mux.deviceTheme.system": "Match this device",
 		"mux.row.layout": "Layout",
-		"mux.row.layout.narrow": "Phone width (drawer)",
-		"mux.row.layout.wide": "Desktop width",
+		"mux.row.layout.narrow": "Narrow window (≤767px)",
+		"mux.row.layout.wide": "Wide window",
 		"mux.row.sessions": "Session list",
 		"mux.row.sessions.open": "Open",
 		"mux.row.sessions.closed": "Closed",
@@ -137,6 +137,8 @@ export const COPY = {
 		"mux.hidden.disable": "Stop hiding (debug)",
 		"mux.hidden.extra": "Extra labels to hide (one per line)",
 		"mux.hidden.save": "Save and apply",
+		"mux.preview.more": "More preview actions",
+		"mux.preview.menu": "Preview actions",
 		"mux.bootError": "Boot error: {error}",
 		"mux.input.title": "Input",
 		"mux.input.desc": "Choose what Enter does in the message composer.",
@@ -238,6 +240,18 @@ export const COPY = {
 		"sessionId.copied": "Session ID copied",
 		"sessionId.manualPrompt": "Session ID (copy it manually)",
 
+		// --- workspace picker / right-panel files ---------------------------
+		"workspace.search.placeholder": "Search workspaces",
+		"workspace.search.noMatches": "No matches",
+		"files.search.placeholder": "Search this folder",
+		"files.search.submit": "Search this folder",
+		"files.search.noMatches": "No matches",
+		"files.menu.root": "Folder path",
+		"files.menu.entry": "File actions",
+		"files.menu.copyPath": "Copy path",
+		"files.menu.copyName": "Copy name",
+		"files.copied": "Copied",
+
 		// --- service worker --------------------------------------------------
 		"sw.documentTitle": "Offline — DSH",
 		"sw.offlineHeading": "You're offline",
@@ -338,8 +352,8 @@ export const COPY = {
 		"mux.deviceTheme.dark": "ダーク",
 		"mux.deviceTheme.system": "この端末に合わせる",
 		"mux.row.layout": "レイアウト",
-		"mux.row.layout.narrow": "スマホ幅（ドロワー表示）",
-		"mux.row.layout.wide": "デスクトップ幅",
+		"mux.row.layout.narrow": "狭いウィンドウ（767px 以下）",
+		"mux.row.layout.wide": "広いウィンドウ",
 		"mux.row.sessions": "セッション一覧",
 		"mux.row.sessions.open": "開いています",
 		"mux.row.sessions.closed": "閉じています",
@@ -371,6 +385,8 @@ export const COPY = {
 		"mux.hidden.disable": "非表示をやめる（デバッグ用）",
 		"mux.hidden.extra": "追加で非表示にするラベル（1行1件）",
 		"mux.hidden.save": "保存して反映",
+		"mux.preview.more": "プレビューのその他の操作",
+		"mux.preview.menu": "プレビューの操作",
 		"mux.bootError": "起動時エラー: {error}",
 		"mux.input.title": "入力",
 		"mux.input.desc": "メッセージ入力欄で Enter を押したときの動作を選びます。",
@@ -472,6 +488,18 @@ export const COPY = {
 		"sessionId.copied": "セッションIDをコピーしました",
 		"sessionId.manualPrompt": "セッションID（手動でコピーしてください）",
 
+		// --- workspace picker / right-panel files ---------------------------
+		"workspace.search.placeholder": "ワークスペースを検索",
+		"workspace.search.noMatches": "該当なし",
+		"files.search.placeholder": "このフォルダ内を検索",
+		"files.search.submit": "このフォルダ内を検索",
+		"files.search.noMatches": "該当なし",
+		"files.menu.root": "フォルダのパス",
+		"files.menu.entry": "ファイルの操作",
+		"files.menu.copyPath": "パスをコピー",
+		"files.menu.copyName": "名前をコピー",
+		"files.copied": "コピーしました",
+
 		// --- service worker --------------------------------------------------
 		"sw.documentTitle": "オフライン — DSH",
 		"sw.offlineHeading": "オフラインです",
@@ -506,6 +534,13 @@ export const PROBES = {
 	cacheHit: ["cache hit", "キャッシュ"],
 	/** The context chip: "40% context". */
 	context: ["context", "コンテキスト"],
+	/** A running activity chip: "3 background jobs running" / "3 subagents running".
+	 *  DSH 0.2.1 ships en and zh only; a ja shell adds its word here. */
+	activityRunning: ["running", "运行中", "正在运行"],
+	/** Count-chip nouns in the two upstream locales; a ja pack adds its own. */
+	activityChip: ["subagent", "subagents", "background job", "background jobs", "shell command", "shell commands", "个子智能体", "个后台任务"],
+	/** The subagent noun inside a count chip, for choosing its glyph. */
+	activitySubagentChip: ["subagents", "subagent", "子智能体"],
 	/** Any aria-label that identifies the stats dock. */
 	stats: ["tok", "turns", "context", "ターン", "コンテキスト"],
 	/** A control that starts a new session (sidebar button, brand row, workspace "+"). */

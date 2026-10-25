@@ -26,7 +26,7 @@ enablement. The parts are independent, so merging them costs nothing.
 | Installable PWA | Manifest, service worker, offline page, update banner |
 | Notifications | In-app banner while the app is on screen, Web Push otherwise |
 | Notification sounds | Five synthesised presets, volume, no audio files |
-| Phone layout | Sidebar becomes a drawer, settings open in one tap, code wraps |
+| Mobile layout | Sidebar becomes a drawer, settings open in one tap, code wraps |
 | CJK rendering | `**https://x**（memo）` keeps its bold and its link |
 | Session id copy | One row in the session row menu |
 
@@ -71,23 +71,47 @@ service-worker offline page and the notification text follow the same value
 browser half, the service worker, the manifest and notifications all English;
 untranslated dictionary keys fall back to English.
 
-## Phone layout
+## Mobile layout
 
-A "phone" is simply a window at most 767px wide, as in the previous layout. A landscape
-phone wider than that is treated as a desktop. A narrow desktop window at 767px or less
-gets the same treatment as a phone: the stock controls are hidden, labels are rewritten
-and "+" becomes the file picker. Whether the pointer is a mouse or a finger is not part
-of the test.
+The mobile UI is selected by the **device mode**, not by the window width. A small
+script injected by the host at the top of `<head>` decides it once in the browser and
+writes `globalThis.__RDSH_DEVICE_MODE__` plus `html[data-rdsh-device-mode]`
+(`"mobile"` or `"desktop"`). The same HTML/JS is served to every device; there is no
+SSR. Client code consumes the value; it never re-classifies from UA, width, pointer
+kind or touch points.
 
-The layout (sidebar becomes a drawer) uses the same width test. This release keeps the
-previous width test; device-specific changes are a separate change, not part of this
-parity fix.
+Resolution order: a valid `__RDSH_DEVICE_MODE__`, then a valid
+`data-rdsh-device-mode` attribute, then `"desktop"` (fail closed). If the two
+disagree, the global wins and the root attribute is synchronised to it.
+
+- Phones (iPhone/Android, portrait or landscape) and tablets (iPad, Android tablets)
+  are mobile. iPadOS's desktop-like UA (Macintosh plus `maxTouchPoints`) is still a
+  tablet.
+- Ordinary PCs, **Windows touch laptops**, and narrow desktop windows are desktop.
+  Touch alone never selects mobile.
+- Crossing 767px changes geometry only. Resizing or rotating never changes the mode.
+- A shell without the bootstrap loaded by a **new client** (for example an old cached
+  shell opened offline) is desktop until the next online launch refreshes the HTML.
+  An old bundle still carries the old width code, so not every old offline session is
+  desktop.
+- Detection has limits: an Android tablet that requests the desktop site may lose the
+  Android token and be treated as desktop. It is not infallible.
+
+The layout (sidebar becomes a drawer) uses the same mode. The only remaining size
+breakpoint is the existing <=380px composer compression.
 
 What changes:
 
 - The sidebar becomes an overlay drawer you open with the floating button
 - Settings get a single column and a scrolling tab strip
 - The code viewer always wraps and never scrolls sideways
+- Code review opens with wrap on; a wrap you turn off stays off for that
+  review tab for this page (upstream switches the diff from side-by-side to the unified
+  layout while wrap is on, so both columns come back when you turn wrap off)
+- Text-preview header actions (reload and file actions) move into a "…" menu
+  that calls the original buttons; the path and the viewer picker stay put
+- The native "Open in <app>" split button is not shown in mobile mode, because
+  the mobile surface cannot hand the file to that desktop app
 - The composer stays above the keyboard
 - Session rows keep their actions hidden until the menu or a long press
 - Right-panel tabs are finger-sized, and the tab strip scrolls sideways
@@ -238,7 +262,7 @@ the module against a stub environment.
 
 - The layout depends on upstream CSS-module hashes existing. A rename only stops a rule
   from matching and leaves the stock layout (fail closed), but a renamed hook means the
-  phone layout is simply absent until this package is updated
+  mobile layout is simply absent until this package is updated
 - Notifications need a secure context. Over plain HTTP on a LAN address the browser will
   not offer a subscription
 - The service worker manages one scope. Another plugin registering a worker at `/` will

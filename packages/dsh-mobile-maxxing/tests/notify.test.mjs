@@ -288,7 +288,7 @@ test("a phone send marks the next turn; a desktop send does not", async () => {
 	}
 });
 
-test("notification fan-out targets the app that started the turn or request", async () => {
+test("notification fan-out targets the app that started the turn or request, never every app", async () => {
 	const home = mkdtempSync(join(tmpdir(), "rdsh-targeting-"));
 	const file = join(home, "dsh-mobile-maxxing", "push.json");
 	mkdirSync(join(home, "dsh-mobile-maxxing"), { recursive: true });
@@ -352,27 +352,45 @@ test("notification fan-out targets the app that started the turn or request", as
 	const turn = (target, id, type) => target.listeners.get("session/event")({ id }, { type, data: { reason: { kind: "completed" } } });
 	const question = (target) => target.listeners.get("user-questions/request")({ agent: { id: "s1", session: { id: "s1" } }, questions: [{ header: "Q", question: "Continue?" }] }, () => {});
 
+	const warnings = [];
+	const previousWarn = console.warn;
+	console.warn = (...args) => warnings.push(args.map(String).join(" "));
 	try {
-		// No request-derived origin: /test without an Origin header keeps the
-		// historical all-subscriptions fallback.
+		// Nothing has told this process which app is its own: /test sends
+		// nothing (#27). The old all-subscriptions fallback is gone because it
+		// delivered the same event twice on a phone with both apps installed
+		// (#28).
 		const legacy = harness("http://127.0.0.1:3207");
 		assert.equal(await request(legacy, "/api/dsh-mobile-maxxing/push/test", { body: {} }), 200);
 		await wait();
-		assert.deepEqual(calls.sort(), ["https://web.push.apple.com/old", "https://web.push.apple.com/phone"].sort());
-		calls.length = 0;
+		assert.deepEqual(calls, [], "an origin-less test push fanned out to every subscription");
+		assert.ok(warnings.some((line) => /push skipped: no app origin/.test(line)), "the dropped test push was not logged");
 
-		// An origin-less mobile-send keeps the legacy fallback as well.
+		// An origin-less mobile-send follows the same rule: the turn is
+		// dropped and logged, not sent to every app.
+		calls.length = 0;
+		warnings.length = 0;
 		assert.equal(await request(legacy, "/api/dsh-mobile-maxxing/push/mobile-send", { body: { sessionId: "s1" } }), 200);
 		turn(legacy, "s1", "turn/start");
 		turn(legacy, "s1", "turn/end");
 		await wait();
-		assert.equal(calls.length, 2, "an origin-less mobile-send no longer falls back");
+		assert.deepEqual(calls, [], "an origin-less turn fanned out to every subscription");
+		assert.ok(warnings.some((line) => /push skipped: no app origin/.test(line)), "the dropped turn was not logged");
 
 		// /test with an explicit origin sends only to that app.
 		calls.length = 0;
 		assert.equal(await request(legacy, "/api/dsh-mobile-maxxing/push/test", { body: {}, origin: "https://app.example:8446" }), 200);
 		await wait();
 		assert.deepEqual(calls, ["https://web.push.apple.com/phone"]);
+
+		// Once an app has talked to the process, an event without an origin of
+		// its own uses that app rather than every subscription.
+		calls.length = 0;
+		assert.equal(await request(legacy, "/api/dsh-mobile-maxxing/push/mobile-send", { body: { sessionId: "s1" } }), 200);
+		turn(legacy, "s1", "turn/start");
+		turn(legacy, "s1", "turn/end");
+		await wait();
+		assert.deepEqual(calls, ["https://web.push.apple.com/phone"], "the learned origin was not used for an origin-less turn");
 
 		// mobile-send with the page origin pins turn/end to that app.
 		calls.length = 0;
@@ -382,21 +400,22 @@ test("notification fan-out targets the app that started the turn or request", as
 		await wait();
 		assert.deepEqual(calls, ["https://web.push.apple.com/phone"]);
 
-		// webServer.getOrigin() matching a stored subscription seeds ownOrigins.
+		// webServer.getOrigin() matching a stored subscription seeds the
+		// learned origin.
 		calls.length = 0;
 		const seeded = harness("https://app.example:8446");
 		question(seeded);
 		await wait();
 		assert.deepEqual(calls, ["https://web.push.apple.com/phone"], "a matching server origin was not adopted");
 
-		// A non-matching internal origin is not adopted.
+		// A non-matching internal origin is not adopted, and nothing is sent.
 		calls.length = 0;
 		const internal = harness("http://127.0.0.1:3207");
 		question(internal);
 		await wait();
-		assert.equal(calls.length, 2, "an internal origin was incorrectly adopted");
+		assert.deepEqual(calls, [], "an internal origin was incorrectly adopted");
 
-		// Question fallback: ownOrigins when no turn origin is known.
+		// Question fallback: the learned origin when no turn origin is known.
 		calls.length = 0;
 		const own = harness("http://127.0.0.1:3207");
 		assert.equal(await request(own, "/api/dsh-mobile-maxxing/push/vapid", { method: "GET", origin: "https://app.example:8444" }), 200);
@@ -404,14 +423,15 @@ test("notification fan-out targets the app that started the turn or request", as
 		await wait();
 		assert.deepEqual(calls, ["https://web.push.apple.com/old"]);
 
-		// Question priority: the turn's origin wins over ownOrigins.
+		// Question priority: the turn's origin wins over the learned origin.
 		calls.length = 0;
 		assert.equal(await request(own, "/api/dsh-mobile-maxxing/push/mobile-send", { body: { sessionId: "s1", origin: "https://app.example:8446" } }), 200);
 		turn(own, "s1", "turn/start");
 		question(own);
 		await wait();
-		assert.deepEqual(calls, ["https://web.push.apple.com/phone"], "the turn origin did not win over ownOrigins");
+		assert.deepEqual(calls, ["https://web.push.apple.com/phone"], "the turn origin did not win over the learned origin");
 	} finally {
+		console.warn = previousWarn;
 		globalThis.fetch = previousFetch;
 		if (previousHome === undefined) delete process.env.DSH_HOME;
 		else process.env.DSH_HOME = previousHome;

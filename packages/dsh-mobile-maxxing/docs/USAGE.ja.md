@@ -216,6 +216,14 @@ Web Push の標準化部分は外部ライブラリを使わず、`node:crypto` 
 `config.notifications.subject` → 最新の購読が記録した `https` オリジン → `mailto:dsh@example.com`
 の順で決めます（Apple は `mailto:root@localhost` を `403 BadJwtToken` で拒否するため）。
 
+通知の宛先は **origin ごとに独立**しています。イベントに origin が付いている場合（スマホから
+開始したターン・テスト通知）はそのアプリの購読だけに送り、付いていない場合は「直近にこの host
+と話した origin」のうち購読が残っているもの1つだけに送ります。どの origin か分からないときは
+全購読へ配らず、送らずにログへ `push skipped: no app origin has talked to this host yet` を
+出します（旧アプリと統一版アプリの二重通知を避けるため）。アプリを一度開けば origin を学習し、
+以降は再起動後も届きます（`webServer.getOrigin()` が保存済み購読と一致する場合）。404/410 を
+返した購読はその場で保存から削除します。
+
 ### 旧プラグインとの関係
 
 以前の構成で使っていた `dsh-notify-push` とは**API もサービスワーカーも共有しません**。

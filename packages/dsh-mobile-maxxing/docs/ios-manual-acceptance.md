@@ -12,25 +12,32 @@
 
 ## 前提: 2アプリのホスト実装（重要）
 
-同じ `DSH_HOME` の `push.json` を共有してよいのは、**両方のインスタンスが現行の
-origin-aware host**（保存前に reload し、ターンの origin で宛先を絞る fan-out）を
-動かしている場合だけです。片方だけ古いと、テストで確認した「別 origin の購読が
-残る」という前提が成り立ちません。
+現行 host（rename 後）は push store を `$DSH_HOME/dsh-mobile-maxxing/push.json` に
+置きます。実旧 `DSH-PWA` host は `$DSH_HOME/rdsh-pwa/push.json` を使うため、
+**同じ `DSH_HOME` でも rename 後は同じ push.json ではありません**。危険なのは
+次の条件です。
 
-- 旧 `DSH-PWA/notify/host.js` は保存前 reload をせず、origin を無視して全購読へ送ります。
-  - 旧 host と共存すると、片方の subscribe がもう片方の購読を上書き消失させ得ます。
-  - 旧 host のターン終了通知は両 origin に届き、二重通知になり得ます。
-- 両方を更新できない間は、**インスタンスごとに `DSH_HOME` を分ける**（`push.json` を
-  共有しない）のが安全です。
-- 自動テスト（`notifications-issues.test.mjs`）が確認するのは現行 store 2つの
-  逐次書き込みだけです。旧 host の安全性や並行書き込みは証明しません。
+- **① 同じ push.json を旧 writer と共有した場合**: 旧 host は保存前 reload をせず、
+  origin も無視して全購読へ送ります。片方の subscribe が他方の購読を上書き消失
+  させ得て、二重通知にもなり得ます。symlink や手動コピーで store を共有させないで
+  ください。
+- **② 未移行の旧 namespace 購読**: `rdsh-pwa/push.json` に残った購読は本 PR では
+  自動移行しません。新しい host からは見えないため、必要ならアプリで通知を
+  再購読してください（手動 migration は別判断）。
+- **③ テストの前提**: `notifications-issues.test.mjs` が確認するのは現行 rename 済み
+  host 同士（同じ新 store への逐次書き込み）だけです。旧 host の writer や並行
+  書き込み、旧 namespace からの移行は検証していません。
+- 2つの現行 host なら同じ `DSH_HOME` で構いません。旧 host と併用する場合も、
+  store file を共有しない限りは別 namespace のままです。共有が必要になったら
+  `DSH_HOME` を分けてください。
 - この整理は #28 の未完了事項で、Refs #28 として扱う。実機検証とは別。
 
 ## 共通の準備
 
 1. 旧アプリ（例: 8444）と統一版アプリ（例: 8446）を、同じ `DSH_HOME` を見る2つの
-   インスタンスとして起動しておく。**このチェックでは新規デプロイや再起動をしない**。
-   上の「前提」を満たさない場合は `DSH_HOME` を分けて実施する。
+   インスタンスとして起動しておく（どちらも現行 host）。**このチェックでは新規
+   デプロイや再起動をしない**。上の①〜③を確認し、旧 writer と store file を共有
+   しない（必要なら `DSH_HOME` を分ける）。
 2. 両方をホーム画面に追加する（Safari の共有 → ホーム画面に追加）。
 3. 両方で通知を許可する（iOS はユーザー操作からしか許可ダイアログを出さない）。
 4. 設定 →「テスト通知」を各アプリで1回ずつ押し、下の表に結果を書く。

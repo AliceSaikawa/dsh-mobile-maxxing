@@ -247,9 +247,13 @@ the module against a stub environment.
   same phone is separate, and clearing site data returns it to "follow the shared theme")
 - The offline page cannot read the stored theme (a service worker has no `localStorage`
   access), so it follows the OS light/dark preference
-- Sharing one `DSH_HOME` between two instances is only safe when **both run the current
-  origin-aware host**. An older host ignores the origin, risking lost subscriptions and
-  double notifications; see [the two-app host prerequisite](ios-manual-acceptance.md).
+- With two current hosts, one `DSH_HOME` means one push store at
+  `DSH_HOME/dsh-mobile-maxxing/push.json`. The pre-rename `DSH-PWA` host uses
+  `DSH_HOME/rdsh-pwa/push.json`, so after the rename the same `DSH_HOME` is no
+  longer the same file. Sharing that file with the old writer is still unsafe:
+  it does not reload before saving and can erase a subscription. Subscriptions
+  left in the old namespace are not migrated automatically, so re-subscribe if
+  needed; see [the two-app host prerequisite](ios-manual-acceptance.md).
 
 ## The iOS 26 bottom strip (47px / 62px)
 

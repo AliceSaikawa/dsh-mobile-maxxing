@@ -244,9 +244,12 @@ npm pack                          # 配布用 tarball（リリースに添付す
   消すと既定の「共有設定に従う」に戻ります）。
 - オフラインページは保存済みテーマを読めない（Service Worker から `localStorage` を
   参照できない）ため、OS のライト／ダーク設定に従います。
-- 同じ `DSH_HOME` を2つのインスタンスで共有できるのは、**両方が現行の origin-aware
-  host** のときだけです。旧 host は origin を無視するため、購読消失や二重通知の risk が
-  あります（[2アプリのホスト前提](ios-manual-acceptance.md)）。
+- 同じ `DSH_HOME` を2つの現行 host で使う場合、push store は
+  `DSH_HOME/dsh-mobile-maxxing/push.json` を共有します。実旧 `DSH-PWA` host は
+  `DSH_HOME/rdsh-pwa/push.json` を使うため、rename 後は同じ `DSH_HOME` でも同じ
+  ファイルではありません。ただし、その旧 writer に同じ push.json を共有させると、
+  保存前 reload をしないため購読を消し得ます。旧 namespace の購読は自動移行されない
+  ため、必要なら再購読してください（[2アプリのホスト前提](ios-manual-acceptance.md)）。
 
 ## iOS 26 の下余白（47px / 62px）
 

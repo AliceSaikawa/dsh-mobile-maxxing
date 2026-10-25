@@ -6023,12 +6023,21 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      */
     function stripForPan(target) {
       if (target === null || target === undefined || typeof target.closest !== "function") return null;
+      // Same scope as the tagged tabs: only the right panel's dockkit strip.
+      // Left/other dockkit surfaces keep their own drag behaviour.
+      if (target.closest("[data-sidebar-right-panel]") === null) return null;
       if (target.closest("button, a, input, [data-dockkit-tab-close]") !== null) return null;
       const tabs = target.closest("[data-dockkit-strip-tabs]");
       if (tabs !== null) return tabs;
       const fill = target.closest("[data-dockkit-strip-fill]");
       if (fill === null) return null;
       return fill.closest("[data-dockkit-strip]")?.querySelector("[data-dockkit-strip-tabs]") ?? null;
+    }
+
+    function cancelStripPan() {
+      if (stripPanCandidate === null) return;
+      releaseStripPan(stripPanCandidate);
+      stripPanCandidate = null;
     }
 
     function releaseStripPan(candidate) {
@@ -6247,10 +6256,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     function onPointerCancel() {
       cancelQueuePress();
-      if (stripPanCandidate !== null) {
-        releaseStripPan(stripPanCandidate);
-        stripPanCandidate = null;
-      }
+      cancelStripPan();
       if (tabHoldTimer !== 0) {
         clearTimeout(tabHoldTimer);
         tabHoldTimer = 0;
@@ -10241,6 +10247,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             document.removeEventListener("pointerdown", onPointerDown, true);
             document.removeEventListener("pointerup", onPointerUp, true);
             document.removeEventListener("pointercancel", onPointerCancel, true);
+            cancelStripPan();
             document.removeEventListener("mousedown", onMouseDownCapture, true);
             document.removeEventListener("click", onClickCapture, true);
             window.removeEventListener("keydown", onKeyDownCapture, true);

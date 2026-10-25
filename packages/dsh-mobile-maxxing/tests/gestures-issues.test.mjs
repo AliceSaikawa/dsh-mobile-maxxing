@@ -624,15 +624,24 @@ test("a touch pan that starts on the strip gutter or fill scrolls without arming
 	const outer = new FakeElement("div");
 	outer.setAttribute("data-dockkit-strip", "");
 	outer._querySelector = (selector) => (selector === "[data-dockkit-strip-tabs]" ? strip : null);
+	const rightPanel = new FakeElement("div");
+	rightPanel.setAttribute("data-sidebar-right-panel", "");
 	const gutter = new FakeElement("div");
-	gutter._closest = (selector) => (selector.includes("data-dockkit-strip-tabs") ? strip : null);
+	gutter._closest = (selector) => {
+		if (selector.includes("data-sidebar-right-panel")) return rightPanel;
+		if (selector.includes("data-dockkit-strip-tabs")) return strip;
+		return null;
+	};
 	const fill = new FakeElement("div");
 	fill._closest = (selector) => {
+		if (selector.includes("data-sidebar-right-panel")) return rightPanel;
 		if (selector.includes("data-dockkit-strip-fill")) return fill;
 		if (selector.includes("data-dockkit-strip-tabs")) return null;
 		if (selector === "[data-dockkit-strip]") return outer;
 		return null;
 	};
+	const outside = new FakeElement("div");
+	outside._closest = (selector) => (selector.includes("data-dockkit-strip-tabs") ? strip : null);
 
 	down(pointerEvent(gutter, 300, 50));
 	assert.equal(hasTimer(booted, 450), false, "the gutter does not arm a tab hold");
@@ -653,7 +662,27 @@ test("a touch pan that starts on the strip gutter or fill scrolls without arming
 	move(pointerEvent(gutter, 302, 90));
 	assert.equal(strip.scrollLeft, 100, "a vertical gutter drag panned the strip");
 	up(pointerEvent(gutter, 302, 90));
+
+	// A left/other dockkit strip is not the right panel: no manual pan.
+	strip.scrollLeft = 100;
+	down(pointerEvent(outside, 300, 50));
+	move(pointerEvent(outside, 270, 50));
+	assert.equal(strip.scrollLeft, 100, "a non-right-panel strip was panned");
+	up(pointerEvent(outside, 270, 50));
+
+	// pointercancel and dispose both restore the strip's scroll-behavior.
+	const cancel = booted.handler("pointercancel", "onPointerCancel");
+	strip.style.scrollBehavior = "smooth";
+	down(pointerEvent(gutter, 300, 50));
+	assert.equal(strip.style.scrollBehavior, "auto", "the pan did not force auto scroll");
+	cancel();
+	assert.equal(strip.style.scrollBehavior, "smooth", "pointercancel did not restore scroll-behavior");
+
+	strip.style.scrollBehavior = "smooth";
+	down(pointerEvent(gutter, 300, 50));
+	assert.equal(strip.style.scrollBehavior, "auto");
 	booted.disposeAll();
+	assert.equal(strip.style.scrollBehavior, "smooth", "dispose did not restore scroll-behavior");
 
 	const desktop = bootGestures({ mode: "desktop", width: 390, narrow: true });
 	desktop.drainFrames();

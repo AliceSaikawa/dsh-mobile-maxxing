@@ -9352,11 +9352,12 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
     font: inherit;
     color: inherit;
   }
-  /* Three pills plus their icons stay centered on one row. */
+  /* Three pills plus their icons stay on one row, centered inside the same
+     16px gutters as the composer and transcript. */
   [data-rdsh-composer-dock] { gap: 2px !important; justify-content: center !important; }
   [data-rdsh-transcript] {
-    padding-left: 8px !important;
-    padding-right: 8px !important;
+    padding-left: 16px !important;
+    padding-right: 16px !important;
   }
   /* Use the available conversation width, including on tablets. */
   [data-rdsh-transcript-column] {

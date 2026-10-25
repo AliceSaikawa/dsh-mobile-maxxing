@@ -5897,8 +5897,22 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         zIndex: "0",
       });
       bridge.replaceChildren();
+      // Upstream paints the queue panel's real background in `::before`
+      // (`--dsw-specific-menu`); the panel element itself is transparent (the
+      // composer uses `--dsw-specific-input-major`). Prefer the queue colour,
+      // then a real panel colour, and only then the composer as a fallback.
+      const transparent = (value) => !value
+        || value === "transparent"
+        || value === "rgba(0, 0, 0, 0)"
+        || value === "rgba(0,0,0,0)";
+      let fill = "";
+      try {
+        fill = getComputedStyle(panel, "::before").backgroundColor;
+      } catch (error) {
+        /* an older engine without pseudo-element styles falls through */
+      }
       const panelColor = getComputedStyle(panel).backgroundColor;
-      const fill = panelColor && panelColor !== "rgba(0, 0, 0, 0)" ? panelColor : cardStyle.backgroundColor;
+      if (transparent(fill)) fill = transparent(panelColor) ? cardStyle.backgroundColor : panelColor;
       for (const data of paths) {
         const shape = document.createElementNS(svgNS, "path");
         shape.setAttribute("d", data);

@@ -149,6 +149,7 @@ function bootClient({
 	copy = null,
 	fetchImpl = null,
 	navigator = null,
+	computedStyle = () => stub(),
 } = {}) {
 	let definition;
 	const disposers = [];
@@ -205,7 +206,7 @@ function bootClient({
 			observe() {}
 			disconnect() {}
 		},
-		getComputedStyle: () => stub(),
+		getComputedStyle: computedStyle,
 		console,
 		// Real globals the layout code legitimately uses.
 		URL,
@@ -1165,4 +1166,116 @@ test("the queue dock gets stable hooks for the compact/attached row UI", () => {
 	assert.equal(preview.getAttribute("data-rdsh-queue-text"), "A fixed queued message");
 	assert.equal(preview.getAttribute("tabindex"), "0");
 	booted.disposeAll();
+});
+
+test("the queue bridge paints the queue ::before colour and tears down", () => {
+	const QUEUE = "rgba(67, 69, 74, 0.45)";
+	const COMPOSER = "rgb(255, 255, 255)";
+	const style = () => ({
+		setProperty(name, value) { this[name] = value; },
+		removeProperty(name) {
+			delete this[name];
+			delete this[String(name).replace(/-([a-z])/g, (_match, letter) => letter.toUpperCase())];
+		},
+		getPropertyValue(name) { return this[name] ?? ""; },
+	});
+	const tracked = (tag) => {
+		const node = element();
+		node.tagName = tag.toUpperCase();
+		node.children = [];
+		node.append = (...items) => {
+			for (const item of items) {
+				item._parent = node;
+				node.children.push(item);
+			}
+		};
+		node.replaceChildren = (...items) => {
+			node.children = [];
+			node.append(...items);
+		};
+		node.remove = () => {
+			if (node._parent === undefined) return;
+			node._parent.children = node._parent.children.filter((child) => child !== node);
+			node._parent = undefined;
+		};
+		return node;
+	};
+	const fixture = () => {
+		const card = element();
+		card.style = style();
+		card.setAttribute("data-qa-composer", "keep");
+		card.getBoundingClientRect = () => ({ x: 16, y: 700, top: 700, left: 16, right: 374, bottom: 796, width: 358, height: 96 });
+		const editor = element();
+		editor.closest = (selector) => (String(selector).includes("_card") ? card : null);
+		const panel = tracked("div");
+		panel.style = style();
+		panel.getBoundingClientRect = () => ({ x: 16, y: 600, top: 600, left: 16, right: 374, bottom: 701, width: 358, height: 101 });
+		const parent = element();
+		parent.getBoundingClientRect = () => ({ x: 16, y: 500, top: 500, left: 16, right: 374, bottom: 600, width: 358, height: 100 });
+		const dock = tracked("div");
+		dock.style = style();
+		dock.parentElement = parent;
+		dock.getBoundingClientRect = () => ({ x: 16, y: 500, top: 500, left: 16, right: 374, bottom: 600, width: 358, height: 100 });
+		dock.querySelector = (selector) => {
+			const text = String(selector);
+			if (text.includes("_panel")) return panel;
+			if (text.includes("data-rdsh-queue-join")) return dock.children.find((child) => child.hasAttribute("data-rdsh-queue-join")) ?? null;
+			return null;
+		};
+		dock.querySelectorAll = () => [];
+		return { card, editor, panel, parent, dock };
+	};
+	const boot = (mode) => {
+		const frames = [];
+		const nodes = fixture();
+		const booted = bootClient({
+			mode,
+			narrow: mode === "mobile",
+			frames,
+			computedStyle(node, pseudo) {
+				if (node === nodes.panel && pseudo === "::before") return { backgroundColor: QUEUE };
+				if (node === nodes.panel) return { backgroundColor: "rgba(0, 0, 0, 0)" };
+				if (node === nodes.card) return { backgroundColor: COMPOSER, borderTopLeftRadius: "24px", borderTopRightRadius: "24px" };
+				if (node === nodes.parent) return { rowGap: "6px" };
+				return stub();
+			},
+			configureDocument(doc) {
+				doc.querySelector = (selector) => {
+					const text = String(selector);
+					if (text.includes("data-composer-input")) return nodes.editor;
+					if (text.includes("data-queue-dock")) return nodes.dock;
+					return null;
+				};
+				doc.querySelectorAll = (selector) => {
+					const text = String(selector);
+					if (text === "[data-rdsh-queue-join]") return nodes.dock.children.filter((child) => child.hasAttribute("data-rdsh-queue-join"));
+					if (text === "[data-rdsh-queue-dock]") return [nodes.dock];
+					return [];
+				};
+				doc.createElementNS = (_namespace, tag) => tracked(tag);
+			},
+		});
+		for (let index = 0; index < 10 && frames.length > 0; index += 1) frames.shift()();
+		return { booted, nodes };
+	};
+
+	const mobile = boot("mobile");
+	const bridge = mobile.nodes.dock.children.find((child) => child.hasAttribute("data-rdsh-queue-join"));
+	assert.ok(bridge, "the mobile queue bridge was not created");
+	assert.ok(bridge.children.length > 0, "the bridge has no corner paths");
+	for (const path of bridge.children) assert.equal(path.getAttribute("fill"), QUEUE, "the bridge used the composer colour instead of the queue ::before colour");
+	assert.equal(mobile.nodes.dock.style.marginBottom, "-7px", "the measured seam was not applied");
+	assert.equal(mobile.nodes.card.getAttribute("data-qa-composer"), "keep", "the composer attribute changed");
+	for (const property of ["background", "backgroundColor", "borderTopLeftRadius", "borderTopRightRadius", "clipPath"]) {
+		assert.equal(mobile.nodes.card.style[property], undefined, `the bridge mutated the composer ${property}`);
+	}
+
+	mobile.booted.disposeAll();
+	assert.equal(mobile.nodes.dock.children.includes(bridge), false, "dispose kept the bridge node");
+	assert.equal(mobile.nodes.dock.style.marginBottom, undefined, "dispose kept the seam margin");
+
+	const desktop = boot("desktop");
+	assert.equal(desktop.nodes.dock.children.some((child) => child.hasAttribute("data-rdsh-queue-join")), false, "a desktop got the queue bridge");
+	assert.equal(desktop.nodes.dock.style.marginBottom, undefined, "a desktop got the seam margin");
+	desktop.booted.disposeAll();
 });

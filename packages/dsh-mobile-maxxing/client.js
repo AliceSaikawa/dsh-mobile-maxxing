@@ -102,6 +102,7 @@ window.__ModuleLoader__.load({
     }
 
     // ---------------------------------------------------------------------
+
     // Device mode: the host bootstrap decides it once, this bundle consumes it.
     //
     // The canonical value is `globalThis.__RDSH_DEVICE_MODE__` (a string).
@@ -136,6 +137,77 @@ window.__ModuleLoader__.load({
       }
     } catch (error) {
       /* a document without documentElement only affects the CSS hook */
+    }
+
+    // Shared clipboard + toast
+    //
+    // Two surfaces copy text: the session menu (its id) and the right-panel
+    // file tree (a path or a name). Both use the same secure-context path and
+    // the same fallback, so there is one place where a failed clipboard is
+    // handled.
+    // ---------------------------------------------------------------------
+    const TOAST_HOST_ID = "rdsh-session-id-copy-toast";
+    const TOAST_ROOT_KEY = "__rdshSessionIdCopyToastRoot";
+
+    async function copyText(text) {
+      const clipboard =
+        typeof navigator === "object" && navigator !== null ? navigator.clipboard : undefined;
+      if (clipboard && typeof clipboard.writeText === "function") {
+        try {
+          await clipboard.writeText(text);
+          return true;
+        } catch (error) {
+          // Permission denied or no focus: use the selection fallback below.
+        }
+      }
+      let area;
+      try {
+        area = document.createElement("textarea");
+        area.value = text;
+        area.setAttribute("readonly", "");
+        area.style.position = "fixed";
+        area.style.top = "0";
+        area.style.left = "0";
+        area.style.width = "1px";
+        area.style.height = "1px";
+        area.style.opacity = "0";
+        document.body.appendChild(area);
+        area.focus();
+        area.select();
+        area.setSelectionRange(0, text.length);
+        return typeof document.execCommand === "function" && document.execCommand("copy") === true;
+      } catch (error) {
+        return false;
+      } finally {
+        area?.remove();
+      }
+    }
+
+    // One body portal, one root per page: a live reload must not stack roots.
+    function notify(text) {
+      try {
+        const React = require("react");
+        const primitives = require("@deepseek-ai/dsh-client-ui-primitives");
+        const { createRoot } = require("react-dom/client");
+        let host = document.getElementById(TOAST_HOST_ID);
+        if (host === null) {
+          host = document.createElement("div");
+          host.id = TOAST_HOST_ID;
+          document.body.appendChild(host);
+        }
+        const root = (window[TOAST_ROOT_KEY] = window[TOAST_ROOT_KEY] ?? createRoot(host));
+        root.render(
+          React.createElement(primitives.Toast, {
+            text,
+            tone: "success",
+            onDone: () => {
+              root.render(null);
+            },
+          }),
+        );
+      } catch (error) {
+        // The copy itself already succeeded; a missing toast is not fatal.
+      }
     }
 
     // ---------------------------------------------------------------------
@@ -3770,6 +3842,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       decorateLightbox();
       decorateRightPanel();
       decorateRightPanelTabs();
+      decorateWorkspaceFiles();
       decorateCodePreview();
       decorateQuestionCards();
       decorateTodoPanel();
@@ -4337,6 +4410,63 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     // ---------------------------------------------------------------------
     let workspacePickerPending = false;
     let workspacePickerState = null;
+    let workspacePickerWatch = null;
+    let workspacePickerWatchTimer = 0;
+
+    /**
+     * Stop watching for the picker's portal.
+     *
+     * The observer exists only between the trigger click and the first
+     * decorated panel: the search row has to be in the menu before its first
+     * visible paint, otherwise upstream's anchor pass measures the old height
+     * and the panel jumps on the next frame.
+     */
+    function stopWorkspacePickerWatch() {
+      if (workspacePickerWatchTimer !== 0) {
+        clearTimeout(workspacePickerWatchTimer);
+        workspacePickerWatchTimer = 0;
+      }
+      workspacePickerWatch?.disconnect();
+      workspacePickerWatch = null;
+    }
+
+    /**
+     * Mark the next menu as the workspace chooser and catch its mount.
+     *
+     * `decorateWorkspacePicker()` used to run only from the rAF decorate pass,
+     * which can land after the panel's first paint. A MutationObserver
+     * callback runs at the microtask checkpoint of the commit that mounts the
+     * portal, so the search row and its attributes are in place before the
+     * upstream rAF anchor pass measures the panel.
+     */
+    function beginWorkspacePicker() {
+      workspacePickerPending = true;
+      if (workspacePickerWatch !== null) return;
+      workspacePickerWatch = new MutationObserver(() => {
+        decorateWorkspacePicker();
+        if (workspacePickerState !== null && workspacePickerState.menu.isConnected) {
+          stopWorkspacePickerWatch();
+        } else if (!workspacePickerPending) {
+          // The panel was found but had no list (or closed again): there is
+          // nothing left to wait for, so do not keep a body observer alive.
+          stopWorkspacePickerWatch();
+        }
+      });
+      workspacePickerWatch.observe(document.body, { childList: true, subtree: true });
+      // A menu that was already mounted (a re-open that reuses the portal) is
+      // decorated without waiting for another mutation.
+      decorateWorkspacePicker();
+      if (workspacePickerState !== null && workspacePickerState.menu.isConnected) {
+        stopWorkspacePickerWatch();
+        return;
+      }
+      workspacePickerWatchTimer = setTimeout(() => {
+        workspacePickerWatchTimer = 0;
+        workspacePickerPending = false;
+        stopWorkspacePickerWatch();
+        scheduleDecorate();
+      }, 1500);
+    }
 
     function clearWorkspacePicker() {
       const state = workspacePickerState;
@@ -4372,7 +4502,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       }
       const menu = workspacePickerMenu();
       if (menu === null) {
-        clearWorkspacePicker();
+        // While the trigger's observer is still waiting, a menu-less mutation
+        // (focus, aria-expanded) must not cancel the pending picker.
+        if (!workspacePickerPending) clearWorkspacePicker();
         return;
       }
       if (workspacePickerState !== null && workspacePickerState.menu === menu) {
@@ -4390,15 +4522,15 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       search.setAttribute("data-rdsh-workspace-search", "");
       const input = document.createElement("input");
       input.type = "search";
-      input.placeholder = "Search workspaces";
-      input.setAttribute("aria-label", "Search workspaces");
+      input.placeholder = t("workspace.search.placeholder");
+      input.setAttribute("aria-label", t("workspace.search.placeholder"));
       input.autocomplete = "off";
       input.spellcheck = false;
       search.append(input);
       const empty = document.createElement("div");
       empty.className = "rdsh-mux-workspace-empty";
       empty.setAttribute("data-rdsh-workspace-empty", "");
-      empty.textContent = "No matches";
+      empty.textContent = t("workspace.search.noMatches");
       empty.hidden = true;
       const apply = () => {
         const query = input.value.trim().toLowerCase();
@@ -4429,9 +4561,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       };
       input.addEventListener("input", apply);
       input.addEventListener("keydown", keydown);
-      menu.insertBefore(search, menu.firstChild);
+      // Directly before the viewport: the search row is part of the panel's
+      // measured height, while "Add workspace…" stays outside the scroller.
+      menu.insertBefore(search, viewport);
       viewport.append(empty);
-      viewport.before(search);
       menu.setAttribute("data-rdsh-workspace-menu", "");
       viewport.setAttribute("data-rdsh-workspace-viewport", "");
       workspacePickerState = { menu, viewport, wrappers, input, search, empty, keydown };
@@ -4463,6 +4596,672 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       }
     }
 
+    // ---------------------------------------------------------------------
+    // Right-panel workspace files: long-press copy and explicit search.
+    //
+    // The tree is upstream's, and its stable hooks (verified against
+    // @deepseek-ai/dsh-client-ui-sidebar-files 0.2.1-rc.2) are:
+    //   [data-files-state="tree"][data-files-root="<absolute root>"]
+    //   [data-files-body] > ul li[data-files-entry="file|directory"]
+    //     with data-files-path="<absolute path>"
+    //   header PathLabel: [data-path-label][data-files-path]
+    //     title="<absolute root>"
+    // A row's path is already absolute; a relative one is joined to the real
+    // root the tree reports instead of inventing a path.
+    // ---------------------------------------------------------------------
+    const FILES_HIGHLIGHT = "rdsh-files-search";
+    const FILES_PRESS_MS = 500;
+    const FILES_PRESS_SLOP_PX = 10;
+    let filesRoot = null;
+    let filesSearch = null;
+    let filesPress = null;
+    let filesMenu = null;
+    let filesClickGuard = null;
+    let filesRootTrigger = null;
+    let filesRootTriggerSaved = null;
+    let workspaceToolsInstalled = false;
+
+    /** An absolute path from the tree's real root and one of its entry paths. */
+    function filesAbsolutePath(root, path) {
+      const value = String(path ?? "").replace(/\\/g, "/").trim();
+      if (value === "") return "";
+      if (value.startsWith("/") || value.startsWith("//") || /^[A-Za-z]:\//.test(value)) {
+        return value.length > 1 ? value.replace(/\/+$/, "") : value;
+      }
+      const base = String(root?.getAttribute?.("data-files-root") ?? "")
+        .replace(/\\/g, "/")
+        .replace(/\/+$/, "");
+      if (base === "") return "";
+      return `${base}/${value}`.replace(/\/+$/, "");
+    }
+
+    function filesBaseName(path) {
+      const parts = String(path ?? "").replace(/\\/g, "/").split("/").filter((part) => part !== "");
+      return parts.length === 0 ? "" : parts[parts.length - 1];
+    }
+
+    function filesTreeRoot() {
+      for (const root of document.querySelectorAll('[data-files-state="tree"]')) {
+        // An open panel carries the panel hook; a closed one is clipped to a
+        // zero-width column, so its tree is still mounted but not visible.
+        if (root.closest("[data-rdsh-rightpanel]") !== null) return root;
+        const rect = root.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) return root;
+      }
+      return null;
+    }
+
+    function filesRowPath(root, row) {
+      return filesAbsolutePath(root, row.getAttribute("data-files-path"));
+    }
+
+    /**
+     * The name span upstream draws inside a row's button.
+     *
+     * Structure only: the icon is an SVG child and the name is the last
+     * element child without children of its own. A missing span degrades to
+     * the basename for filtering and skips highlighting.
+     */
+    function filesRowLabel(row) {
+      const button = row.querySelector("button");
+      if (button === null) return null;
+      const spans = [...button.children].filter((child) => child.tagName === "SPAN" && child.children.length === 0);
+      return spans.length === 0 ? null : spans[spans.length - 1];
+    }
+
+    function filesRowName(root, row) {
+      const label = filesRowLabel(row);
+      const text = label === null ? "" : (label.textContent || "").trim();
+      return text === "" ? filesBaseName(filesRowPath(root, row)) : text;
+    }
+
+    function filesTextNodes(node, out) {
+      for (const child of node.childNodes) {
+        if (child.nodeType === 3) out.push(child);
+        else filesTextNodes(child, out);
+      }
+      return out;
+    }
+
+    /**
+     * A case-insensitive matcher over the original string.
+     *
+     * Lowercasing first is wrong for highlighting: characters such as `İ`
+     * expand to two code units when lowercased, so an index taken from the
+     * lowered string can point past the original text node. Matching on the
+     * original string keeps every offset in Range's coordinate space.
+     */
+    function filesQueryPattern(query, flags) {
+      const source = String(query).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      try {
+        return new RegExp(source, `${flags}u`);
+      } catch (error) {
+        try {
+          return new RegExp(source, flags);
+        } catch (fallbackError) {
+          return null;
+        }
+      }
+    }
+
+    function clearFilesHighlight() {
+      const api = globalThis.CSS;
+      if (api === null || typeof api !== "object" || api.highlights === undefined) return;
+      if (typeof api.highlights.delete === "function") api.highlights.delete(FILES_HIGHLIGHT);
+    }
+
+    /**
+     * Highlight the query inside one row's name without touching its DOM.
+     *
+     * CSS Custom Highlight ranges paint over the existing text nodes, so
+     * upstream's React tree, its button handlers and its text selection are
+     * all left exactly as they were.
+     */
+    function filesHighlightRanges(row, query) {
+      const api = globalThis.CSS;
+      if (api === null || typeof api !== "object" || api.highlights === undefined) return [];
+      if (typeof globalThis.Highlight !== "function" || typeof document.createRange !== "function") return [];
+      const label = filesRowLabel(row);
+      if (label === null || query === "") return [];
+      const pattern = filesQueryPattern(query, "gi");
+      if (pattern === null) return [];
+      const ranges = [];
+      for (const node of filesTextNodes(label, [])) {
+        const text = node.textContent || "";
+        for (const match of text.matchAll(pattern)) {
+          if (match[0].length === 0) continue;
+          const range = document.createRange();
+          range.setStart(node, match.index);
+          range.setEnd(node, match.index + match[0].length);
+          ranges.push(range);
+        }
+      }
+      return ranges;
+    }
+
+    /** Filter the mounted tree, keeping ancestors of a matching row visible. */
+    function runFilesSearch(value) {
+      const state = filesSearch;
+      if (state === null) return;
+      const query = String(value ?? "").trim();
+      const body = state.root.querySelector("[data-files-body]") ?? state.root;
+      const rows = [...body.querySelectorAll('li[data-files-entry]')];
+      clearFilesHighlight();
+      for (const row of rows) row.removeAttribute("data-rdsh-files-hidden");
+      state.query = query;
+      if (query === "") {
+        state.empty.hidden = true;
+        return;
+      }
+      const direct = new Set();
+      const keep = new Set();
+      const matcher = filesQueryPattern(query, "i");
+      if (matcher === null) {
+        state.empty.hidden = true;
+        return;
+      }
+      for (const row of rows) {
+        const name = filesRowName(state.root, row);
+        if (!matcher.test(name)) continue;
+        direct.add(row);
+        let parent = row.parentElement;
+        while (parent !== null && parent !== body) {
+          if (parent.tagName === "LI" && parent.hasAttribute("data-files-entry")) keep.add(parent);
+          parent = parent.parentElement;
+        }
+      }
+      const ranges = [];
+      for (const row of rows) {
+        const hit = direct.has(row);
+        row.toggleAttribute("data-rdsh-files-hidden", !hit && !keep.has(row));
+        if (hit) ranges.push(...filesHighlightRanges(row, query));
+      }
+      if (ranges.length > 0) {
+        const api = globalThis.CSS;
+        if (api !== null && typeof api === "object" && api.highlights !== undefined && typeof api.highlights.set === "function") {
+          const highlight = new globalThis.Highlight(...ranges);
+          api.highlights.set(FILES_HIGHLIGHT, highlight);
+        }
+      }
+      state.empty.hidden = direct.size !== 0;
+    }
+
+    function onFilesSearchSubmit() {
+      runFilesSearch(filesSearch?.input.value ?? "");
+    }
+
+    function onFilesSearchKeyDown(event) {
+      const state = filesSearch;
+      if (state === null) return;
+      if (event.key === "Escape") {
+        // A non-empty field clears on Escape; an empty one lets the shell
+        // handle the key (usually closing the panel).
+        if (state.input.value !== "") {
+          state.input.value = "";
+          runFilesSearch("");
+          event.preventDefault();
+          event.stopPropagation();
+        }
+        return;
+      }
+      // Explicit submission only: typing never filters.
+      event.stopPropagation();
+      if (event.key === "Enter") {
+        event.preventDefault();
+        runFilesSearch(state.input.value);
+      }
+    }
+
+    /**
+     * Insert the search row between the header and the scrolling tree.
+     *
+     * It lives outside [data-files-body], so scrolling the tree never moves
+     * the field, and the no-hit line stays visible while the tree is empty.
+     */
+    function ensureFilesSearch(root) {
+      if (filesSearch !== null && filesSearch.root === root && filesSearch.search.isConnected !== false) return filesSearch;
+      if (filesSearch !== null) {
+        filesSearch.input.removeEventListener("keydown", onFilesSearchKeyDown);
+        filesSearch.button.removeEventListener("click", onFilesSearchSubmit);
+        filesSearch.search.remove();
+        filesSearch = null;
+      }
+      clearFilesHighlight();
+      const search = document.createElement("div");
+      search.className = "rdsh-mux-files-search";
+      search.setAttribute("data-rdsh-files-search", "");
+      const input = document.createElement("input");
+      input.type = "search";
+      input.placeholder = t("files.search.placeholder");
+      input.setAttribute("aria-label", t("files.search.placeholder"));
+      input.autocomplete = "off";
+      input.spellcheck = false;
+      input.setAttribute("data-rdsh-files-search-input", "");
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = "🔍";
+      button.setAttribute("aria-label", t("files.search.submit"));
+      button.title = t("files.search.submit");
+      button.setAttribute("data-rdsh-files-search-button", "");
+      const empty = document.createElement("div");
+      empty.className = "rdsh-mux-files-empty";
+      empty.setAttribute("data-rdsh-files-empty", "");
+      empty.textContent = t("files.search.noMatches");
+      empty.hidden = true;
+      search.append(input, button, empty);
+      input.addEventListener("keydown", onFilesSearchKeyDown);
+      button.addEventListener("click", onFilesSearchSubmit);
+      const body = root.querySelector("[data-files-body]");
+      if (body === null) root.append(search);
+      else root.insertBefore(search, body);
+      filesSearch = { root, search, input, button, empty, query: "" };
+      return filesSearch;
+    }
+
+    /** Tag the open tree and keep its injected row in sync with a live route. */
+    function decorateWorkspaceFiles() {
+      if (!phone()) {
+        teardownWorkspaceFiles();
+        return;
+      }
+      const root = filesTreeRoot();
+      if (root === null) {
+        teardownWorkspaceFiles();
+        return;
+      }
+      if (filesRoot !== null && filesRoot !== root) teardownWorkspaceFiles();
+      filesRoot = root;
+      root.setAttribute("data-rdsh-files-tree", "");
+      const pathLabel = root.querySelector("[data-path-label][data-files-path]");
+      if (pathLabel === null) restoreFilesRootTrigger();
+      else ensureFilesRootTrigger(pathLabel);
+      ensureFilesSearch(root);
+      if (filesSearch !== null && filesSearch.query !== "") runFilesSearch(filesSearch.query);
+    }
+
+    /**
+     * Restore the root path's own attributes after a phone session.
+     *
+     * The label is a plain `<span>` upstream. On a phone it briefly becomes a
+     * keyboard-reachable menu trigger; every attribute this module adds is
+     * removed (or put back to its original value) on desktop, panel close and
+     * dispose.
+     */
+    function restoreFilesRootTrigger() {
+      const trigger = filesRootTrigger;
+      const saved = filesRootTriggerSaved;
+      filesRootTrigger = null;
+      filesRootTriggerSaved = null;
+      if (trigger === null || saved === null) return;
+      trigger.removeEventListener("keydown", onFilesRootKeyDown);
+      trigger.removeAttribute("data-rdsh-files-root-path");
+      for (const [name, value] of Object.entries(saved)) {
+        if (value === null) trigger.removeAttribute(name);
+        else trigger.setAttribute(name, value);
+      }
+    }
+
+    function ensureFilesRootTrigger(pathLabel) {
+      if (filesRootTrigger === pathLabel) return;
+      restoreFilesRootTrigger();
+      filesRootTrigger = pathLabel;
+      filesRootTriggerSaved = {
+        tabindex: pathLabel.getAttribute("tabindex"),
+        role: pathLabel.getAttribute("role"),
+        "aria-haspopup": pathLabel.getAttribute("aria-haspopup"),
+        "aria-expanded": pathLabel.getAttribute("aria-expanded"),
+        "aria-label": pathLabel.getAttribute("aria-label"),
+      };
+      pathLabel.setAttribute("data-rdsh-files-root-path", "");
+      pathLabel.setAttribute("tabindex", "0");
+      if (!pathLabel.hasAttribute("role")) pathLabel.setAttribute("role", "button");
+      pathLabel.setAttribute("aria-haspopup", "menu");
+      pathLabel.setAttribute("aria-expanded", "false");
+      if (!pathLabel.hasAttribute("aria-label")) {
+        const title = pathLabel.getAttribute("title");
+        if (title !== null && title !== "") pathLabel.setAttribute("aria-label", title);
+      }
+      pathLabel.addEventListener("keydown", onFilesRootKeyDown);
+    }
+
+    function onFilesRootKeyDown(event) {
+      if (filesRootTrigger === null) return;
+      const opens = event.key === "Enter"
+        || event.key === " "
+        || event.key === "Spacebar"
+        || event.key === "ContextMenu"
+        || (event.key === "F10" && event.shiftKey === true);
+      if (!opens) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const root = filesRoot;
+      const label = filesRootTrigger;
+      if (root === null || label === null) return;
+      const path = filesAbsolutePath(
+        root,
+        label.getAttribute("title") || root.getAttribute("data-files-root") || "",
+      );
+      if (path === "") return;
+      closeFilesMenu();
+      openFilesMenu({ kind: "root", path, anchor: label });
+    }
+
+    function cancelFilesPress() {
+      if (filesPress === null) return;
+      if (filesPress.timer !== 0) clearTimeout(filesPress.timer);
+      filesPress = null;
+    }
+
+    /** What a long press on the tree would act on: a row or the root path. */
+    function filesAnchorAt(target) {
+      if (!phone() || filesRoot === null) return null;
+      if (target === null || target.closest === undefined) return null;
+      // Another tree/panel may be mounted (a hidden route, a second tab, a
+      // future split view). Only rows inside the tree this module decorated
+      // are copy targets.
+      if (!filesRoot.contains(target)) return null;
+      const row = target.closest("li[data-files-entry]");
+      if (row !== null) {
+        const entry = row.getAttribute("data-files-entry");
+        if (entry !== "file" && entry !== "directory") return null;
+        const path = filesRowPath(filesRoot, row);
+        if (path === "") return null;
+        return { kind: "entry", path, row, anchor: row.querySelector("button") ?? row };
+      }
+      const label = target.closest("[data-path-label][data-files-path]");
+      if (label !== null) {
+        const path = filesAbsolutePath(
+          filesRoot,
+          label.getAttribute("title") || filesRoot.getAttribute("data-files-root") || "",
+        );
+        if (path === "") return null;
+        return { kind: "root", path, anchor: label };
+      }
+      return null;
+    }
+
+    /** Is this event still the finger that started the long press? */
+    function filesSamePointer(event) {
+      if (filesPress === null) return false;
+      if (filesPress.pointerId === null) return true;
+      return typeof event.pointerId !== "number" || event.pointerId === filesPress.pointerId;
+    }
+
+    function onFilesPointerDown(event) {
+      if (!phone() || event.pointerType === "mouse" || event.isPrimary === false) return;
+      // A second finger must not replace or cancel the press already running.
+      if (filesPress !== null && !filesSamePointer(event)) return;
+      if (filesMenu !== null) closeFilesMenu();
+      const hit = filesAnchorAt(event.target);
+      if (hit === null) return;
+      cancelFilesPress();
+      filesPress = {
+        ...hit,
+        x: typeof event.clientX === "number" ? event.clientX : 0,
+        y: typeof event.clientY === "number" ? event.clientY : 0,
+        pointerId: typeof event.pointerId === "number" ? event.pointerId : null,
+        timer: 0,
+      };
+      filesPress.timer = setTimeout(() => {
+        if (filesPress === null) return;
+        const press = filesPress;
+        filesPress = null;
+        // Open first: openFilesMenu() retires an older guard, so the row that
+        // started this press must be armed afterwards.
+        openFilesMenu(press);
+        if (press.row !== undefined) armFilesClickGuard(press.row);
+      }, FILES_PRESS_MS);
+    }
+
+    function onFilesPointerMove(event) {
+      if (!filesSamePointer(event) || event.isPrimary === false) return;
+      const dx = (typeof event.clientX === "number" ? event.clientX : 0) - filesPress.x;
+      const dy = (typeof event.clientY === "number" ? event.clientY : 0) - filesPress.y;
+      if (Math.hypot(dx, dy) > FILES_PRESS_SLOP_PX) cancelFilesPress();
+    }
+
+    function onFilesPointerUp(event) {
+      if (!filesSamePointer(event)) return;
+      cancelFilesPress();
+    }
+
+    function onFilesPointerCancel(event) {
+      if (!filesSamePointer(event)) return;
+      cancelFilesPress();
+    }
+
+    function onFilesScroll(event) {
+      const target = event === undefined || event === null ? undefined : event.target;
+      // The transcript behind the right panel streams and scrolls constantly.
+      // Only a scroll that can move the tree (or our fixed menu) may cancel a
+      // press or close the menu.
+      const related = target === undefined
+        || target === null
+        || target === document
+        || target === document.documentElement
+        || target === document.body
+        || target === window
+        || (filesRoot !== null && filesRoot.contains(target))
+        || (filesMenu !== null && filesMenu.node.contains(target));
+      if (!related) return;
+      cancelFilesPress();
+      if (filesMenu !== null) closeFilesMenu();
+    }
+
+    /**
+     * Right-click on a narrow window and Android's long-press context menu.
+     *
+     * The pointer timer excludes the mouse (a mouse hold is not a touch
+     * gesture), so the contextmenu event is the mouse/keyboard route. It is
+     * also what suppresses Android's native menu on rows that opt out of text
+     * selection.
+     */
+    function onFilesContextMenu(event) {
+      if (!phone() || filesRoot === null) return;
+      const target = event.target;
+      if (target === null || target === undefined || target.closest === undefined) return;
+      if (filesMenu !== null && filesMenu.node.contains(target)) {
+        event.preventDefault();
+        return;
+      }
+      const hit = filesAnchorAt(target);
+      if (hit === null) return;
+      event.preventDefault();
+      if (typeof event.stopPropagation === "function") event.stopPropagation();
+      cancelFilesPress();
+      if (filesMenu !== null && filesMenu.anchor === hit.anchor) return;
+      closeFilesMenu();
+      openFilesMenu(hit);
+    }
+
+    /**
+     * A long press ends in a click; never let that click open or toggle the
+     * row. The listener is scoped to the pressed row and retires itself, so no
+     * document-level click handler is left behind (which would also compete
+     * with the app's own click handling on every page).
+     */
+    function onFilesRowClickGuard(event) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+      clearFilesClickGuard();
+    }
+
+    function clearFilesClickGuard() {
+      const guard = filesClickGuard;
+      filesClickGuard = null;
+      if (guard === null) return;
+      if (guard.timer !== 0) clearTimeout(guard.timer);
+      guard.row.removeEventListener("click", onFilesRowClickGuard, true);
+    }
+
+    function armFilesClickGuard(row) {
+      clearFilesClickGuard();
+      const guard = { row, timer: 0 };
+      filesClickGuard = guard;
+      guard.timer = setTimeout(clearFilesClickGuard, 900);
+      row.addEventListener("click", onFilesRowClickGuard, true);
+    }
+
+    function copyFilesText(text) {
+      void copyText(text).then((copied) => {
+        if (copied) notify(t("files.copied"));
+      });
+    }
+
+    function addFilesMenuItem(menu, label, action) {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.setAttribute("role", "menuitem");
+      item.setAttribute("data-rdsh-files-menu-item", "");
+      item.textContent = label;
+      item.addEventListener("click", () => {
+        action();
+        closeFilesMenu(true);
+      });
+      menu.append(item);
+      return item;
+    }
+
+    function openFilesMenu(hit) {
+      closeFilesMenu();
+      const menu = document.createElement("div");
+      menu.className = "rdsh-mux-files-menu";
+      menu.setAttribute("data-rdsh-file-menu", "");
+      menu.setAttribute("role", "menu");
+      menu.setAttribute("aria-label", hit.kind === "root" ? t("files.menu.root") : t("files.menu.entry"));
+      const items = [addFilesMenuItem(menu, t("files.menu.copyPath"), () => copyFilesText(hit.path))];
+      if (hit.kind === "entry") {
+        items.push(addFilesMenuItem(menu, t("files.menu.copyName"), () => copyFilesText(filesBaseName(hit.path))));
+      }
+      document.body.append(menu);
+      const rect = typeof hit.anchor.getBoundingClientRect === "function"
+        ? hit.anchor.getBoundingClientRect()
+        : { left: 12, top: 12, bottom: 12, right: 12 };
+      const width = Math.min(240, Math.max(160, window.innerWidth - 24));
+      menu.style.width = `${width}px`;
+      const height = typeof menu.getBoundingClientRect === "function" ? menu.getBoundingClientRect().height : 0;
+      let top = rect.bottom + 6;
+      if (height > 0 && top + height > window.innerHeight - 12) top = Math.max(12, rect.top - height - 6);
+      const left = Math.min(Math.max(12, rect.left), Math.max(12, window.innerWidth - width - 12));
+      menu.style.top = `${Math.round(top)}px`;
+      menu.style.left = `${Math.round(left)}px`;
+      filesMenu = { node: menu, anchor: hit.anchor, items };
+      if (hit.kind === "root" && hit.anchor === filesRootTrigger) hit.anchor.setAttribute("aria-expanded", "true");
+      items[0]?.focus?.();
+      document.addEventListener("pointerdown", onFilesMenuPointerDown, true);
+      document.addEventListener("keydown", onFilesMenuKeyDown, true);
+    }
+
+    function closeFilesMenu(restoreFocus = false) {
+      const current = filesMenu;
+      filesMenu = null;
+      clearFilesClickGuard();
+      if (current === null) return;
+      document.removeEventListener("pointerdown", onFilesMenuPointerDown, true);
+      document.removeEventListener("keydown", onFilesMenuKeyDown, true);
+      current.node.remove();
+      if (current.anchor === filesRootTrigger) current.anchor.setAttribute("aria-expanded", "false");
+      if (restoreFocus && current.anchor.isConnected !== false && typeof current.anchor.focus === "function") {
+        current.anchor.focus({ preventScroll: true });
+      }
+    }
+
+    function onFilesMenuPointerDown(event) {
+      if (filesMenu === null) return;
+      if (filesMenu.node.contains(event.target)) return;
+      closeFilesMenu();
+    }
+
+    function onFilesMenuKeyDown(event) {
+      const current = filesMenu;
+      if (current === null) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        closeFilesMenu(true);
+        return;
+      }
+      const items = current.items;
+      if (items.length === 0) return;
+      const at = items.indexOf(document.activeElement);
+      if (event.key === "Tab") {
+        // A menu is not a focus trap: close it, put focus back on the trigger
+        // and let the browser's default Tab move to the next element.
+        event.stopPropagation();
+        closeFilesMenu(true);
+        return;
+      }
+      if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      let next;
+      if (event.key === "Home") next = 0;
+      else if (event.key === "End") next = items.length - 1;
+      else if (at === -1) next = event.key === "ArrowDown" ? 0 : items.length - 1;
+      else next = (at + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+      items[next]?.focus?.();
+    }
+
+    /** Remove the injected search, hooks and menu, restoring upstream rows. */
+    function teardownWorkspaceFiles() {
+      closeFilesMenu();
+      cancelFilesPress();
+      restoreFilesRootTrigger();
+      if (filesSearch !== null) {
+        filesSearch.input.removeEventListener("keydown", onFilesSearchKeyDown);
+        filesSearch.button.removeEventListener("click", onFilesSearchSubmit);
+        filesSearch.search.remove();
+        filesSearch = null;
+      }
+      clearFilesHighlight();
+      for (const element of document.querySelectorAll("[data-rdsh-files-hidden]")) element.removeAttribute("data-rdsh-files-hidden");
+      for (const element of document.querySelectorAll("[data-rdsh-files-tree]")) element.removeAttribute("data-rdsh-files-tree");
+      for (const element of document.querySelectorAll("[data-rdsh-files-root-path]")) element.removeAttribute("data-rdsh-files-root-path");
+      filesRoot = null;
+    }
+
+    /**
+     * Document-level pointer listeners for the tree.
+     *
+     * Phone-only and installed once. Delegation means React can replace rows
+     * without this plugin attaching anything to them; the listeners are
+     * removed on leaving the phone layout, on pagehide and on boot teardown.
+     */
+    function installWorkspaceTools() {
+      if (workspaceToolsInstalled || !phone()) return;
+      workspaceToolsInstalled = true;
+      document.addEventListener("pointerdown", onFilesPointerDown, true);
+      document.addEventListener("pointermove", onFilesPointerMove, true);
+      document.addEventListener("pointerup", onFilesPointerUp, true);
+      document.addEventListener("pointercancel", onFilesPointerCancel, true);
+      document.addEventListener("scroll", onFilesScroll, true);
+      document.addEventListener("contextmenu", onFilesContextMenu, true);
+      window.addEventListener("pagehide", onWorkspacePageHide);
+    }
+
+    function onWorkspacePageHide(event) {
+      // A bfcache entry keeps its listeners and DOM; only a real unload tears
+      // the workspace resources down.
+      if (event !== undefined && event !== null && event.persisted === true) return;
+      disposeWorkspaceTools();
+    }
+
+    function disposeWorkspaceTools() {
+      if (workspaceToolsInstalled) {
+        workspaceToolsInstalled = false;
+        document.removeEventListener("pointerdown", onFilesPointerDown, true);
+        document.removeEventListener("pointermove", onFilesPointerMove, true);
+        document.removeEventListener("pointerup", onFilesPointerUp, true);
+        document.removeEventListener("pointercancel", onFilesPointerCancel, true);
+        document.removeEventListener("scroll", onFilesScroll, true);
+        document.removeEventListener("contextmenu", onFilesContextMenu, true);
+        window.removeEventListener("pagehide", onWorkspacePageHide);
+      }
+      stopWorkspacePickerWatch();
+      clearWorkspacePicker();
+      teardownWorkspaceFiles();
+    }
     function decorateQueueDock() {
       if (!phone()) {
         if (queuePreview !== null || queueMenu !== null) closeQueueUi();
@@ -5140,8 +5939,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (phone() && target.closest && target.closest('[aria-label="Choose workspace"]') !== null) {
         const trigger = target.closest('[data-rdsh-workspace-trigger], [aria-label="Choose workspace"]');
         if (trigger !== null) trigger.setAttribute("data-rdsh-workspace-trigger", "");
-        workspacePickerPending = true;
-        scheduleDecorate();
+        // The same control closes an open menu; only the opening click starts
+        // the observer. aria-expanded still carries the pre-click state here.
+        if (trigger === null || trigger.getAttribute("aria-expanded") !== "true") beginWorkspacePicker();
       }
       // Queued message: tap toggles the full-text preview. The native row still
       // owns its edit/remove/steer buttons; this branch only wraps the preview.
@@ -7907,21 +8707,94 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   }
   [data-rdsh-workspace-menu] [data-rdsh-workspace-hidden] { display: none !important; }
   .rdsh-mux-workspace-search {
-    flex: none; box-sizing: border-box; padding: 8px 10px;
+    flex: none; box-sizing: border-box; padding: 6px 0;
     border-bottom: .5px solid var(--dsw-alias-border-l1, rgba(255,255,255,.1));
     background: var(--dsw-alias-bg-layer-2, #2c2c2e);
   }
   .rdsh-mux-workspace-search input {
-    box-sizing: border-box; width: 100%; height: 34px;
-    padding: 0 10px; border-radius: 8px;
+    display: block; box-sizing: border-box; width: 100%; height: 32px;
+    margin: 0; padding: 0 8px; border-radius: 8px;
     border: .5px solid var(--dsw-alias-border-l3, rgba(255,255,255,.16));
     background: var(--dsw-alias-bg-base, #1b1b1d);
     color: var(--dsw-alias-label-primary, #f9fafb);
-    font: inherit; font-size: 16px;
+    font: inherit; font-size: 16px; line-height: 20px;
+    outline: none;
+  }
+  .rdsh-mux-workspace-search input:focus-visible {
+    border-color: var(--dsw-alias-state-business-primary, #4d6bfe);
+    /* The field spans the menu edge, so keep the ring inside the clip. */
+    outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary, #4d6bfe));
+    outline-offset: -2px;
   }
   .rdsh-mux-workspace-empty {
     padding: 14px 12px; color: var(--dsw-alias-label-tertiary, #adb2b8);
     font-size: 13px;
+  }
+  /* Right-panel file tree: a long press must not select text or raise the
+     iOS callout, and the explicit search row sits between the header and the
+     scrolling body. Both are phone-only. */
+  [data-rdsh-files-tree] [data-files-entry],
+  [data-rdsh-files-tree] [data-files-entry] *,
+  [data-rdsh-files-root-path],
+  [data-rdsh-files-root-path] * {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+  [data-rdsh-files-hidden] { display: none !important; }
+  .rdsh-mux-files-search {
+    flex: none; box-sizing: border-box; display: flex;
+    align-items: center; gap: 6px; padding: 6px 4px;
+    border-bottom: .5px solid var(--dsw-alias-border-l1, rgba(255,255,255,.1));
+    background: var(--dsw-alias-bg-layer-2, #2c2c2e);
+  }
+  .rdsh-mux-files-search input {
+    min-width: 0; flex: 1; box-sizing: border-box; height: 32px;
+    margin: 0; padding: 0 8px; border-radius: 8px;
+    border: .5px solid var(--dsw-alias-border-l3, rgba(255,255,255,.16));
+    background: var(--dsw-alias-bg-base, #1b1b1d);
+    color: var(--dsw-alias-label-primary, #f9fafb);
+    font: inherit; font-size: 16px; line-height: 20px;
+    outline: none;
+  }
+  .rdsh-mux-files-search input:focus-visible {
+    border-color: var(--dsw-alias-state-business-primary, #4d6bfe);
+    outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary, #4d6bfe));
+    outline-offset: 0;
+  }
+  .rdsh-mux-files-search button {
+    flex: none; box-sizing: border-box; width: 32px; height: 32px;
+    padding: 0; border-radius: 8px; border: .5px solid var(--dsw-alias-border-l3, rgba(255,255,255,.16));
+    background: var(--dsw-alias-button-elevated-fill, rgba(255,255,255,.08));
+    color: var(--dsw-alias-label-primary, #f9fafb);
+    font: inherit; font-size: 15px; line-height: 1;
+  }
+  .rdsh-mux-files-empty {
+    padding: 10px 12px; color: var(--dsw-alias-label-tertiary, #adb2b8);
+    font-size: 13px;
+  }
+  .rdsh-mux-files-menu {
+    position: fixed; z-index: 990; box-sizing: border-box;
+    display: flex; flex-direction: column; gap: 1px; padding: 6px;
+    border: .5px solid var(--dsw-alias-border-l3, rgba(0,0,0,.12));
+    border-radius: 12px;
+    background: var(--dsw-alias-bg-layer-2, #2c2c2e);
+    color: var(--dsw-alias-label-primary, #f9fafb);
+    box-shadow: var(--dsw-elevation-prominent, 0 12px 32px rgba(0,0,0,.35));
+  }
+  .rdsh-mux-files-menu button {
+    width: 100%; min-height: 38px; padding: 6px 10px;
+    border: 0; border-radius: 8px; background: transparent;
+    color: inherit; font: inherit; font-size: 14px; text-align: left;
+  }
+  .rdsh-mux-files-menu button:focus-visible {
+    outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary, #4d6bfe));
+    outline-offset: -2px;
+  }
+  /* CSS Custom Highlight: painted over the upstream text nodes, no DOM edit. */
+  ::highlight(rdsh-files-search) {
+    background-color: var(--dsw-alias-state-business-secondary, rgba(77,107,254,.35));
+    color: inherit;
   }
   /* Direct children only. [class*="_header"] also matches _headerActions,
      [class*="_footer"] matches _footerActions and [class*="_option"] matches
@@ -8100,6 +8973,9 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         document.addEventListener("pointercancel", cancelQueuePress, true);
         document.addEventListener("mousedown", onMouseDownCapture, true);
         document.addEventListener("click", onClickCapture, true);
+        // Phone-only tree long-press and search listeners; installed here so
+        // the teardown below can remove exactly one set.
+        if (phone()) installWorkspaceTools();
         // Window capture runs before the app's document-level key adapter. That
         // adapter treats a keyCode 229 Return as IME input and consumes it, so a
         // listener on document never gets the chance to insert a newline.
@@ -8295,6 +9171,25 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
       }, "rdsh-mobile-ux: phone layout");
     }
 
+    // Test seam. The workspace behaviours are plain DOM functions; driving
+    // them through boot() would need a whole browser, so a harness that sets
+    // this flag before loading the module gets the same closures production
+    // uses. Nothing reads it in a normal page.
+    const workspaceTestHook = globalThis.__RDSH_WORKSPACE_TEST__;
+    if (workspaceTestHook !== null && typeof workspaceTestHook === "object") {
+      workspaceTestHook.workspace = {
+        beginWorkspacePicker,
+        decorateWorkspacePicker,
+        clearWorkspacePicker,
+        decorateWorkspaceFiles,
+        runFilesSearch,
+        installWorkspaceTools,
+        disposeWorkspaceTools,
+        filesMenu: () => filesMenu,
+        filesSearch: () => filesSearch,
+      };
+    }
+
     return {
       inject: ["slots"],
       apply(ctx) {
@@ -8360,73 +9255,6 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
     const LABEL = t("sessionId.label");
     const COPIED = t("sessionId.copied");
     const MANUAL_PROMPT = t("sessionId.manualPrompt");
-    const TOAST_HOST_ID = "rdsh-session-id-copy-toast";
-    const TOAST_ROOT_KEY = "__rdshSessionIdCopyToastRoot";
-
-
-    // クリップボード: `navigator.clipboard` は secure context でしか生えない
-    // (127.0.0.1 は secure、Tailscale の http://100.x.y.z は非 secure)。
-    // 無い・拒否された場合は選択+execCommand に落ちる。
-    async function copyText(text) {
-      const clipboard =
-        typeof navigator === "object" && navigator !== null ? navigator.clipboard : undefined;
-      if (clipboard && typeof clipboard.writeText === "function") {
-        try {
-          await clipboard.writeText(text);
-          return true;
-        } catch (error) {
-          // 権限拒否・非フォーカスなど。下のフォールバックへ。
-        }
-      }
-      let area;
-      try {
-        area = document.createElement("textarea");
-        area.value = text;
-        area.setAttribute("readonly", "");
-        area.style.position = "fixed";
-        area.style.top = "0";
-        area.style.left = "0";
-        area.style.width = "1px";
-        area.style.height = "1px";
-        area.style.opacity = "0";
-        document.body.appendChild(area);
-        area.focus();
-        area.select();
-        area.setSelectionRange(0, text.length);
-        return typeof document.execCommand === "function" && document.execCommand("copy") === true;
-      } catch (error) {
-        return false;
-      } finally {
-        area?.remove();
-      }
-    }
-
-    // Toast は body portal。host を 1 つだけ作り、多重表示は最後の 1 件に畳む。
-    // root は window に置く: ライブ更新でこのモジュールが読み直されても、
-    // 同じ DOM ノードに 2 つ目の root を作らないため。
-    function notify(text) {
-      try {
-        const { createRoot } = require("react-dom/client");
-        let host = document.getElementById(TOAST_HOST_ID);
-        if (host === null) {
-          host = document.createElement("div");
-          host.id = TOAST_HOST_ID;
-          document.body.appendChild(host);
-        }
-        const root = (window[TOAST_ROOT_KEY] = window[TOAST_ROOT_KEY] ?? createRoot(host));
-        root.render(
-          h(primitives.Toast, {
-            text,
-            tone: "success",
-            onDone: () => {
-              root.render(null);
-            },
-          }),
-        );
-      } catch (error) {
-        // 通知が出せなくてもコピー自体は成立している。
-      }
-    }
 
     /** One "..." menu row: copy this Session's ID, then close the menu. */
     function CopySessionIdMenuItem({ sessionId, useMenuOpenState }) {

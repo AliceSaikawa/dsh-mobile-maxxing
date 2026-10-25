@@ -238,6 +238,18 @@ export const COPY = {
 		"sessionId.copied": "Session ID copied",
 		"sessionId.manualPrompt": "Session ID (copy it manually)",
 
+		// --- workspace picker / right-panel files ---------------------------
+		"workspace.search.placeholder": "Search workspaces",
+		"workspace.search.noMatches": "No matches",
+		"files.search.placeholder": "Search this folder",
+		"files.search.submit": "Search this folder",
+		"files.search.noMatches": "No matches",
+		"files.menu.root": "Folder path",
+		"files.menu.entry": "File actions",
+		"files.menu.copyPath": "Copy path",
+		"files.menu.copyName": "Copy name",
+		"files.copied": "Copied",
+
 		// --- service worker --------------------------------------------------
 		"sw.documentTitle": "Offline — DSH",
 		"sw.offlineHeading": "You're offline",
@@ -471,6 +483,18 @@ export const COPY = {
 		"sessionId.label": "セッションIDをコピー",
 		"sessionId.copied": "セッションIDをコピーしました",
 		"sessionId.manualPrompt": "セッションID（手動でコピーしてください）",
+
+		// --- workspace picker / right-panel files ---------------------------
+		"workspace.search.placeholder": "ワークスペースを検索",
+		"workspace.search.noMatches": "該当なし",
+		"files.search.placeholder": "このフォルダ内を検索",
+		"files.search.submit": "このフォルダ内を検索",
+		"files.search.noMatches": "該当なし",
+		"files.menu.root": "フォルダのパス",
+		"files.menu.entry": "ファイルの操作",
+		"files.menu.copyPath": "パスをコピー",
+		"files.menu.copyName": "名前をコピー",
+		"files.copied": "コピーしました",
 
 		// --- service worker --------------------------------------------------
 		"sw.documentTitle": "オフライン — DSH",

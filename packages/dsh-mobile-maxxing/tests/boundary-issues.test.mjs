@@ -524,7 +524,7 @@ const PHONE_SAMPLE = {
 };
 
 test("767→768 removes every owned hook, node and inline style", () => {
-	const booted = bootBoundary({ narrow: true, seed: { "rdsh-pwa:device-theme": "dark" } });
+	const booted = bootBoundary({ narrow: true, seed: { "dsh-mobile-maxxing:device-theme": "dark" } });
 	// A narrow boot installed the drawer and, on the first sync, the lock.
 	booted.setWidth(true);
 	assert.equal(booted.body.querySelectorAll(".rdsh-mux-fab").length, 1, "the phone drawer button was not created");
@@ -580,7 +580,7 @@ test("767→768 removes every owned hook, node and inline style", () => {
 });
 
 test("768→767 re-installs the phone surface, and dispose restores desktop", () => {
-	const booted = bootBoundary({ narrow: false, seed: { "rdsh-pwa:device-theme": "dark" } });
+	const booted = bootBoundary({ narrow: false, seed: { "dsh-mobile-maxxing:device-theme": "dark" } });
 	// A wide boot injects nothing and leaves the viewport alone.
 	assert.equal(booted.body.querySelectorAll(".rdsh-mux-fab").length, 0, "a wide boot created the drawer button");
 	assert.equal(booted.meta.getAttribute("content"), "width=device-width, initial-scale=1", "a wide boot touched the viewport");

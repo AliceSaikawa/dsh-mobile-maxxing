@@ -1850,11 +1850,11 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
      * a decorate function without being listed here is caught by
      * `tests/boundary-issues.test.mjs`, which walks the live DOM after a
      * 767→768 transition. Device/PWA attributes are deliberately absent:
-     * `data-rdsh-pwa`, the notification diagnostics (`data-rdsh-badge-hook`,
-     * `-sessions-hook`, `-running-subagents`), `data-rdsh-notice-host` and the
-     * two style markers. The safe-area attributes are listed: #44 keeps their
-     * root padding off a desktop even when a standalone iPad reports non-zero
-     * insets.
+     * `data-dsh-mobile-maxxing`, the notification diagnostics
+     * (`data-rdsh-badge-hook`, `-sessions-hook`, `-running-subagents`),
+     * `data-rdsh-notice-host` and the style markers. The safe-area attributes
+     * are listed: #44 keeps their root padding off a desktop even when a
+     * standalone iPad reports non-zero insets.
      */
     const PHONE_HOOKS = [
       "data-rdsh-frame",

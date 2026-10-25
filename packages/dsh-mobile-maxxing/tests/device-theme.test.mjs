@@ -278,7 +278,7 @@ test("a wide window never applies the phone palette", () => {
 	const snapshot = { preference: "light", active: { colorScheme: "light", tokens: {} } };
 	const { api, body, documentElement } = boot({
 		theme: { getTheme: () => snapshot },
-		seed: { "rdsh-pwa:device-theme": "dark" },
+		seed: { "dsh-mobile-maxxing:device-theme": "dark" },
 		narrow: false,
 	});
 	assert.equal(body.hasAttribute("data-ds-dark-theme"), false, "a desktop got the phone palette");

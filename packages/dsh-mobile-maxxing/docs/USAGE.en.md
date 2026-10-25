@@ -26,7 +26,7 @@ enablement. The parts are independent, so merging them costs nothing.
 | Installable PWA | Manifest, service worker, offline page, update banner |
 | Notifications | In-app banner while the app is on screen, Web Push otherwise |
 | Notification sounds | Five synthesised presets, volume, no audio files |
-| Phone layout | Sidebar becomes a drawer, settings open in one tap, code wraps |
+| Mobile layout | Sidebar becomes a drawer, settings open in one tap, code wraps |
 | CJK rendering | `**https://x**（memo）` keeps its bold and its link |
 | Session id copy | One row in the session row menu |
 
@@ -71,17 +71,27 @@ service-worker offline page and the notification text follow the same value
 browser half, the service worker, the manifest and notifications all English;
 untranslated dictionary keys fall back to English.
 
-## Phone layout
+## Mobile layout
 
-A "phone" is simply a window at most 767px wide, as in the previous layout. A landscape
-phone wider than that is treated as a desktop. A narrow desktop window at 767px or less
-gets the same treatment as a phone: the stock controls are hidden, labels are rewritten
-and "+" becomes the file picker. Whether the pointer is a mouse or a finger is not part
-of the test.
+The mobile UI is selected by the **device mode**, not by the window width. A host
+bootstrap classifies the device once before this bundle runs and writes
+`globalThis.__RDSH_DEVICE_MODE__` plus `html[data-rdsh-device-mode]` (`"mobile"` or
+`"desktop"`). Client code consumes that value; it never re-classifies from UA, width,
+pointer kind or touch points.
 
-The layout (sidebar becomes a drawer) uses the same width test. This release keeps the
-previous width test; device-specific changes are a separate change, not part of this
-parity fix.
+- Phones (iPhone/Android, portrait or landscape) and tablets (iPad, Android tablets)
+  are mobile. iPadOS's desktop-like UA (Macintosh plus `maxTouchPoints`) is still a
+  tablet.
+- Ordinary PCs, **Windows touch laptops**, and narrow desktop windows are desktop.
+  Touch alone never selects mobile.
+- Crossing 767px changes geometry only. Resizing or rotating never changes the mode.
+- A missing or invalid bootstrap fails closed to desktop. An old cached shell opened
+  offline is therefore desktop until the next online launch refreshes it.
+- Detection has limits: an Android tablet that requests the desktop site may lose the
+  Android token and be treated as desktop. It is not infallible.
+
+The layout (sidebar becomes a drawer) uses the same mode. The only remaining size
+breakpoint is the existing <=380px composer compression.
 
 What changes:
 
@@ -238,7 +248,7 @@ the module against a stub environment.
 
 - The layout depends on upstream CSS-module hashes existing. A rename only stops a rule
   from matching and leaves the stock layout (fail closed), but a renamed hook means the
-  phone layout is simply absent until this package is updated
+  mobile layout is simply absent until this package is updated
 - Notifications need a secure context. Over plain HTTP on a LAN address the browser will
   not offer a subscription
 - The service worker manages one scope. Another plugin registering a worker at `/` will

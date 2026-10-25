@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "dsh-mobile-maxxing",
-    "description": "PWA化、スマホ幅の操作感、通知（アプリ内バナーとWeb Push）、CJK表示の修正、セッションIDのコピーをまとめて提供します。"
+    "description": "PWA化、スマホ/タブレットの操作感、通知（アプリ内バナーとWeb Push）、CJK表示の修正、セッションIDのコピーをまとめて提供します。"
   }
 }

@@ -32,10 +32,7 @@ function cssTemplate(name) {
 }
 
 function cssBlocks() {
-	return [
-		cssTemplate("CSS"),
-		`${cssTemplate("CSS_DEVICE")}\n@media (max-width: 767px) {\n${cssTemplate("CSS_PHONE")}\n}`,
-	];
+	return [cssTemplate("CSS"), cssTemplate("CSS_DEVICE"), cssTemplate("CSS_PHONE")];
 }
 
 /** One entry per declaration block, with the chain of enclosing at-rules. */
@@ -61,15 +58,12 @@ function cssRules(css) {
 	return rules;
 }
 
-const inPhone = (rule) => rule.at.some((head) => /max-width:\s*767px/.test(head));
-
-test("the phone stylesheet is mechanically wrapped in the 767px query", () => {
-	const phone = cssRules(`@media (max-width: 767px) {\n${cssTemplate("CSS_PHONE")}\n}`);
-	const leaked = phone.filter((rule) => rule.head !== "@media (max-width: 767px)" && !inPhone(rule));
-	assert.deepEqual(leaked.map((rule) => rule.head), [], "a mobile rule escaped the phone wrapper");
-	// The source itself has no hand-written width query left: the wrapper and
-	// the two NARROW_QUERY definitions are the only places the width exists.
-	assert.equal((CLIENT.match(/@media \(max-width: 767px\)/g) ?? []).length, 0, "a literal width query was hand-written");
+test("the mobile stylesheet is a separate mode-scoped style node", () => {
+	const phone = cssTemplate("CSS_PHONE");
+	assert.doesNotMatch(phone, /@media \(max-width: 767px\)/, "the mobile sheet regained a width wrapper");
+	assert.equal((CLIENT.match(/@media \(max-width: 767px\)/g) ?? []).length, 0, "a literal width feature query was hand-written");
+	assert.match(CLIENT, /setAttribute\("data-rdsh-mux-style", "phone"\)/, "the mobile sheet is not a separate style node");
+	assert.match(CLIENT, /if \(phone\(\)\) \{[\s\S]{0,200}?phoneStyle = document\.createElement\("style"\)/, "the mobile sheet is not inserted by mode");
 });
 
 test("the device stylesheet only contains self-owned rules", () => {
@@ -80,15 +74,14 @@ test("the device stylesheet only contains self-owned rules", () => {
 	const upstream = cssRules(cssTemplate("CSS_DEVICE")).filter((rule) => !rule.at.some((head) => head.startsWith("@")));
 	const leaked = upstream.filter((rule) => !allowed.some((pattern) => pattern.test(rule.head)));
 	assert.deepEqual(leaked.map((rule) => rule.head), [], "a desktop stylesheet rule targets upstream layout");
-	// The session colour frame is phone-only now; #44 does not keep a desktop
-	// frame exception.
-	const frame = cssRules(cssBlocks()[1]).find((rule) => rule.head === "[data-rdsh-session-frame]");
-	assert.ok(frame, "the frame rule is missing");
-	assert.ok(inPhone(frame), "the session colour frame is still painted on a desktop");
+	// The session colour frame lives in the mobile sheet, which a desktop
+	// never receives.
+	const phone = cssTemplate("CSS_PHONE");
+	assert.match(phone, /\[data-rdsh-session-frame\]/, "the frame rule is missing from the mobile sheet");
 });
 
 test("#46 keeps the header in flow and lifts the panel's column", () => {
-	const phone = cssBlocks()[1];
+	const phone = cssTemplate("CSS_PHONE");
 	assert.equal(
 		/header\[data-rdsh-header\]\s*\{[^}]*display:\s*none/.test(phone),
 		false,
@@ -362,8 +355,9 @@ function stub(depth = 0) {
  * are about the boundary path itself: `syncWidth()` is what the media listener
  * calls.
  */
-function bootBoundary({ narrow = true, seed = {}, safeTop = 0 } = {}) {
+function bootBoundary({ mode = null, narrow = true, seed = {}, safeTop = 0 } = {}) {
 	const viewport = { narrow };
+	const deviceMode = mode ?? (narrow ? "mobile" : "desktop");
 	const document = makeDocument();
 	const disposers = [];
 	const frames = [];
@@ -431,7 +425,7 @@ function bootBoundary({ narrow = true, seed = {}, safeTop = 0 } = {}) {
 		Notification: stub(),
 		AudioContext: class AudioContext {},
 		screen: stub(),
-		innerWidth: 390,
+		innerWidth: narrow ? 390 : 1024,
 		innerHeight: 844,
 		devicePixelRatio: 3,
 		performance: { now: () => 0 },
@@ -442,6 +436,7 @@ function bootBoundary({ narrow = true, seed = {}, safeTop = 0 } = {}) {
 	for (const name of ["document", "matchMedia", "setTimeout", "clearTimeout", "setInterval", "clearInterval", "requestAnimationFrame", "location", "navigator", "localStorage", "screen", "performance", "innerWidth", "innerHeight", "addEventListener", "removeEventListener"]) {
 		sandbox.window[name] = sandbox[name];
 	}
+	sandbox.__RDSH_DEVICE_MODE__ = deviceMode;
 	vm.createContext(sandbox);
 	vm.runInContext(CLIENT, sandbox, { filename: "client.js" });
 	assert.ok(definition !== undefined, "the module registered itself");
@@ -476,6 +471,7 @@ function bootBoundary({ narrow = true, seed = {}, safeTop = 0 } = {}) {
 		document,
 		meta,
 		viewport,
+		deviceMode,
 		disposers,
 		theme,
 		html: document.documentElement,
@@ -535,14 +531,35 @@ const PHONE_SAMPLE = {
 	"[data-rdsh-hide-settings]": "html",
 };
 
-test("767→768 removes every owned hook, node and inline style", () => {
-	const booted = bootBoundary({ narrow: true, seed: { "dsh-mobile-maxxing:device-theme": "dark" } });
-	// A narrow boot installed the drawer and, on the first sync, the lock.
-	booted.setWidth(true);
-	assert.equal(booted.body.querySelectorAll(".rdsh-mux-fab").length, 1, "the phone drawer button was not created");
-	assert.match(booted.meta.getAttribute("content"), /maximum-scale=1/, "the phone viewport lock was not applied");
-	assert.equal(booted.html.getAttribute("data-rdsh-anim"), "outline", "the animation attribute was not written");
-	assert.equal(booted.body.hasAttribute("data-ds-dark-theme"), true, "the phone palette was not applied");
+test("a narrow desktop stays desktop: no mobile surface and no width entry", () => {
+	const booted = bootBoundary({ mode: "desktop", narrow: true, seed: { "dsh-mobile-maxxing:device-theme": "dark" } });
+	// A 390px PC gets no phone style, drawer, viewport lock, palette or safe area.
+	assert.equal(booted.body.querySelectorAll(".rdsh-mux-fab").length, 0, "a narrow desktop created the drawer button");
+	assert.equal(booted.document.head.querySelectorAll("[data-rdsh-mux-style=\"phone\"]").length, 0, "a narrow desktop got the mobile stylesheet");
+	assert.equal(booted.meta.getAttribute("content"), "width=device-width, initial-scale=1", "a narrow desktop touched the viewport");
+	assert.equal(booted.html.hasAttribute("data-rdsh-anim"), false, "a narrow desktop wrote the animation attribute");
+	assert.equal(booted.body.hasAttribute("data-ds-dark-theme"), false, "a narrow desktop got the mobile palette");
+	assert.equal(booted.api.phone(), false, "phone() is true on a desktop");
+	assert.equal(booted.api.state.narrow, true, "the geometry readout still sees 390px");
+
+	booted.setWidth(false);
+	assert.equal(booted.body.querySelectorAll(".rdsh-mux-fab").length, 0, "widening a desktop installed mobile chrome");
+	assert.equal(booted.document.head.querySelectorAll("[data-rdsh-mux-style=\"phone\"]").length, 0, "widening a desktop added the mobile stylesheet");
+	assert.equal(booted.api.state.narrow, false, "the geometry readout did not follow the width");
+	assert.deepEqual(booted.dispose(), [], "dispose threw");
+});
+
+test("mobile survives 1024↔390 and only dispose removes its surface", () => {
+	const booted = bootBoundary({ mode: "mobile", narrow: false, seed: { "dsh-mobile-maxxing:device-theme": "dark" } });
+	booted.flushFrames();
+	// A tablet at 1024px is mobile: drawer, sheet, lock and palette exist.
+	assert.equal(booted.body.querySelectorAll(".rdsh-mux-fab").length, 1, "a wide mobile boot did not create the drawer button");
+	assert.equal(booted.document.head.querySelectorAll("[data-rdsh-mux-style=\"phone\"]").length, 1, "a wide mobile boot did not get the mobile stylesheet");
+	assert.match(booted.meta.getAttribute("content"), /maximum-scale=1/, "a wide mobile boot did not lock zoom");
+	assert.equal(booted.html.getAttribute("data-rdsh-anim"), "outline", "a wide mobile boot did not set the animation");
+	assert.equal(booted.body.hasAttribute("data-ds-dark-theme"), true, "a wide mobile boot did not apply the palette");
+	assert.equal(booted.api.phone(), true, "phone() is false on mobile");
+	assert.equal(booted.api.state.narrow, false, "the geometry readout should see 1024px");
 
 	const seeded = [];
 	for (const [selector, tag] of Object.entries(PHONE_SAMPLE)) {
@@ -552,124 +569,88 @@ test("767→768 removes every owned hook, node and inline style", () => {
 		}
 		seeded.push([selector, seed(booted, tag, { [selector.slice(1, -1)]: "" })]);
 	}
-	const row = seeded.find(([selector]) => selector === "[data-rdsh-session-frame]")[1];
-	row.setAttribute("data-row-key", "session:s1");
-	row.style.setProperty("--rdsh-session-frame", "#ff6b6b");
-	const dock = seeded.find(([selector]) => selector === "[data-rdsh-queue-dock]")[1];
-	dock.style.marginBottom = "-7px";
-	const add = seed(booted, "button", { "aria-label": COPY.en["add.label"] });
-	const upstreamOnly = seed(booted, "button", { "aria-label": "Upstream control", title: "keep me" });
-	upstreamOnly.style.color = "red";
 
-	booted.setWidth(false);
-
-	assert.equal(booted.body.querySelectorAll(".rdsh-mux-fab").length, 0, "the drawer button survived the transition");
-	assert.equal(booted.body.querySelectorAll(".rdsh-mux-backdrop").length, 0, "the drawer backdrop survived the transition");
-	assert.equal(booted.html.hasAttribute("data-rdsh-anim"), false, "the animation attribute survived");
-	assert.equal(booted.html.hasAttribute("data-rdsh-hide-settings"), false, "the hide-settings attribute survived");
-	assert.equal(booted.html.hasAttribute("data-rdsh-drawer"), false, "the drawer state survived");
-	assert.equal(booted.body.hasAttribute("data-ds-dark-theme"), false, "the phone palette survived");
-	assert.equal(booted.html.getAttribute("data-rdsh-device-theme"), null, "the device-theme attribute survived");
-	assert.equal(booted.meta.getAttribute("content"), "width=device-width, initial-scale=1", "the original viewport was not restored");
+	// Crossing 767px is geometry only: every mobile hook and style survives.
+	booted.setWidth(true);
+	assert.equal(booted.api.state.narrow, true, "the geometry readout did not follow the width");
+	assert.equal(booted.body.querySelectorAll(".rdsh-mux-fab").length, 1, "narrowing mobile removed the drawer");
+	assert.equal(booted.document.head.querySelectorAll("[data-rdsh-mux-style=\"phone\"]").length, 1, "narrowing mobile removed the mobile stylesheet");
+	assert.match(booted.meta.getAttribute("content"), /maximum-scale=1/, "narrowing mobile released the zoom lock");
 	for (const [selector, node] of seeded) {
-		const attribute = selector.slice(1, -1);
-		assert.equal(
-			node.hasAttribute(attribute) && node.isConnected,
-			false,
-			`${attribute} survived the transition`,
-		);
+		assert.equal(node.hasAttribute(selector.slice(1, -1)), true, `${selector} was removed by a width crossing`);
 	}
-	assert.equal(row.style.getPropertyValue("--rdsh-session-frame"), "", "the row frame colour survived");
-	assert.equal(dock.style.marginBottom, "", "the queue dock inline margin survived");
-	assert.equal(add.getAttribute("aria-label"), COPY.en["add.stock"], "the + label was not restored");
-	// Nothing upstream-owned is removed: title/aria/style on an untouched node.
-	assert.equal(upstreamOnly.getAttribute("title"), "keep me", "an upstream title was removed");
-	assert.equal(upstreamOnly.style.color, "red", "an upstream inline style was removed");
-	assert.equal(booted.body.querySelectorAll("[data-rdsh-typing-layer]").length, 0, "the typing overlay survived");
-	assert.equal(booted.body.querySelectorAll("[data-rdsh-crop-button]").length, 0, "the crop button survived");
-	assert.equal(booted.body.querySelectorAll("[data-rdsh-activity-icon]").length, 0, "the activity icon survived");
-	assert.deepEqual(booted.dispose(), [], "dispose threw");
-});
-
-test("768→767 re-installs the phone surface, and dispose restores desktop", () => {
-	const booted = bootBoundary({ narrow: false, seed: { "dsh-mobile-maxxing:device-theme": "dark" } });
-	// A wide boot injects nothing and leaves the viewport alone.
-	assert.equal(booted.body.querySelectorAll(".rdsh-mux-fab").length, 0, "a wide boot created the drawer button");
-	assert.equal(booted.meta.getAttribute("content"), "width=device-width, initial-scale=1", "a wide boot touched the viewport");
-	assert.equal(booted.html.getAttribute("data-rdsh-anim"), null, "a wide boot wrote the animation attribute");
-
-	booted.setWidth(true);
-	assert.equal(booted.body.querySelectorAll(".rdsh-mux-fab").length, 1, "entering the phone width did not create the drawer");
-	assert.match(booted.meta.getAttribute("content"), /user-scalable=no/, "entering the phone width did not lock zoom");
-	assert.equal(booted.html.getAttribute("data-rdsh-anim"), "outline", "entering the phone width did not set the animation");
-	assert.equal(booted.body.hasAttribute("data-ds-dark-theme"), true, "entering the phone width did not apply the palette");
-
 	booted.setWidth(false);
-	assert.equal(booted.meta.getAttribute("content"), "width=device-width, initial-scale=1", "the round trip lost the original viewport");
+	for (const [selector, node] of seeded) {
+		assert.equal(node.hasAttribute(selector.slice(1, -1)), true, `${selector} was removed by widening back`);
+	}
 
-	booted.setWidth(true);
 	assert.deepEqual(booted.dispose(), [], "dispose threw");
 	assert.equal(booted.body.querySelectorAll(".rdsh-mux-fab").length, 0, "dispose left the drawer button behind");
-	assert.equal(booted.body.querySelectorAll(".rdsh-mux-backdrop").length, 0, "dispose left the backdrop behind");
-	assert.equal(booted.meta.getAttribute("content"), "width=device-width, initial-scale=1", "dispose left the phone viewport");
+	assert.equal(booted.document.head.querySelectorAll("[data-rdsh-mux-style=\"phone\"]").length, 0, "dispose left the mobile stylesheet behind");
+	assert.equal(booted.meta.getAttribute("content"), "width=device-width, initial-scale=1", "dispose left the mobile viewport");
 	assert.equal(booted.html.hasAttribute("data-rdsh-anim"), false, "dispose left the animation attribute");
 	assert.equal(booted.html.hasAttribute("data-rdsh-drawer"), false, "dispose left the drawer state");
+	assert.equal(booted.body.hasAttribute("data-ds-dark-theme"), false, "dispose left the mobile palette");
+	for (const [selector, node] of seeded) {
+		assert.equal(node.isConnected && node.hasAttribute(selector.slice(1, -1)), false, `${selector} survived dispose`);
+	}
 });
 
-test("the viewport meta this module created is removed, not rewritten", () => {
-	const booted = bootBoundary({ narrow: true });
+test("a mobile viewport meta this module created is removed on dispose", () => {
+	const booted = bootBoundary({ mode: "mobile", narrow: true });
 	booted.meta.remove();
 	booted.setWidth(true);
+	booted.flushFrames();
 	const created = booted.document.head.querySelectorAll('meta[name="viewport"]');
 	assert.equal(created.length, 1, "no viewport meta was created");
 	assert.match(created[0].getAttribute("content"), /maximum-scale=1/);
-	booted.setWidth(false);
-	assert.equal(booted.document.head.querySelectorAll('meta[name="viewport"]').length, 0, "the owned viewport meta survived");
+	booted.dispose();
+	assert.equal(booted.document.head.querySelectorAll('meta[name="viewport"]').length, 0, "the owned viewport meta survived dispose");
 });
 
-test("a viewport with no content attribute gets that absence back", () => {
+test("a mobile viewport with no content attribute gets that absence back", () => {
 	// The baseline can be "no content attribute", which is not the string "".
-	// Restoring it must remove the attribute, not leave the phone lock behind.
-	const booted = bootBoundary({ narrow: true });
+	const booted = bootBoundary({ mode: "mobile", narrow: true });
 	booted.meta.removeAttribute("content");
 	booted.setWidth(true);
-	assert.match(booted.meta.getAttribute("content"), /maximum-scale=1/, "the phone lock was not applied");
-	booted.setWidth(false);
-	assert.equal(booted.meta.hasAttribute("content"), false, "the phone lock content survived as an attribute");
+	booted.flushFrames();
+	assert.match(booted.meta.getAttribute("content"), /maximum-scale=1/, "the mobile lock was not applied");
+	booted.dispose();
+	assert.equal(booted.meta.hasAttribute("content"), false, "the mobile lock content survived as an attribute");
 });
 
-test("safe-area root padding and style are phone-only", () => {
-	// env() is non-zero on a wide iPad in standalone mode, so #44 cannot leave
-	// the safe-area root rules or the measured style on a desktop.
-	const booted = bootBoundary({ narrow: true, safeTop: 47 });
-	booted.setWidth(true);
-	assert.equal(booted.html.hasAttribute("data-rdsh-safe-top"), true, "the phone inset attribute was not written");
-	assert.equal(booted.html.style.getPropertyValue("--rdsh-safe-top"), "47px", "the phone inset variable was not written");
-	booted.setWidth(false);
-	assert.equal(booted.html.hasAttribute("data-rdsh-safe-top"), false, "the safe-area attribute survived");
-	assert.equal(booted.html.style.getPropertyValue("--rdsh-safe-top"), "", "the safe-area variable survived");
-	assert.equal(booted.html.style.getPropertyValue("--rdsh-native-gap-px"), "", "the native-gap variable survived");
+test("safe-area root padding and style follow the device mode", () => {
+	const mobile = bootBoundary({ mode: "mobile", narrow: false, safeTop: 47 });
+	assert.equal(mobile.html.hasAttribute("data-rdsh-safe-top"), true, "a wide mobile device did not write the inset attribute");
+	assert.equal(mobile.html.style.getPropertyValue("--rdsh-safe-top"), "47px", "a wide mobile device did not write the inset variable");
+	mobile.setWidth(true);
+	assert.equal(mobile.html.hasAttribute("data-rdsh-safe-top"), true, "a rotation removed the inset");
+	mobile.dispose();
+	assert.equal(mobile.html.hasAttribute("data-rdsh-safe-top"), false, "the safe-area attribute survived dispose");
+	assert.equal(mobile.html.style.getPropertyValue("--rdsh-safe-top"), "", "the safe-area variable survived dispose");
+	assert.equal(mobile.html.style.getPropertyValue("--rdsh-native-gap-px"), "", "the native-gap variable survived dispose");
+
+	const desktop = bootBoundary({ mode: "desktop", narrow: true, safeTop: 47 });
+	assert.equal(desktop.html.hasAttribute("data-rdsh-safe-top"), false, "a narrow desktop wrote a safe-area inset");
+	assert.equal(desktop.html.style.getPropertyValue("--rdsh-safe-top"), "", "a narrow desktop wrote a safe-area variable");
+	desktop.dispose();
 });
 
-test("a queued frame cannot resurrect the phone surface after dispose", () => {
-	// A decorate/theme pass can leave an animation frame queued. Disposing in
-	// between must invalidate that frame: otherwise it re-locks the viewport,
-	// re-applies the per-device palette and re-adds the drawer after the
-	// cleanup contract already ran.
-	const booted = bootBoundary({ narrow: true, seed: { "dsh-mobile-maxxing:device-theme": "dark" } });
+test("a queued frame cannot resurrect the mobile surface after dispose", () => {
+	const booted = bootBoundary({ mode: "mobile", narrow: true, seed: { "dsh-mobile-maxxing:device-theme": "dark" } });
 	booted.setWidth(true);
+	booted.flushFrames();
 	assert.equal(booted.body.querySelectorAll(".rdsh-mux-fab").length, 1, "the drawer was not installed");
-	assert.match(booted.meta.getAttribute("content"), /maximum-scale=1/, "the phone lock was not applied");
-	assert.equal(booted.body.hasAttribute("data-ds-dark-theme"), true, "the phone palette was not applied");
+	assert.match(booted.meta.getAttribute("content"), /maximum-scale=1/, "the mobile lock was not applied");
+	assert.equal(booted.body.hasAttribute("data-ds-dark-theme"), true, "the mobile palette was not applied");
 
 	assert.deepEqual(booted.dispose(), [], "dispose threw");
 	assert.equal(booted.meta.getAttribute("content"), "width=device-width, initial-scale=1", "dispose did not restore the viewport");
 	assert.equal(booted.body.hasAttribute("data-ds-dark-theme"), false, "dispose did not release the palette");
 
-	// The frames queued by boot/decorate/theme are now stale. They must be no-ops.
 	booted.flushFrames();
 	assert.equal(booted.meta.getAttribute("content"), "width=device-width, initial-scale=1", "a stale frame re-locked the viewport");
-	assert.equal(booted.body.hasAttribute("data-ds-dark-theme"), false, "a stale frame re-applied the phone palette");
+	assert.equal(booted.body.hasAttribute("data-ds-dark-theme"), false, "a stale frame re-applied the mobile palette");
 	assert.equal(booted.html.getAttribute("data-rdsh-device-theme"), null, "a stale frame re-added the device-theme attribute");
 	assert.equal(booted.html.hasAttribute("data-rdsh-anim"), false, "a stale frame re-added the animation attribute");
 	assert.equal(booted.html.hasAttribute("data-rdsh-drawer"), false, "a stale frame re-added the drawer state");

@@ -209,9 +209,8 @@ async function checkRuntime() {
 	check("offline state is visible", typeof offline.pill === "string" && offline.pill.length > 0, offline);
 	await cdp.send("Network.emulateNetworkConditions", { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
 
-	// The legacy contract is the width alone: 683px (<=767) is the phone
-	// layout even with a fine pointer, so it does hide phone-only controls;
-	// 1440px stays stock. This is the contract the unified build restored.
+	// Device mode, not width: a desktop window stays PC at 683px and 1440px.
+	// The mode comes from the host bootstrap; width only drives geometry.
 	for (const width of [683, 1440]) {
 		await cdp.send("Emulation.setDeviceMetricsOverride", { width, height: 900, deviceScaleFactor: 1, mobile: false });
 		await cdp.send("Page.reload");
@@ -219,15 +218,14 @@ async function checkRuntime() {
 		const view = await cdp.eval(`(() => ({
 			width: window.innerWidth,
 			narrow: matchMedia('(max-width: 767px)').matches,
+			mode: document.documentElement.getAttribute('data-rdsh-device-mode'),
 			phone: globalThis.__RDSH_MOBILE_UX__ ? globalThis.__RDSH_MOBILE_UX__.phone() : null,
 			hideSettings: document.documentElement.hasAttribute('data-rdsh-hide-settings'),
 			hidden: document.querySelectorAll('[data-rdsh-hidden], [data-rdsh-setting-hidden]').length,
 		}))()`);
-		const expected = width <= 767
-			? view.narrow === true && view.phone === true && view.hideSettings === true
-			: view.narrow === false && view.phone === false && view.hideSettings === false && view.hidden === 0;
+		const expected = view.mode === "desktop" && view.phone === false && view.hideSettings === false && view.hidden === 0;
 		check(
-			`a ${width}x900 window follows the width contract`,
+			`a ${width}x900 desktop window stays PC`,
 			expected,
 			view,
 		);

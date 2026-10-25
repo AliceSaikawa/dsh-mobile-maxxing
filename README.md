@@ -25,7 +25,7 @@ dsh plugin --profile web add https://github.com/kuraneko1/dsh-mobile-maxxing
 | インストール可能な PWA | ホーム画面に追加、オフライン起動、更新のお知らせ |
 | 通知 | アプリを見ている間はアプリ内バナー、それ以外は Web Push |
 | 通知音 | 合成した5種類。音量も設定可。音声ファイルは同梱しません |
-| スマホ幅のレイアウト | サイドバーがドロワーに、設定は1タップ、コードは折り返し |
+| スマホ/タブレットのレイアウト | サイドバーがドロワーに、設定は1タップ、コードは折り返し。幅ではなく端末で判定 |
 | CJK 表示の修正 | `**https://x**（メモ）` の太字とリンクが壊れない |
 | セッションIDのコピー | セッションメニューに1行追加 |
 
@@ -72,8 +72,8 @@ README の URL は `node scripts/pack-all.mjs` が `package.json` の版に合�
 
 # English
 
-One integrated plugin that makes the DSH (DeepSeek Harness) Web UI pleasant on a phone:
-installable PWA, notifications, phone-width layout, a CJK rendering fix and a session-id copy
+One integrated plugin that makes the DSH (DeepSeek Harness) Web UI pleasant on phones and tablets:
+installable PWA, notifications, a phone/tablet layout chosen by device mode, a CJK rendering fix and a session-id copy
 row. **It installs on a stock DSH** — no other `rdsh-*` plugin and no external npm package.
 
 ## Install
@@ -95,7 +95,7 @@ push library are needed.
 | Installable PWA | Add to home screen, offline launch, update notice |
 | Notifications | In-app banner while the app is on screen, Web Push otherwise |
 | Notification sounds | Five synthesised presets with a volume control; no audio files ship |
-| Phone layout | Sidebar becomes a drawer, settings open in one tap, code wraps |
+| Mobile layout | Sidebar becomes a drawer, settings open in one tap, code wraps |
 | CJK rendering | `**https://x**（memo）` keeps its bold and its link |
 | Session id copy | One row in the session row menu |
 

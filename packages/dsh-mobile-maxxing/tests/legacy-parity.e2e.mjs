@@ -359,6 +359,7 @@ async function state(page) {
 			width: innerWidth,
 			height: innerHeight,
 			narrow: matchMedia("(max-width: 767px)").matches,
+			mode: html.getAttribute("data-rdsh-device-mode"),
 			coarse: matchMedia("(pointer: coarse)").matches,
 			anyCoarse: matchMedia("(any-pointer: coarse)").matches,
 			standalone: html.getAttribute("data-dsh-mobile-maxxing"),
@@ -1009,7 +1010,8 @@ async function deviceProfile(page, report, device) {
 	report.observe(`device ${device.id}: applied hidden controls`, appliedLabels, hidden);
 	report.observe(`device ${device.id}: hide-settings attribute`, hidden.html === true);
 	report.observe(`device ${device.id}: narrow state`, before.diagnosticsState?.narrow ?? before.narrow);
-	report.observe(`device ${device.id}: effective phone`, before.phone ?? before.diagnosticsState?.narrow ?? before.narrow);
+	report.observe(`device ${device.id}: device mode`, before.mode ?? before.diagnosticsState?.mode ?? null);
+	report.observe(`device ${device.id}: effective mobile`, before.phone ?? before.diagnosticsState?.phone ?? false);
 	report.observe(`device ${device.id}: initial drawer`, before.drawer);
 	report.observe(`device ${device.id}: initial panel`, before.panelOpen);
 	if (device.swipes) {

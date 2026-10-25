@@ -4,7 +4,7 @@ window.__ModuleLoader__.load({
     // dsh-mobile-maxxing — browser half.
     //
     // One module carries three behaviours that used to be separate plugins:
-    // the PWA shell, the phone-width layout, and the session-id copy row.
+    // the PWA shell, the mobile-device UX, and the session-id copy row.
     // They ship together because the client module system maps one package to
     // one browser module: a package cannot register several.
     //
@@ -102,6 +102,42 @@ window.__ModuleLoader__.load({
     }
 
     // ---------------------------------------------------------------------
+    // Device mode: the host bootstrap decides it once, this bundle consumes it.
+    //
+    // The canonical contract is `globalThis.__RDSH_DEVICE_MODE__` (a string)
+    // plus `html[data-rdsh-device-mode]`. The host's single classifier writes
+    // both before this module runs. This half never re-classifies from UA,
+    // width, pointer or touch points: a missing or invalid value means desktop
+    // (fail closed), and a resize never changes the mode.
+    const NARROW_QUERY = "(max-width: 767px)";
+
+    function readDeviceMode() {
+      try {
+        const injected = globalThis.__RDSH_DEVICE_MODE__;
+        if (typeof injected === "string" && (injected === "mobile" || injected === "desktop")) return injected;
+        const attr = document !== null && document !== undefined && document.documentElement !== null && document.documentElement !== undefined
+          ? document.documentElement.getAttribute("data-rdsh-device-mode")
+          : null;
+        if (attr === "mobile" || attr === "desktop") return attr;
+      } catch (error) {
+        /* a broken bootstrap is the same as an absent one */
+      }
+      return "desktop";
+    }
+
+    const DEVICE_MODE = readDeviceMode();
+
+    // Keep the DOM marker in step with the value this bundle will use. This is
+    // propagation of the host decision, not a second classifier.
+    try {
+      if (document !== null && document !== undefined && document.documentElement !== null && document.documentElement !== undefined) {
+        document.documentElement.setAttribute("data-rdsh-device-mode", DEVICE_MODE);
+      }
+    } catch (error) {
+      /* a document without documentElement only affects the CSS hook */
+    }
+
+    // ---------------------------------------------------------------------
     // dsh-mobile-maxxing — PWA shell: manifest, service worker, install prompt, notification transport.
     // ---------------------------------------------------------------------
     function pwaPart() {
@@ -130,13 +166,6 @@ window.__ModuleLoader__.load({
     const ROOT_ATTR = "data-dsh-mobile-maxxing";
     const UPDATE_POLL_MS = 30 * 60 * 1000;
     const UPDATE_MIN_GAP_MS = 5 * 60 * 1000;
-    // Phone layout, in one place for both halves of this file.
-    //
-    // The legacy contract is width-only: every window at or below 767px gets
-    // the phone layout, mounted app or not, mouse or finger. A landscape phone
-    // wider than that stays in the desktop layout, exactly as the reference
-    // build does.
-    const NARROW_QUERY = "(max-width: 767px)";
     const INSTALL_PROMPT_KEY = "dsh-mobile-maxxing:install-prompt-dismissed";
     const INSTALL_PROMPT_SNOOZE_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -171,14 +200,13 @@ html[data-dsh-mobile-maxxing="standalone"] { overscroll-behavior-y: none; }
 html[data-dsh-mobile-maxxing="standalone"] body { overscroll-behavior-y: contain; }
 html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: calc(env(safe-area-inset-top, 0px) + 10px); }
 
-/* Phones: keep the toast column clear of the 64px sidebar header, and hang the
-   install card on the right so the logo (session list) stays tappable. */
-@media ${NARROW_QUERY} {
-  .dsh-mobile-maxxing-toasts { top: calc(env(safe-area-inset-top, 0px) + 8px); padding-top: 56px; }
-  .dsh-mobile-maxxing-install { align-self: flex-end; max-width: min(330px, calc(100vw - 24px)); flex-wrap: wrap; row-gap: 8px; }
-  .dsh-mobile-maxxing-install .dsh-mobile-maxxing-card-text { flex: 1 1 100%; }
-  .dsh-mobile-maxxing-install-actions { display: flex; gap: 8px; margin-left: auto; align-items: center; }
-}
+/* Mobile devices: keep the toast column clear of the 64px sidebar header, and
+   hang the install card on the right so the logo (session list) stays tappable.
+   This is a device-mode rule, not a width rule: a tablet at 1024px keeps it. */
+html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-toasts { top: calc(env(safe-area-inset-top, 0px) + 8px); padding-top: 56px; }
+html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install { align-self: flex-end; max-width: min(330px, calc(100vw - 24px)); flex-wrap: wrap; row-gap: 8px; }
+html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install .dsh-mobile-maxxing-card-text { flex: 1 1 100%; }
+html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { display: flex; gap: 8px; margin-left: auto; align-items: center; }
 
 .dsh-mobile-maxxing-toasts {
   position: fixed; top: 10px; left: 50%; transform: translateX(-50%);
@@ -272,7 +300,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       build: "",
       cache: "",
       ios: isIos(),
-      narrow: typeof window.matchMedia === "function" ? window.matchMedia(NARROW_QUERY).matches : false,
+      mode: DEVICE_MODE,
       secure: typeof window.isSecureContext === "boolean" ? window.isSecureContext : false,
       installing: false,
       installDismissed: false,
@@ -589,7 +617,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     /** The release banner: whether a compact install affordance belongs on screen. */
     function showInstallPrompt() {
       if (state.standalone || state.installDismissed) return false;
-      if (!state.narrow) return false;
+      if (state.mode !== "mobile") return false;
       if (!state.installable && !state.ios) return false;
       if (!onWelcomeScreen()) return false;
       return !installPromptSnoozed();
@@ -830,9 +858,6 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
 
         const modeQueries = [STANDALONE_QUERY, FULLSCREEN_QUERY, MINIMAL_QUERY].map((query) => window.matchMedia(query));
         for (const media of modeQueries) media.addEventListener("change", applyMode);
-        const narrowMedia = window.matchMedia(NARROW_QUERY);
-        const onNarrow = () => emit({ narrow: narrowMedia.matches });
-        narrowMedia.addEventListener("change", onNarrow);
 
         const onOnline = () => {
           emit({ offline: false });
@@ -902,7 +927,6 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
           renderedSignature = "";
           emit({ installDismissed: false });
           for (const media of modeQueries) media.removeEventListener("change", applyMode);
-          narrowMedia.removeEventListener("change", onNarrow);
           window.removeEventListener("online", onOnline);
           window.removeEventListener("offline", onOffline);
           window.removeEventListener("beforeinstallprompt", onBeforeInstall);
@@ -988,9 +1012,9 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     const useState = React.useState;
     const useEffect = React.useEffect;
 
-    // The same width-only query as the PWA part. Both halves must agree or
-    // the shell and the layout disagree on where the phone begins.
-    const NARROW_QUERY = "(max-width: 767px)";
+    // ---------------------------------------------------------------------
+    // rdsh-mobile-ux — device-mode UX: drawer, settings, composer, in-app banners.
+    // ---------------------------------------------------------------------
     const HIDE_OVERRIDE_KEY = "rdsh-mobile-ux:hide-disabled";
     const HIDE_EXTRA_KEY = "rdsh-mobile-ux:hide-extra";
     const NOTIFY_DEVICE_TURNS_KEY = "rdsh-mobile-ux:notify-device-turns";
@@ -1016,13 +1040,12 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     const CONTEXT_PROBE = probeRegex("context", "i", "context");
 
     /**
-     * Controls that have no meaning inside an installed app on a phone.
+     * Controls that have no meaning inside an installed app on a mobile device.
      *
-     * This is the reference list, restored. It is applied only at phone width
-     * (<= 767px), so a wide desktop keeps every entry and a narrow window gets
-     * the same shell the legacy plugin produced. "Open configuration file" is
-     * an addition from the merged build: the host-side action also dead-ends
-     * in a phone browser.
+     * This is the reference list, restored. It is applied only when the host
+     * bootstrap selected mobile mode, so a desktop keeps every entry even in a
+     * narrow window. "Open configuration file" is an addition from the merged
+     * build: the host-side action also dead-ends in a mobile browser.
      */
     const HIDE_DEFAULT = [
       "Open configuration file",
@@ -1059,9 +1082,13 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     };
 
     const state = {
+      // Window geometry only: the Settings card reports it and responsive CSS
+      // uses it. It never selects the device mode.
       narrow: window.matchMedia(NARROW_QUERY).matches,
-      // The phone layout predicate (see `phone()`), kept in the store so the
-      // settings UI can decide which cards and rows apply.
+      // The device mode the host bootstrap fixed for this page (and the same
+      // value `phone()` returns), kept in the store so Settings can decide
+      // which cards and rows apply.
+      mode: DEVICE_MODE,
       phone: phone(),
       drawerOpen: false,
       hidden: [],
@@ -1102,16 +1129,17 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
 
     /**
-     * Is this device running the phone UI?
+     * Is this device running the mobile UI?
      *
-     * The legacy contract is the window width alone: at 767px or below, a
-     * mouse, a hardware keyboard, an installed app and a narrow desktop
-     * window all get the same layout, Enter handling, attachment hijack,
-     * settings tab merge and push ownership. A wide window stays stock even
-     * when its pointer is coarse; pointer kind does not widen the phone UI.
+     * This is the one value the host bootstrap fixed before the bundle ran:
+     * phones and tablets (including iPad's desktop-like UA) are `mobile`;
+     * ordinary PCs, Windows touch laptops and narrow desktop windows are
+     * `desktop`. Width, pointer kind, touch points and an installed-app
+     * display mode never change it. If the bootstrap is missing or invalid,
+     * the module already failed closed to desktop.
      */
     function phone() {
-      return narrow();
+      return DEVICE_MODE === "mobile";
     }
 
     function readEnterToSend() {
@@ -1263,12 +1291,12 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
 
     /**
-     * Paint the stored per-device choice over the shared theme, at phone width.
+     * Paint the stored per-device choice over the shared theme, in mobile mode.
      *
      * Called at boot, after every `theme/change` (one microtask later, so the
-     * upstream presenter has already written), on a narrow/wide transition and
-     * when the UI changes the value. A wide window releases the override: #44
-     * keeps upstream's palette there. The result is checked on the next frame:
+     * upstream presenter has already written) and when the UI changes the
+     * value. A desktop releases the override: #44 keeps upstream's palette
+     * there. The result is checked on the next frame:
      * if the palette attribute was reverted or the body colour did not move,
      * the contract is not there and the override is abandoned for good.
      */
@@ -1277,7 +1305,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       // #44: the per-device palette is part of the phone surface. A wide
       // window paints upstream's palette from the shared setting, so a phone
       // choice made in this browser cannot change a desktop screenshot.
-      if (!narrow()) {
+      if (!phone()) {
         releaseDeviceTheme();
         return;
       }
@@ -1471,7 +1499,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
 
     function measureSafeArea() {
-      if (!narrow()) {
+      if (!phone()) {
         releaseSafeArea();
         return;
       }
@@ -1644,7 +1672,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       const hidden = new Set();
       // The legacy hide list is a width rule, not a device rule: a narrow
       // window gets it even with a mouse. A wide desktop keeps every control.
-      const hideOnThisDevice = !disabled && narrow();
+      const hideOnThisDevice = !disabled && phone();
       for (const element of document.querySelectorAll("button[aria-label], [role='menuitem']")) {
         const label = labelOf(element);
         if (label === "" || label.length > 48) continue;
@@ -1658,7 +1686,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       const modal = document.querySelector('[data-shortcut-modal="settings"]');
       // The tab merge is the phone layout: `MobileSection` inlines the PWA and
       // Input sections there, so the separate tabs vanish with them.
-      if (modal !== null && narrow()) {
+      if (modal !== null && phone()) {
         for (const button of modal.querySelectorAll("nav button")) {
           const label = (button.textContent || "").trim();
           const merged = label === t("tab.pwa") || label === t("tab.input");
@@ -1780,7 +1808,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       // #44: every session-row hook, including the colour frame, dresses the
       // phone sidebar. A wide window keeps upstream's rows untouched; the
       // frame rule itself lives in the phone stylesheet.
-      if (!narrow()) {
+      if (!phone()) {
         if (rowHooksActive) clearSessionRowHooks();
         return;
       }
@@ -2013,7 +2041,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       }
       // The tighter edit summary is a phone layout rule; the scan itself is
       // expensive, so a wide window only clears what a previous pass wrote.
-      if (!narrow()) return;
+      if (!phone()) return;
       for (const element of document.querySelectorAll("span, div")) {
         if (element.children.length !== 0) continue;
         if (!/^Edited \d+ files?$/.test((element.textContent || "").trim())) continue;
@@ -2129,7 +2157,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
 
     function ensureRightPanelFits() {
-      if (!narrow()) {
+      if (!phone()) {
         rightPanelFitPending = false;
         return;
       }
@@ -2154,7 +2182,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
      * keys off this attribute so a long line cannot be panned sideways.
      */
     function decorateCodePreview() {
-      if (!narrow()) {
+      if (!phone()) {
         clearOwnedAttribute("data-rdsh-code-pre");
         clearOwnedAttribute("data-rdsh-code-scroll");
         return;
@@ -2177,7 +2205,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       // #44: the panel hooks and the open marker are phone layout. A wide
       // window drops the observer and both attributes instead of keeping a
       // stale state that #46's stacking rule could apply to a desktop.
-      if (!narrow()) {
+      if (!phone()) {
         forgetRightPanel();
         return;
       }
@@ -2220,7 +2248,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
      * lives in the pointer handlers below and keys off the same attribute.
      */
     function decorateRightPanelTabs() {
-      if (!narrow()) {
+      if (!phone()) {
         clearOwnedAttribute("data-rdsh-rtab");
         return;
       }
@@ -2364,7 +2392,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
 
     function installSettingsNavArrows() {
-      if (!narrow()) {
+      if (!phone()) {
         clearSettingsNavArrows();
         return;
       }
@@ -2437,7 +2465,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       // `contextUsedMax` below opens the context panel to read its figures and
       // closes it again. The probe only hides itself on a phone, so on a wide
       // screen the panel would flash open on every decorate pass.
-      if (!narrow()) {
+      if (!phone()) {
         clearOwnedAttribute("data-rdsh-stat-text");
         return;
       }
@@ -2496,7 +2524,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
 
     function decorateModelSearch() {
-      if (!narrow()) {
+      if (!phone()) {
         clearModelSearch();
         return;
       }
@@ -2556,7 +2584,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
 
     function decorateTodoPanel() {
-      if (!narrow()) {
+      if (!phone()) {
         clearDetailPanelHooks();
         return;
       }
@@ -2583,7 +2611,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
 
     function decorateGoalBar() {
-      if (!narrow()) {
+      if (!phone()) {
         clearDetailPanelHooks();
         return;
       }
@@ -2759,7 +2787,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
      * carries the id.
      */
     function decorateHeaderTitle() {
-      if (!narrow()) {
+      if (!phone()) {
         clearOwnedAttribute("data-rdsh-header-title");
         clearOwnedAttribute("data-rdsh-header-running");
         return;
@@ -2789,7 +2817,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       const clear = () => {
         for (const wrapper of tagged) wrapper.removeAttribute("data-rdsh-route-heading");
       };
-      if (!narrow()) {
+      if (!phone()) {
         clear();
         return;
       }
@@ -2843,7 +2871,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
 
     function decorateSessionTitleTyping() {
-      if (!narrow()) {
+      if (!phone()) {
         clearTypingAnimations();
         return;
       }
@@ -2939,7 +2967,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
 
     function decorateToasts() {
-      if (!narrow()) {
+      if (!phone()) {
         clearToastHooks();
         return;
       }
@@ -3055,7 +3083,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
 
     function decorateQuestionCards() {
-      if (!narrow()) {
+      if (!phone()) {
         clearQuestionArrows();
         for (const attribute of ["data-rdsh-question-card", "data-rdsh-question-frame", "data-rdsh-question-tile"]) {
           clearOwnedAttribute(attribute);
@@ -3083,10 +3111,10 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
 
     /**
-     * The viewport the page shipped with, before the phone zoom lock.
+     * The viewport the page shipped with, before the mobile zoom lock.
      *
-     * #44: the lock is a phone affordance, so a wide window gets this exact
-     * value back. `owned` records a meta this module had to create (a host that
+     * #44: the lock is a mobile affordance, so a desktop keeps this exact
+     * value. `owned` records a meta this module had to create (a host that
      * shipped none); that one is removed instead of rewritten.
      */
     let viewportBaseline = null;
@@ -3107,16 +3135,16 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
 
     /**
-     * Pin the viewport exactly as the legacy plugin did, at phone width only.
+     * Pin the viewport exactly as the legacy plugin did, in mobile mode only.
      *
      * This is the shipped contract: no pinch zoom, edge-to-edge, and the
      * composer riding above the keyboard via the fixed string. The 16px form
      * fields (below, in the stylesheet) remain the zoom guard. A desktop is
      * upstream's: it keeps the host's `viewport-fit=cover` and its own zoom,
-     * and the value captured before the first lock is restored on 768px.
+     * and the value captured before the first lock is restored on dispose.
      */
     function enforceNoZoomViewport() {
-      if (!narrow()) {
+      if (!phone()) {
         releaseViewportLock();
         return;
       }
@@ -3153,7 +3181,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
 
     /** Header shell/subagent chips become icon-only live indicators. */
     function decorateHeaderActivityChips() {
-      if (!narrow()) {
+      if (!phone()) {
         clearActivityChips();
         return;
       }
@@ -3303,7 +3331,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
      * drops the tag, so the stock control and its tooltip come back.
      */
     function decorateSidebarToggle() {
-      if (!narrow()) {
+      if (!phone()) {
         for (const element of document.querySelectorAll("[data-rdsh-sidebar-toggle]")) {
           element.removeAttribute("data-rdsh-sidebar-toggle");
         }
@@ -3363,7 +3391,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
 
     function decorateComposer() {
-      if (!narrow()) {
+      if (!phone()) {
         clearComposerHooks();
         return;
       }
@@ -3377,8 +3405,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       }
       add.setAttribute("data-rdsh-add", "");
       // #17: the short "attach only" label and the picker hijack below are a
-      // phone affordance. `narrow()` is the width contract here, the same as
-      // `phone()`.
+      // mobile-device affordance, the same condition as `phone()`.
       if (add.getAttribute("aria-label") !== ADD_LABEL) add.setAttribute("aria-label", ADD_LABEL);
       const card = add.closest('[class*="_card"]');
       if (card === null || card.parentElement === null) {
@@ -3405,7 +3432,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
 
     function markScrollers() {
-      if (!narrow()) {
+      if (!phone()) {
         clearOwnedAttribute("data-rdsh-scroll");
         return;
       }
@@ -3517,7 +3544,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
      * transcript): keep it to about once a second.
      */
     function decorateTranscript() {
-      if (!narrow()) {
+      if (!phone()) {
         clearOwnedAttribute("data-rdsh-transcript");
         clearOwnedAttribute("data-rdsh-transcript-column");
         return;
@@ -3544,7 +3571,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
 
     function decorateUserBubbles() {
-      if (!narrow()) {
+      if (!phone()) {
         clearOwnedAttribute("data-rdsh-user-stack");
         clearOwnedAttribute("data-rdsh-user-bubble");
         return;
@@ -4063,7 +4090,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
 
     function decorateWorkspacePicker() {
-      if (!narrow()) {
+      if (!phone()) {
         clearWorkspacePicker();
         return;
       }
@@ -4161,7 +4188,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
 
     function decorateQueueDock() {
-      if (!narrow()) {
+      if (!phone()) {
         if (queuePreview !== null || queueMenu !== null) closeQueueUi();
         clearQueueDockHooks();
         return;
@@ -4207,7 +4234,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
 
     function onPointerDown(event) {
-      if (!narrow()) return;
+      if (!phone()) return;
       // xterm keeps its real input in a visually hidden textarea. Focusing it
       // from the tap/pointerdown gesture is what asks iOS for the keyboard.
       const queuePreviewTarget = event.target.closest && event.target.closest("[data-rdsh-queue-preview]");
@@ -4312,7 +4339,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
 
     /** Mobile long-press must only reorder; the app's dblclick rename is off. */
     function onSessionTitleDoubleClick(event) {
-      if (!narrow()) return;
+      if (!phone()) return;
       if (event.target.closest === undefined || event.target.closest("[data-rdsh-session-title]") === null) return;
       event.preventDefault();
       event.stopImmediatePropagation();
@@ -4320,7 +4347,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
 
     /** Suppress the iOS text callout/context menu on the session title. */
     function onSessionContextMenu(event) {
-      if (!narrow()) return;
+      if (!phone()) return;
       if (event.target.closest === undefined) return;
       if (event.target.closest("[data-rdsh-session-title], [data-rdsh-session]") === null) return;
       event.preventDefault();
@@ -4349,7 +4376,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     // While the preview is open the left-to-right gesture closes it instead.
     let edgeSwipe = null;
     function onEdgeSwipeStart(event) {
-      if (!narrow() || event.touches.length !== 1) return;
+      if (!phone() || event.touches.length !== 1) return;
       if (document.querySelector("[data-rdsh-lightbox], [data-rdsh-crop-overlay], [data-shortcut-modal=settings]") !== null) return;
       const touch = event.touches[0];
       const target = event.target;
@@ -4392,7 +4419,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       if (edgeSwipe === null || event.touches.length !== 1) return;
       // A rotation can end the phone layout in the middle of a gesture; the
       // stored start point then belongs to a layout that no longer exists.
-      if (!narrow()) {
+      if (!phone()) {
         edgeSwipe = null;
         return;
       }
@@ -4507,8 +4534,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
 
     function onKeyDownCapture(event) {
-      // The legacy phone default follows the same width contract as the
-      // layout: a narrow window (mouse or finger) gets Enter = newline. A wide
+      // Enter follows the device mode: mobile gets newline by default, a
       // desktop stays stock unless the #15 opt-in is on.
       const finger = phone();
       if (event.key !== "Enter" || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return;
@@ -4829,7 +4855,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       // new-session workspace chooser, then decorate it with search. The
       // search row is a phone affordance, so a wide window only opens the
       // stock menu.
-      if (narrow() && target.closest && target.closest('[aria-label="Choose workspace"]') !== null) {
+      if (phone() && target.closest && target.closest('[aria-label="Choose workspace"]') !== null) {
         const trigger = target.closest('[data-rdsh-workspace-trigger], [aria-label="Choose workspace"]');
         if (trigger !== null) trigger.setAttribute("data-rdsh-workspace-trigger", "");
         workspacePickerPending = true;
@@ -4851,7 +4877,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       }
       // xterm's helper textarea is the actual input; a click gesture focusing it
       // asks iOS to show the keyboard.
-      if (narrow()) {
+      if (phone()) {
         const terminal = target.closest(".xterm, [class*='xterm']");
         if (terminal !== null) {
           const input = terminal.querySelector("textarea.xterm-helper-textarea, textarea");
@@ -4878,14 +4904,14 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       // Todo rows and the goal objective are truncated in the dock; tapping
       // opens a read-only popover with the full text.
       const todoItem = target.closest("[data-rdsh-todo-item]");
-      if (todoItem !== null && narrow()) {
+      if (todoItem !== null && phone()) {
         event.preventDefault();
         event.stopImmediatePropagation();
         showDetailPopover(todoItem, t("mux.detail.todo"), todoItem.getAttribute("data-rdsh-todo-text"), todoItem.getAttribute("data-rdsh-todo-status"));
         return;
       }
       const goalObjective = target.closest("[data-rdsh-goal-objective]");
-      if (goalObjective !== null && narrow()) {
+      if (goalObjective !== null && phone()) {
         event.preventDefault();
         event.stopImmediatePropagation();
         const goalBar = goalObjective.closest("[data-goal-bar]");
@@ -4906,7 +4932,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       // workspace's "+") opens a blank session behind the drawer, so the drawer
       // closes just as it does for a tapped session row. Match by label, not
       // by hashed class; a session row never carries one of these buttons.
-      if (narrow() && isNewSessionButton(target)) {
+      if (phone() && isNewSessionButton(target)) {
         setTimeout(closeDrawer, 0);
         return;
       }
@@ -4915,13 +4941,13 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       // after the app has handled the click, so the route is not left under an
       // open drawer (and the FAB comes back). A desktop sidebar is never
       // touched: this branch is width-gated.
-      if (narrow() && isPanelRouteButton(target)) {
+      if (phone() && isPanelRouteButton(target)) {
         setTimeout(closeDrawer, 0);
         return;
       }
 
       const row = target.closest('[data-row-key^="session:"]');
-      if (row !== null && narrow()) {
+      if (row !== null && phone()) {
         // Only the release click is a target: the click this module sends to
         // the row's own "..." trigger starts inside its actions, and eating that
         // one left every long press after the first without a menu.
@@ -4941,7 +4967,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       if (target.closest('[data-shortcut-modal="settings"]') !== null) return;
 
       const crumbs = target.closest("[data-rdsh-crumbs]");
-      if (crumbs !== null && narrow()) {
+      if (crumbs !== null && phone()) {
         showTitlePopover(crumbs);
         return;
       }
@@ -4967,14 +4993,14 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
 
     function onFocusPointer(event) {
-      if (!narrow()) return;
+      if (!phone()) return;
       const field = textBoxOf(event.target);
       allowFocusElement = field;
       allowFocusUntil = field === null ? 0 : Date.now() + 1500;
     }
 
     function onModelFocusOut(event) {
-      if (!narrow()) return;
+      if (!phone()) return;
       const target = event.target;
       if (target === null || target === undefined || target.closest === undefined) return;
       const root = target.closest('[class*="_7KE1Ra_root"]');
@@ -4990,7 +5016,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
 
     function onFocusInGuard(event) {
-      if (!narrow()) return;
+      if (!phone()) return;
       const field = textBoxOf(event.target);
       if (field === null) return;
       // Popovers (the model picker's search, dialogs, etc.) focus their own
@@ -5056,7 +5082,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
         closeDetailPopover();
         return;
       }
-      if (!narrow() || (event.key !== "Enter" && event.key !== " ")) return;
+      if (!phone() || (event.key !== "Enter" && event.key !== " ")) return;
       const target = event.target;
       if (target === null || target === undefined || target.closest === undefined) return;
       const todoItem = target.closest("[data-rdsh-todo-item]");
@@ -5152,7 +5178,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
       // The frame is painted by the phone stylesheet, so the row that sets it
       // is a phone affordance too (#44). A wide desktop menu keeps upstream's
       // rows exactly as they were.
-      if (!narrow()) return null;
+      if (!phone()) return null;
       return h("button", {
         type: "button",
         role: "menuitem",
@@ -5563,7 +5589,7 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     function decorateLightbox() {
       // The crop button and the full-bleed styling are phone affordances: a
       // desktop viewer keeps its own chrome and its own close button.
-      if (!narrow()) {
+      if (!phone()) {
         clearLightboxHooks();
         return;
       }
@@ -6417,10 +6443,9 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
         // #15: the PWA and Input sections are registered as their own tabs.
         // Inlining them into "Mobile" as well duplicated every heading on a
         // desktop, where none of the three tabs are merged. Both halves of the
-        // merge must agree: `applyHideList` hides those tabs under the same
-        // `narrow() && phone()` condition.
-        s.narrow && onPhone ? h(InputSection) : null,
-        s.narrow && onPhone && typeof globalThis.__RDSH_PWA_SETTINGS_SECTION__ === "function"
+        // merge must agree: `applyHideList` hides those tabs under `phone()`.
+        onPhone ? h(InputSection) : null,
+        onPhone && typeof globalThis.__RDSH_PWA_SETTINGS_SECTION__ === "function"
           ? h(globalThis.__RDSH_PWA_SETTINGS_SECTION__)
           : null,
         s.bootError !== "" ? h("p", { className: "rdsh-mux-note" }, t("mux.bootError", { error: s.bootError })) : null,
@@ -6455,10 +6480,10 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     }
 
     function LiveSpeed({ sessionId }) {
-      // Re-render on media changes (boot emits `narrow`), so the label appears
-      // and disappears with the layout instead of polling on a desktop.
+      // The label belongs to the mobile surface, not to a window width: it
+      // appears whenever this device runs the mobile UI, at any viewport size.
       const store = useStore();
-      const phone = store.narrow;
+      const phone = store.phone;
       const [speed, setSpeed] = useState(null);
       useEffect(() => {
         currentSessionId = typeof sessionId === "string" && sessionId !== "" ? sessionId : null;
@@ -6503,20 +6528,19 @@ html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: cal
     // ---------------------------------------------------------------------
     // Styles
     //
-    // The layout stylesheet is split in two. The phone half is wrapped
-    // mechanically by `phoneStyles()`: no mobile selector is repeated inside
-    // an @media by hand, and a layout rule cannot be added outside the width
-    // query without failing the boundary test.
+    // The layout stylesheet is split in two. The mobile half is inserted as a
+    // separate <style> only when the bootstrapped mode is "mobile": no rule is
+    // enabled by a max-width wrapper, and a resize cannot add or remove it.
     //
-    //   CSS_DEVICE  the plugin's own chrome that has no width: the shared
-    //               toast (the frame palette uses it on a phone) and the
-    //               Settings cards.
-    //   CSS_PHONE   everything that reshapes upstream at <=767px: drawer,
-    //               right panel, composer, transcript, question cards, queue,
-    //               workspace picker, settings navigation, animations, the
-    //               session colour frame and the safe-area root padding.
+    //   CSS_DEVICE  the plugin's own chrome that is not device-specific: the
+    //               shared toast and the Settings cards.
+    //   CSS_PHONE   everything that reshapes upstream on a mobile device:
+    //               drawer, right panel, composer, transcript, question cards,
+    //               queue, workspace picker, settings navigation, animations,
+    //               the session colour frame and the safe-area root padding.
     //
-    // A mobile rule belongs in CSS_PHONE; the wrapper is the contract.
+    // A mobile rule belongs in CSS_PHONE; the mobile-mode style node is the
+    // contract.
     // ---------------------------------------------------------------------
     const CSS_DEVICE = `
 .rdsh-mux-toast {
@@ -7730,9 +7754,12 @@ html[data-rdsh-safe-bottom] #root { box-sizing: border-box; padding-bottom: env(
 html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !important; }
 `;
 
-    /** Wrap a stylesheet in the one-width phone query (the #44 boundary). */
-    const phoneStyles = (css) => `@media ${NARROW_QUERY} {\n${css}\n}`;
-    const CSS = `${CSS_DEVICE}\n${phoneStyles(CSS_PHONE)}`;
+    // The device half is always present. The mobile half is inserted as its
+    // own stylesheet only when the host bootstrap selected "mobile"; there is
+    // no width wrapper and a resize never adds or removes it. Sizing tweaks
+    // that genuinely need a breakpoint stay inside CSS_PHONE (the 380px
+    // composer rule is the only one today).
+    const CSS = CSS_DEVICE;
 
     // ---------------------------------------------------------------------
     // Wiring
@@ -7747,14 +7774,23 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
       ctx.effect(() => {
         live = true;
         const style = document.createElement("style");
-        style.setAttribute("data-rdsh-mux-style", "");
+        style.setAttribute("data-rdsh-mux-style", "device");
         style.textContent = CSS;
         document.head.append(style);
+        // The mobile surface is enabled by the bootstrapped mode, not by the
+        // viewport: a 1024px iPad gets this sheet, a 390px desktop does not.
+        let phoneStyle = null;
+        if (phone()) {
+          phoneStyle = document.createElement("style");
+          phoneStyle.setAttribute("data-rdsh-mux-style", "phone");
+          phoneStyle.textContent = CSS_PHONE;
+          document.head.append(phoneStyle);
+        }
 
-        // #44: the drawer nodes and the animation attribute are phone layout.
-        // A wide boot injects neither; a narrow one installs them and the
-        // badge count is applied as soon as the fab exists.
-        if (narrow()) {
+        // #44: the drawer nodes and the animation attribute belong to the
+        // mobile surface. A desktop boot injects neither; a mobile boot
+        // installs them once and a resize never tears them down.
+        if (phone()) {
           installDrawer();
           document.documentElement.setAttribute("data-rdsh-anim", ANIMATION);
         } else {
@@ -7801,7 +7837,11 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         // all.
         let rotationTimer = 0;
         let gestureWidth = window.innerWidth;
+        // Geometry/keyboard work belongs to the mobile surface. A desktop
+        // resize only updates the Settings width readout via the media query;
+        // it never measures insets, decorates or fits mobile chrome.
         const onLayoutResize = () => {
+          if (!phone()) return;
           // Do not close the attach sheet here: opening it blurs the composer,
           // and the resulting keyboard-close resize would remove it instantly.
           measureSafeArea();
@@ -7821,6 +7861,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         };
         const onOrientation = () => {
           gestureWidth = window.innerWidth;
+          if (!phone()) return;
           resetGestures();
           onLayoutResize();
         };
@@ -7843,26 +7884,19 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         document.addEventListener("keydown", onKeyDown);
         document.addEventListener("pointerdown", onFocusPointer, true);
         document.addEventListener("focusin", onFocusInGuard, true);
-        if (narrow()) {
+        if (phone()) {
           const initial = textBoxOf(document.activeElement);
           if (initial !== null) setTimeout(() => { if (document.activeElement === initial) initial.blur(); }, 0);
         }
         const media = window.matchMedia(NARROW_QUERY);
+        // Width is geometry only. Crossing 767px updates the readout and, on a
+        // mobile device, re-measures the new geometry; it never installs or
+        // tears down the mobile surface and never changes the mode.
         const applyWidthBoundary = () => {
-          const active = narrow();
-          emit({ narrow: active, phone: phone() });
+          emit({ narrow: narrow() });
+          if (!phone()) return;
           resetGestures();
-          if (active) {
-            installDrawer();
-            measureSafeArea();
-            if (document.documentElement.getAttribute("data-rdsh-anim") !== ANIMATION) {
-              document.documentElement.setAttribute("data-rdsh-anim", ANIMATION);
-            }
-            enforceNoZoomViewport();
-            applyDeviceTheme();
-          } else {
-            clearPhoneHooks();
-          }
+          measureSafeArea();
           scheduleDecorate();
         };
         const onMedia = () => {
@@ -7888,12 +7922,13 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           readViewportMetrics,
           autoSettings: true,
           decorate: scheduleDecorate,
-          // Re-runs the 767/768 boundary. The browser fires it from the media
-          // query; the unit tests call it after flipping a mutable matchMedia,
-          // so the round trip is exercised rather than only pattern-matched.
+          // Re-reads the window width for the Settings readout and re-measures
+          // mobile geometry. It cannot change the device mode.
           syncWidth: applyWidthBoundary,
-          // Diagnostics used by the unit tests: the layout predicate and the
-          // restored scroll hooks have to be observable without a browser.
+          // Diagnostics used by the unit tests: the bootstrapped mode, the
+          // layout predicate and the restored scroll hooks are observable
+          // without a browser.
+          get mode() { return DEVICE_MODE; },
           phone,
           markMobileSession,
           closeDrawer,
@@ -7950,6 +7985,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             }
             rightPanelFitPending = false;
             style.remove();
+            phoneStyle?.remove();
             rightPanelWatch?.disconnect();
             rightPanelIO?.disconnect();
             rightPanelWatch = null;

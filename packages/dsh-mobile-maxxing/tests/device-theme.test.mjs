@@ -109,7 +109,7 @@ function storage(seed = {}) {
  * Boot the module against the stub DOM.
  * @param {object} options - theme service (or null), initial storage, width.
  */
-function boot({ theme = null, seed = {}, narrow = true } = {}) {
+function boot({ theme = null, seed = {}, narrow = true, mode = null } = {}) {
 	let definition;
 	const listeners = new Map();
 	const body = element();
@@ -174,6 +174,7 @@ function boot({ theme = null, seed = {}, narrow = true } = {}) {
 		globalThis: undefined,
 	};
 	sandbox.globalThis = sandbox;
+	sandbox.__RDSH_DEVICE_MODE__ = mode ?? (narrow ? "mobile" : "desktop");
 	sandbox.window.document = sandbox.document;
 	sandbox.window.matchMedia = sandbox.matchMedia;
 	sandbox.window.setTimeout = sandbox.setTimeout;
@@ -272,13 +273,14 @@ test("a registered palette turns the override off instead of mixing tokens", () 
 	assert.equal(api.state.deviceThemeNote, "custom");
 });
 
-test("a wide window never applies the phone palette", () => {
-	// #44: a desktop keeps upstream's palette. The choice stays in storage for
-	// the next phone-width visit, but nothing is painted at 768px and up.
+test("a desktop never applies the mobile palette", () => {
+	// A desktop keeps upstream's palette. The choice stays in storage for a
+	// later mobile visit, but nothing is painted in desktop mode.
 	const snapshot = { preference: "light", active: { colorScheme: "light", tokens: {} } };
 	const { api, body, documentElement } = boot({
 		theme: { getTheme: () => snapshot },
 		seed: { "dsh-mobile-maxxing:device-theme": "dark" },
+		mode: "desktop",
 		narrow: false,
 	});
 	assert.equal(body.hasAttribute("data-ds-dark-theme"), false, "a desktop got the phone palette");

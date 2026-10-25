@@ -125,14 +125,17 @@ function memoryStorage(initial = {}) {
 /**
  * Evaluate the bundle in a stub browser and run the plugin's `apply`.
  *
- * `narrow` answers the phone-width media query, `coarse` and `standalone`
- * answer the device queries `phone()` asks, `storage` supplies remembered
+ * `mode` is the canonical host bootstrap value (`"mobile"` or `"desktop"`);
+ * `narrow` answers only the window-width media query. They are deliberately
+ * independent: pass `mode` explicitly when a test is about the device contract.
+ * `standalone` answers the display-mode query, `storage` supplies remembered
  * localStorage entries, `configureDocument` lets a test wire up the few DOM
  * nodes it cares about, and `schedule` replaces setTimeout.
  */
 function bootClient({
+	mode = null,
 	narrow = false,
-	coarse = false,
+	injectMode = true,
 	standalone = false,
 	storage = null,
 	configureDocument = () => {},
@@ -180,8 +183,7 @@ function bootClient({
 		matchMedia: (query) => ({
 			matches: Boolean(
 				(narrow && query.includes("max-width: 767px"))
-				|| (coarse && query === "(pointer: coarse)")
-				|| (standalone && query === "(any-pointer: coarse)"),
+				|| (standalone && query.includes("display-mode:")),
 			),
 			addEventListener() {},
 			removeEventListener() {},
@@ -227,7 +229,7 @@ function bootClient({
 		Notification: stub(),
 		AudioContext: class AudioContext {},
 		screen: stub(),
-		innerWidth: 390,
+		innerWidth: narrow ? 390 : 1024,
 		innerHeight: 844,
 		devicePixelRatio: 3,
 		performance: { now: () => 0 },
@@ -248,10 +250,14 @@ function bootClient({
 	sandbox.window.localStorage = sandbox.localStorage;
 	sandbox.window.screen = sandbox.screen;
 	sandbox.window.performance = sandbox.performance;
-	sandbox.window.innerWidth = 390;
+	sandbox.window.innerWidth = narrow ? 390 : 1024;
 	sandbox.window.innerHeight = 844;
 	if (lang !== undefined) sandbox.__RDSH_PWA_LANG__ = lang;
 	if (copy !== null) sandbox.__RDSH_PWA_COPY__ = copy;
+	// The canonical host bootstrap value. Null means "let the harness derive
+	// the legacy default"; contract tests pass it explicitly. `injectMode:
+	// false` models an old/absent bootstrap and must fail closed to desktop.
+	if (injectMode) sandbox.__RDSH_DEVICE_MODE__ = mode ?? (narrow ? "mobile" : "desktop");
 	vm.createContext(sandbox);
 
 	vm.runInContext(CLIENT, sandbox, { filename: "client.js" });
@@ -377,25 +383,47 @@ function phoneOf(options) {
 	return diagnostics.phone();
 }
 
-test("phone() is the legacy width rule, exactly", () => {
-	// The reference contract: <=767px is the phone UI. Pointer kind does not
-	// widen it, so a wide touch tablet and a wide mouse desktop both stay
-	// stock; a narrow window is phone UI with either pointer.
-	assert.equal(phoneOf({ narrow: false }), false, "a wide mouse window is not a phone");
-	assert.equal(phoneOf({ narrow: false, coarse: true }), false, "a wide coarse-pointer tablet is not a phone");
-	assert.equal(phoneOf({ narrow: false, standalone: true }), false, "an installed wide desktop app is not a phone");
-	assert.equal(phoneOf({ narrow: true }), true, "a narrow mouse window is phone UI");
-	assert.equal(phoneOf({ narrow: true, coarse: true }), true, "a narrow touch window is phone UI");
-	assert.equal(phoneOf({ narrow: true, standalone: true }), true, "a narrow installed app is phone UI");
+test("phone() is the bootstrapped device mode, not the width or pointer", () => {
+	// The host classifier fixes the mode before this bundle runs. A narrow
+	// desktop stays desktop; a wide tablet stays mobile.
+	assert.equal(phoneOf({ mode: "desktop", narrow: false }), false, "a desktop is not mobile");
+	assert.equal(phoneOf({ mode: "desktop", narrow: true }), false, "a narrow desktop window is still PC");
+	assert.equal(phoneOf({ mode: "mobile", narrow: true }), true, "a mobile phone is mobile");
+	assert.equal(phoneOf({ mode: "mobile", narrow: false }), true, "a mobile tablet at 1024px is still mobile");
+	assert.equal(phoneOf({ mode: "desktop", standalone: true, narrow: false }), false, "an installed desktop app is not mobile");
+	assert.equal(phoneOf({ mode: "mobile", standalone: true, narrow: false }), true, "an installed tablet is mobile");
+	assert.equal(phoneOf({ mode: "bogus", narrow: true }), false, "an invalid bootstrap fails closed to desktop");
 });
 
-test("the store reports the device separately from the layout", () => {
-	const { sandbox } = bootClient({ narrow: true });
-	const state = sandbox.__RDSH_MOBILE_UX__.state;
-	assert.equal(state.narrow, true, "the layout still measures width");
-	assert.equal(state.phone, true, "a narrow window is phone UI even with a mouse");
-	const wide = bootClient({ narrow: false }).sandbox.__RDSH_MOBILE_UX__.state;
-	assert.equal(wide.phone, false, "a wide mouse window is not phone UI");
+test("a missing bootstrap fails closed to desktop", () => {
+	const { sandbox } = bootClient({ injectMode: false, narrow: true });
+	assert.equal(sandbox.__RDSH_MOBILE_UX__.state.mode, "desktop", "an absent bootstrap did not fail closed");
+	assert.equal(sandbox.__RDSH_MOBILE_UX__.phone(), false, "an absent bootstrap enabled mobile UI");
+	assert.equal(sandbox.document.documentElement.getAttribute("data-rdsh-device-mode"), "desktop", "the DOM marker was not normalised to desktop");
+});
+
+test("PC 390px stays undecorated and a 1024px tablet stays mobile", () => {
+	const pc = bootClient({ mode: "desktop", narrow: true });
+	assert.equal(pc.sandbox.__RDSH_MOBILE_UX__.phone(), false, "a narrow PC became mobile");
+	assert.equal(pc.sandbox.document.documentElement.hasAttribute("data-rdsh-anim"), false, "a narrow PC got the mobile animation");
+	assert.equal(pc.sandbox.document.documentElement.hasAttribute("data-rdsh-drawer"), false, "a narrow PC got the drawer state");
+
+	const tablet = bootClient({ mode: "mobile", narrow: false });
+	assert.equal(tablet.sandbox.__RDSH_MOBILE_UX__.phone(), true, "a 1024px tablet lost mobile mode");
+	assert.equal(tablet.sandbox.document.documentElement.getAttribute("data-rdsh-anim"), "outline", "a tablet did not get the mobile surface");
+	assert.equal(tablet.sandbox.__RDSH_MOBILE_UX__.state.narrow, false, "the tablet geometry readout is wrong");
+});
+
+test("the store reports the mode separately from the layout", () => {
+	const mobileWide = bootClient({ mode: "mobile", narrow: false });
+	const state = mobileWide.sandbox.__RDSH_MOBILE_UX__.state;
+	assert.equal(state.mode, "mobile", "the bootstrapped mode is in the store");
+	assert.equal(state.narrow, false, "the layout still measures width");
+	assert.equal(state.phone, true, "a wide mobile device keeps the mobile UI");
+	const desktopNarrow = bootClient({ mode: "desktop", narrow: true }).sandbox.__RDSH_MOBILE_UX__.state;
+	assert.equal(desktopNarrow.mode, "desktop");
+	assert.equal(desktopNarrow.narrow, true, "a narrow desktop still reports the geometry");
+	assert.equal(desktopNarrow.phone, false, "a narrow desktop is not mobile UI");
 });
 
 test("the saved Enter-sends choice is read when the page loads", () => {
@@ -420,6 +448,7 @@ test("the legacy hide list applies at phone width even with a fine pointer", () 
 	const button = element();
 	button.setAttribute("aria-label", "More actions");
 	const booted = bootClient({
+		mode: "mobile",
 		narrow: true,
 		frames,
 		configureDocument(doc) {
@@ -428,12 +457,13 @@ test("the legacy hide list applies at phone width even with a fine pointer", () 
 		},
 	});
 	for (let index = 0; index < 10 && frames.length > 0; index += 1) frames.shift()();
-	assert.equal(button.hasAttribute("data-rdsh-hidden"), true, "a narrow fine-pointer window keeps the stock icon");
+	assert.equal(button.hasAttribute("data-rdsh-hidden"), true, "a mobile phone hides the stock control");
 	booted.disposeAll();
 
 	const wideButton = element();
 	wideButton.setAttribute("aria-label", "More actions");
 	const wide = bootClient({
+		mode: "desktop",
 		narrow: false,
 		frames: [],
 		configureDocument(doc) {
@@ -441,7 +471,7 @@ test("the legacy hide list applies at phone width even with a fine pointer", () 
 			doc.querySelector = () => null;
 		},
 	});
-	assert.equal(wideButton.hasAttribute("data-rdsh-hidden"), false, "a wide window hides a stock control");
+	assert.equal(wideButton.hasAttribute("data-rdsh-hidden"), false, "a desktop hides nothing");
 	wide.disposeAll();
 });
 
@@ -480,6 +510,7 @@ test("a height-only resize keeps an in-flight swipe; a width change drops it", (
 		presses += 1;
 	};
 	const booted = bootClient({
+		mode: "mobile",
 		narrow: true,
 		windowAdd: (type, handler) => windowHandlers.push([type, handler]),
 		windowRemove() {},
@@ -883,6 +914,7 @@ test("a left-edge swipe opens the drawer even when it starts on a route row", ()
 		presses += 1;
 	};
 	const booted = bootClient({
+		mode: "mobile",
 		narrow: true,
 		windowAdd: (type, handler) => windowHandlers.push([type, handler]),
 		windowRemove() {},

@@ -3277,7 +3277,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     /** Follow the projections the header chips mirror: Session list, jobs, status. */
     function watchActivitySources() {
-      if (!narrow()) return;
+      if (!phone()) return;
       const sessions = sessionsService();
       watchActivitySource("list", sessions?.list ?? null);
       const jobs = optionalService("jobs");
@@ -3315,7 +3315,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       }
       if (activityPoll !== 0) return;
       activityPoll = setInterval(() => {
-        if (!narrow()) {
+        if (!phone()) {
           stopActivityPoll();
           return;
         }
@@ -3420,7 +3420,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * A click on another chip, or inside the open panel, is left to upstream.
      */
     function handleActivityChipClick(chip, event) {
-      if (!narrow() || chip === null || chip === undefined) return false;
+      if (!phone() || chip === null || chip === undefined) return false;
       if (chip.getAttribute("aria-expanded") !== "true") return false;
       if (event !== null && event !== undefined) {
         if (typeof event.preventDefault === "function") event.preventDefault();

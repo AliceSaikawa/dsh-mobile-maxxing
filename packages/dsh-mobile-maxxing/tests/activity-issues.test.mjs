@@ -402,6 +402,7 @@ function createServices() {
 
 function boot({
 	narrow = true,
+	mode = narrow ? "mobile" : "desktop",
 	services = createServices().services,
 	getOverride = null,
 	configureDocument = () => {},
@@ -507,6 +508,7 @@ function boot({
 		globalThis: undefined,
 	};
 	sandbox.globalThis = sandbox;
+	sandbox.__RDSH_DEVICE_MODE__ = mode;
 	sandbox.window.document = sandbox.document;
 	sandbox.window.matchMedia = sandbox.matchMedia;
 	sandbox.window.setTimeout = sandbox.setTimeout;
@@ -882,11 +884,12 @@ test("#40 count chips are detected in every upstream locale (en, zh)", () => {
 	assert.equal(zh.getAttribute("data-rdsh-activity-state"), "idle");
 });
 
-test("#40 leaving the phone layout releases the sources and the injected nodes", () => {
+test("#40 a width change keeps the mobile sources and nodes; desktop mode never subscribes", () => {
 	const harness = createServices();
 	harness.jobsIn("s1", [{ id: "job-1", status: "running" }]);
 	const shell = chip("1 background job running");
 	const booted = boot({
+		mode: "mobile",
 		services: harness.services,
 		configureDocument(doc) {
 			doc.headerButtons = [shell];
@@ -900,16 +903,39 @@ test("#40 leaving the phone layout releases the sources and the injected nodes",
 	assert.equal(activityPolls(booted).length, 1);
 	assert.ok(ringOf(shell) !== null);
 
+	// Width is geometry only: a tablet-wide mobile window keeps the same mode,
+	// sources and nodes rather than tearing the phone surface down.
 	booted.setNarrow(false);
-	assert.equal(harness.list.listenerCount, 0, "the width departure releases the list source");
-	assert.equal(harness.jobState.listenerCount, 0, "the width departure releases the jobs source");
-	assert.equal(harness.status.listenerCount, 0, "the width departure releases the status source");
-	assert.equal(activityPolls(booted).length, 0);
-	assert.equal(shell.hasAttribute("data-rdsh-activity-chip"), false);
-	assert.equal(ringOf(shell), null, "the injected ring is removed with the phone layout");
-
 	booted.runFrames();
-	assert.equal(harness.jobState.listenerCount, 0, "a wide pass does not resubscribe");
+	assert.equal(harness.list.listenerCount, 1, "the width change released the list source");
+	assert.equal(harness.jobState.listenerCount, 1, "the width change released the jobs source");
+	assert.equal(harness.status.listenerCount, 1, "the width change released the status source");
+	assert.equal(activityPolls(booted).length, 1);
+	assert.equal(shell.hasAttribute("data-rdsh-activity-chip"), true);
+	assert.ok(ringOf(shell) !== null, "the injected ring left with a width change");
+	assert.equal(harness.jobState.listenerCount, 1, "a wide pass resubscribed");
+
+	// The same narrow window in desktop mode never gets a phone subscription,
+	// chip or ring.
+	const desktopHarness = createServices();
+	const desktopShell = chip("1 background job running");
+	const desktop = boot({
+		mode: "desktop",
+		narrow: true,
+		services: desktopHarness.services,
+		configureDocument(doc) {
+			doc.headerButtons = [desktopShell];
+		},
+	});
+	showSession(desktop, "s1");
+	decorateChips(desktop, [desktopShell]);
+	desktop.runFrames();
+	assert.equal(desktopHarness.list.listenerCount, 0);
+	assert.equal(desktopHarness.jobState.listenerCount, 0);
+	assert.equal(desktopHarness.status.listenerCount, 0);
+	assert.equal(activityPolls(desktop).length, 0);
+	assert.equal(desktopShell.hasAttribute("data-rdsh-activity-chip"), false);
+	assert.equal(ringOf(desktopShell), null);
 });
 
 test("#40 a disappeared jobs service releases its old subscription too", () => {
@@ -1052,7 +1078,7 @@ test("#40 an old generated ring is replaced; an adopted native spinner is preser
 	assert.equal(nativeRing.className, "rdsh-activity-ring");
 });
 
-test("#40 an adopted native spinner survives reboot/HMR and the 767/768 transition", () => {
+test("#40 an adopted native spinner survives reboot/HMR and width changes", () => {
 	const native = node("svg");
 	native.setAttribute("data-rdsh-activity-spinner", "");
 	native.setAttribute("class", "abc_spinner");
@@ -1077,20 +1103,22 @@ test("#40 an adopted native spinner survives reboot/HMR and the 767/768 transiti
 	const firstRing = ringOf(shell);
 	assert.ok(firstRing !== null && firstRing !== native, "767px: a new ring is drawn beside the native node");
 
-	// 768px leaves the phone layout and removes only the plugin's own nodes.
+	// Width is geometry only. A mobile surface stays mobile at 1024px, so the
+	// ring and chip must survive instead of being torn down and rebuilt.
 	booted.setNarrow(false);
-	assert.equal(ringOf(shell), null, "our ring leaves with the phone layout");
-	assert.equal(native.parentElement, shell, "the native node survives the teardown");
+	booted.runFrames();
+	const ringAtWide = ringOf(shell);
+	assert.ok(ringAtWide !== null && ringAtWide === firstRing, "a width change replaced or removed our ring");
+	assert.equal(native.parentElement, shell, "the native node survives the width change");
 	assert.equal(native.hasAttribute("data-rdsh-activity-spinner"), false);
-	assert.equal(shell.hasAttribute("data-rdsh-activity-chip"), false);
+	assert.equal(shell.hasAttribute("data-rdsh-activity-chip"), true);
 
-	// Back at 767px the same native node is still there and a fresh ring appears.
+	// A later geometry pass still reuses the same owned ring.
 	booted.setNarrow(true);
 	decorateChips(booted, [shell]);
 	assert.equal(native.parentElement, shell);
 	assert.equal(native.hasAttribute("data-rdsh-activity-spinner"), false);
-	const secondRing = ringOf(shell);
-	assert.ok(secondRing !== null && secondRing !== native);
+	assert.equal(ringOf(shell), firstRing, "the ring identity changed across width changes");
 	assert.equal(shell.children.includes(native), true);
 });
 

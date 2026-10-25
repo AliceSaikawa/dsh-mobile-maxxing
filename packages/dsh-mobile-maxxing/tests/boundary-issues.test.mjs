@@ -16,7 +16,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import vm from "node:vm";
-import { COPY, PROBES } from "../lib/copy.js";
+import { COPY, LOCALE_PACKS, PROBES } from "../lib/copy.js";
 
 const CLIENT = readFileSync(new URL("../client.js", import.meta.url), "utf8");
 
@@ -374,6 +374,7 @@ function bootBoundary({ mode = null, narrow = true, seed = {}, safeTop = 0 } = {
 	const windowListeners = new Map();
 	const sandbox = {
 		__RDSH_PWA_COPY__: COPY,
+		__RDSH_PWA_LOCALES__: LOCALE_PACKS,
 		__RDSH_PWA_PROBES__: PROBES,
 		window: {
 			__ModuleLoader__: { load(value) { definition = value; } },

@@ -183,9 +183,13 @@ window.__ModuleLoader__.load({
 
     function isIos() {
       const ua = navigator.userAgent || "";
-      if (/iPad|iPhone|iPod/.test(ua)) return true;
+      const platform = navigator.platform || "";
+      // A desktop-site iPhone keeps the Apple platform string while the UA
+      // turns into a Macintosh one. The host classifier trusts platform for
+      // the same reason; the install hint must not lose those devices.
+      if (/iPad|iPhone|iPod/.test(ua) || /iPad|iPhone|iPod/.test(platform)) return true;
       // iPadOS 13+ reports a desktop Mac UA; touch points give it away.
-      return navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
+      return platform === "MacIntel" && navigator.maxTouchPoints > 1;
     }
 
     const CSS = `
@@ -903,6 +907,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         globalThis.__RDSH_PWA__ = {
           get state() { return { ...state }; },
           get transitions() { return transitions.slice(); },
+          // Read-only diagnostic used by the regression that keeps the iOS
+          // A2HS hint when the device requested the desktop site.
+          showInstallPrompt,
           applyUpdate,
           checkForUpdate,
           promptInstall,

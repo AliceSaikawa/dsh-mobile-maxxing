@@ -148,6 +148,7 @@ function bootClient({
 	lang = undefined,
 	copy = null,
 	fetchImpl = null,
+	navigator = null,
 } = {}) {
 	let definition;
 	const disposers = [];
@@ -176,7 +177,7 @@ function bootClient({
 			configureDocument(doc);
 			return doc;
 		})(),
-		navigator: stub(),
+		navigator: navigator ?? stub(),
 		location: stub(),
 		localStorage: storage === null ? stub() : memoryStorage(storage),
 		sessionStorage: stub(),
@@ -434,6 +435,33 @@ test("the saved Enter-sends choice is read when the page loads", () => {
 	assert.equal(off.sandbox.__RDSH_MOBILE_UX__.state.enterToSend, false, "Enter inserts a newline by default");
 	const on = bootClient({ storage: { "rdsh-mobile-ux:enter-to-send": "1" } });
 	assert.equal(on.sandbox.__RDSH_MOBILE_UX__.state.enterToSend, true, "the saved choice survives a reload");
+});
+
+test("an iPhone desktop-site UA still advertises the iOS install path", () => {
+	// Safari has no beforeinstallprompt, so the welcome card is the only A2HS
+	// guidance. A desktop-site iPhone keeps a Macintosh UA but reports
+	// platform "iPhone"; isIos() and the card must still see it.
+	const { sandbox, disposeAll } = bootClient({
+		mode: "mobile",
+		narrow: false,
+		navigator: {
+			userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Version/18.0 Safari/605.1.15",
+			platform: "iPhone",
+			maxTouchPoints: 0,
+			onLine: true,
+			serviceWorker: stub(),
+		},
+		configureDocument(doc) {
+			const header = element();
+			header.className = "_headerBlank";
+			doc.querySelector = (selector) => (selector === "header[data-window-drag]" ? header : null);
+		},
+	});
+	const pwa = sandbox.__RDSH_PWA__;
+	assert.equal(pwa.state.ios, true, "the desktop-site iPhone lost the iOS hint");
+	assert.equal(pwa.state.mode, "mobile", "the device mode is wrong");
+	assert.equal(pwa.showInstallPrompt(), true, "the welcome-screen A2HS card is not offered");
+	assert.deepEqual(disposeAll(), []);
 });
 
 test("the desktop notification opt-in is read from this browser", () => {

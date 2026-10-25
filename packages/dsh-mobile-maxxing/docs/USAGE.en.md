@@ -38,6 +38,15 @@ enablement. The parts are independent, so merging them costs nothing.
 
 ![Safe area in standalone mode](standalone-safe-area.png)
 
+### One Mobile settings tab
+
+This package contributes only **Settings → Mobile**. It contains the per-device theme,
+notification controls and sounds, Enter-key behavior, and app installation/update/status.
+There are no separate App or Input tabs. Hidden-control lists and browser-level overrides,
+extra hide-label editing, basic UI status, screen-size diagnostics, and scroll diagnostics
+have been removed. Standard mobile-only control hiding remains; old saved hide overrides
+are no longer read. No browser data is deleted. PCs receive no settings from this package.
+
 ### Theme (light / dark)
 
 Every colour comes from the host's theme tokens (`--dsw-*`). The earlier version baked in

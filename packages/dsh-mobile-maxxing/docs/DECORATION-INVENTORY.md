@@ -100,6 +100,16 @@ The Settings → Mobile cards expose a per-browser opt-in
 (`notifyDeviceTurns`) for receiving desktop-originated turns on a mobile device;
 it is a mobile-side choice and is never read on a PC.
 
+## One settings contribution
+
+Only `mobile-ux` is registered in `settings.section`, labelled Mobile. Input and
+PWA settings are rendered inside that section, without separate tab registration
+or label-based hiding. The section retains theme, notifications/sound, Enter
+behavior and app installation/update/status. Hidden-control list/customisation,
+basic UI readouts, screen-size metrics and scroll diagnostics (including their
+recording listener) are removed. Standard control hiding remains; old browser
+hide overrides are ignored without deleting storage.
+
 ## #46 layering
 
 The open panel no longer sets `display: none` (or `visibility`) on the header.

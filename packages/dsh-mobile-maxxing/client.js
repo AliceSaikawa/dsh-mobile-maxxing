@@ -2130,6 +2130,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       releaseSafeArea();
       releaseViewportLock();
       releaseDeviceTheme();
+      clearTerminalFit();
     }
 
     function decorateEditCards() {
@@ -2199,6 +2200,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           && panel.getBoundingClientRect().width > 0;
       }
       document.documentElement.toggleAttribute("data-rdsh-rightpanel-open", open);
+      if (open) scheduleTerminalFit();
+      else clearTerminalFit();
     }
 
     function watchRightPanel(panel) {
@@ -4688,6 +4691,24 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     /** The right panel tab under the finger, for the same replay as a row. */
     let tabCandidate = null;
     let tabReplayTimer = 0;
+    /**
+     * Right-panel tab drag is gated on a long press.
+     *
+     * dockkit starts its tab drag from `pointerdown` + a 4px `pointermove`
+     * (`DRAG_THRESHOLD = 4` in the shipped bundle), and its strip is
+     * `touch-action: none`, so a plain tap or a sideways swipe used to become a
+     * reorder. Until this timer fires, every `pointermove` for the touch is
+     * stopped before the app's window-level listener sees it; the upstream
+     * listener stays armed from the original pointerdown, so once the hold
+     * fires the next move starts the *real* reorder (no order of our own).
+     */
+    const TAB_HOLD_MS = 450;
+    /** Movement before the hold is cancelled; wind, not a drag. */
+    const TAB_HOLD_SLOP_PX = 10;
+    let tabHoldTimer = 0;
+    /** The tab a completed hold-drag belonged to, for its release click. */
+    let tabDraggedTab = null;
+    let tabDragSuppressUntil = 0;
     /** The row whose long press opened its menu, so the release click is eaten. */
     let menuOpenedUntil = 0;
     /** Long-press: held still this long and it opens the row menu. */
@@ -5809,6 +5830,46 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       }
     }
 
+    /** Drop the pending tab hold and its lift styling (not the block). */
+    function cancelTabHold() {
+      if (tabHoldTimer !== 0) {
+        clearTimeout(tabHoldTimer);
+        tabHoldTimer = 0;
+      }
+      tabCandidate?.tab.removeAttribute("data-rdsh-tab-hold");
+    }
+
+    /**
+     * Restore the strip's own `scroll-behavior` after a manual pan.
+     *
+     * dockkit ships `scroll-behavior: smooth` (it focuses a tab by scrolling);
+     * a finger pan must not inherit that easing, so it is forced to auto only
+     * while this gesture owns the strip.
+     */
+    function releaseTabStrip(candidate) {
+      if (candidate === null || candidate === undefined || candidate.strip === null) return;
+      if (candidate.scrollBehavior === undefined) return;
+      if (candidate.scrollBehavior === "") candidate.strip.style.removeProperty("scroll-behavior");
+      else candidate.strip.style.scrollBehavior = candidate.scrollBehavior;
+      candidate.scrollBehavior = undefined;
+    }
+
+    /**
+     * The finger stayed put for {@link TAB_HOLD_MS}: release the move gate.
+     *
+     * The upstream drag was armed by the original pointerdown and only waits
+     * for a move; keeping its listener means the reorder lands in dockkit's own
+     * state, so the plugin never owns a second tab order.
+     */
+    function fireTabHold() {
+      tabHoldTimer = 0;
+      const candidate = tabCandidate;
+      if (candidate === null || candidate.cancelled || candidate.held) return;
+      candidate.held = true;
+      candidate.blocking = false;
+      candidate.tab.setAttribute("data-rdsh-tab-hold", "");
+    }
+
     function onPointerDown(event) {
       if (!phone()) return;
       // xterm keeps its real input in a visually hidden textarea. Focusing it
@@ -5837,13 +5898,44 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (send !== null && send !== undefined && send.disabled !== true && !STOP_PROBE.test(send.getAttribute("aria-label") || "")) {
         markMobileSession();
       }
-      // Right panel tabs: same native-drag problem as the session rows below.
-      // Upstream starts a tab drag after 4px, so a finger that moves slightly
-      // never produces the click that switches tabs.
+      // Right panel tabs: dockkit arms a reorder on pointerdown and starts it
+      // after 4px, so a tap or a sideways swipe became a drag. Block the move
+      // until the hold fires; the app's own listener stays armed and completes
+      // the reorder from the moves that follow.
       const tab = event.target.closest && event.target.closest("[data-rdsh-rtab]");
-      if (tab !== null && tab !== undefined && event.pointerType !== "mouse") {
-        clearTimeout(tabReplayTimer);
-        tabCandidate = { tab, at: Date.now(), x: event.clientX, y: event.clientY, fired: false };
+      // A second finger is not a new tab gesture: the first pointer already
+      // owns the hold/drag state, and `pointerId` keeps its moves separate.
+      if (tab !== null && tab !== undefined && event.pointerType !== "mouse" && event.isPrimary !== false) {
+        const close = event.target.closest && event.target.closest("[data-dockkit-tab-close]");
+        if (close === null || close === undefined) {
+          clearTimeout(tabReplayTimer);
+          clearTimeout(tabHoldTimer);
+          if (tabCandidate !== null) {
+            tabCandidate.tab.removeAttribute("data-rdsh-tab-hold");
+            releaseTabStrip(tabCandidate);
+          }
+          const strip = tab.closest("[data-dockkit-strip-tabs]") ?? tab.closest('[role="tablist"]')?.querySelector("[data-dockkit-strip-tabs]") ?? null;
+          const scrollBehavior = strip === null ? undefined : (strip.style.scrollBehavior ?? "");
+          if (strip !== null) strip.style.scrollBehavior = "auto";
+          tabCandidate = {
+            tab,
+            at: Date.now(),
+            x: event.clientX,
+            y: event.clientY,
+            fired: false,
+            held: false,
+            blocking: true,
+            cancelled: false,
+            pointerId: event.pointerId,
+            // dockkit's strip is `touch-action: none`, so the finger cannot
+            // pan it natively. Keep the real scroller and pan it ourselves.
+            strip,
+            scrollBehavior,
+            lastX: event.clientX,
+            lastY: event.clientY,
+          };
+          tabHoldTimer = setTimeout(fireTabHold, TAB_HOLD_MS);
+        }
       }
       const row = event.target.closest && event.target.closest('[data-row-key^="session:"]');
       if (row === null || row === undefined) return;
@@ -5858,6 +5950,33 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     /** Movement cancels the long press and leaves the drag to the app. */
     function onPointerMove(event) {
+      const tabMove = tabCandidate;
+      if (tabMove !== null && (tabMove.pointerId === undefined || event.pointerId === undefined || event.pointerId === tabMove.pointerId)) {
+        if (!tabMove.held) {
+          const distance = Math.abs(event.clientX - tabMove.x) + Math.abs(event.clientY - tabMove.y);
+          const dx = event.clientX - tabMove.lastX;
+          const dy = event.clientY - tabMove.lastY;
+          tabMove.lastX = event.clientX;
+          tabMove.lastY = event.clientY;
+          if (distance > TAB_HOLD_SLOP_PX && !tabMove.cancelled) {
+            tabMove.cancelled = true;
+            cancelTabHold();
+          }
+          // A clearly sideways finger pans the strip; a vertical one belongs
+          // to the panel content and is left to the browser (the stylesheet
+          // re-enables only the vertical axis on the strip).
+          if (tabMove.cancelled && tabMove.strip !== null && Math.abs(dx) > Math.abs(dy)) {
+            tabMove.strip.scrollLeft -= dx;
+          }
+        }
+        if (tabMove.blocking) {
+          // Reaches dockkit's window-level pointermove before it can start the
+          // 4px drag. The original pointerdown is untouched, so a held finger
+          // is still driving the app's drag when this gate opens.
+          event.stopImmediatePropagation();
+        }
+        return;
+      }
       if (queuePress !== null && Math.abs(event.clientX - queuePress.x) + Math.abs(event.clientY - queuePress.y) > LONG_PRESS_SLOP_PX) {
         cancelQueuePress();
       }
@@ -5870,21 +5989,43 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       cancelQueuePress();
       cancelLongPress();
       const tabTap = tabCandidate;
-      if (tabTap !== null) {
-        const moved = Math.abs(event.clientX - tabTap.x) + Math.abs(event.clientY - tabTap.y) > 14;
-        if (moved || Date.now() - tabTap.at > 600) {
+      if (tabTap !== null && (tabTap.pointerId === undefined || event.pointerId === undefined || event.pointerId === tabTap.pointerId)) {
+        if (tabTap.held) {
+          // The app just reordered with its own drag. Its release click would
+          // now switch (or re-select) a tab, so eat exactly that one.
+          cancelTabHold();
+          tabTap.tab.removeAttribute("data-rdsh-tab-hold");
+          releaseTabStrip(tabTap);
+          tabDraggedTab = tabTap.tab;
+          tabDragSuppressUntil = Date.now() + 400;
           tabCandidate = null;
         } else {
-          // One replay, only if the app did not deliver the click itself: a
-          // pointerdown that became a tab drag leaves the active tab unchanged
-          // and the tap would otherwise do nothing at all.
-          clearTimeout(tabReplayTimer);
-          tabReplayTimer = window.setTimeout(() => {
-            if (tabCandidate === tabTap) tabCandidate = null;
-            if (tabTap.fired || !tabTap.tab.isConnected) return;
-            tabTap.fired = true;
-            tabTap.tab.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
-          }, 250);
+          const moved = Math.abs(event.clientX - tabTap.x) + Math.abs(event.clientY - tabTap.y) > 14;
+          releaseTabStrip(tabTap);
+          if (moved || tabTap.cancelled || Date.now() - tabTap.at > 600) {
+            if (moved || tabTap.cancelled) {
+              // A pan is not a tap: eat the click the browser may still
+              // synthesise for the release, but only on this tab.
+              tabDraggedTab = tabTap.tab;
+              tabDragSuppressUntil = Date.now() + 400;
+            }
+            tabCandidate = null;
+          } else {
+            // One replay, only if the app did not deliver the click itself: a
+            // pointerdown that became a tab drag leaves the active tab unchanged
+            // and the tap would otherwise do nothing at all.
+            clearTimeout(tabReplayTimer);
+            tabReplayTimer = window.setTimeout(() => {
+              if (tabCandidate === tabTap) tabCandidate = null;
+              if (tabTap.fired || !tabTap.tab.isConnected) return;
+              tabTap.fired = true;
+              tabTap.tab.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+            }, 250);
+          }
+        }
+        if (tabHoldTimer !== 0) {
+          clearTimeout(tabHoldTimer);
+          tabHoldTimer = 0;
         }
       }
       const candidate = tapCandidate;
@@ -5899,6 +6040,19 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         if (candidate.fired) return;
         candidate.row.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
       }, 260);
+    }
+
+    function onPointerCancel() {
+      cancelQueuePress();
+      if (tabHoldTimer !== 0) {
+        clearTimeout(tabHoldTimer);
+        tabHoldTimer = 0;
+      }
+      if (tabCandidate !== null) {
+        tabCandidate.tab.removeAttribute("data-rdsh-tab-hold");
+        releaseTabStrip(tabCandidate);
+        tabCandidate = null;
+      }
     }
 
     function onDragStartCapture(event) {
@@ -5921,11 +6075,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       event.stopImmediatePropagation();
     }
 
-    /** Suppress the iOS text callout/context menu on the session title. */
+    /** Suppress the iOS text callout/context menu on session titles and tabs. */
     function onSessionContextMenu(event) {
       if (!phone()) return;
       if (event.target.closest === undefined) return;
-      if (event.target.closest("[data-rdsh-session-title], [data-rdsh-session]") === null) return;
+      if (event.target.closest("[data-rdsh-session-title], [data-rdsh-session], [data-rdsh-rtab], [data-dockkit-tab]") === null) return;
       event.preventDefault();
     }
 
@@ -5947,6 +6101,21 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       return null;
     }
 
+    /**
+     * Starts that belong to the panel's own chrome, not its body.
+     *
+     * The tab strip is a horizontal scroller with a reorder gesture of its own
+     * (#31); a left/right swipe there must never be read as "close the panel".
+     * dockkit puts the collapse button in the same strip chrome, so excluding
+     * the strip also excludes that row, while the ✕ itself keeps its click.
+     */
+    function rightPanelChromeStart(target) {
+      if (target === null || target === undefined || typeof target.closest !== "function") return false;
+      return target.closest(
+        `${RIGHT_PANEL_ROOT} [role="tablist"], ${RIGHT_PANEL_ROOT} [data-dockkit-strip], ${RIGHT_PANEL_ROOT} [data-dockkit-tab], ${RIGHT_PANEL_ROOT} header`,
+      ) !== null;
+    }
+
     // Edge swipe from the left opens the session drawer; from the right it
     // pulls the preview/right sidebar (the app's own "Open right sidebar").
     // While the preview is open the left-to-right gesture closes it instead.
@@ -5966,6 +6135,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // only once it is already open.
       if (panelOpen && !drawerOpen) {
         if (target instanceof Element) {
+          if (rightPanelChromeStart(target)) return;
           if (scrolledLeftAncestor(target) !== null) return;
           if (target.closest("input, textarea, [contenteditable=true], .xterm, [class*='xterm']") !== null) return;
         }
@@ -6051,8 +6221,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       edgeSwipe = null;
       touchStart = null;
       terminalDrag = null;
-      tapCandidate = null;
+      cancelTabHold();
+      releaseTabStrip(tabCandidate);
       tabCandidate = null;
+      tabDraggedTab = null;
+      tapCandidate = null;
       clearTimeout(tabReplayTimer);
       cancelLongPress();
     }
@@ -6238,6 +6411,119 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       terminalDrag = null;
     }
 
+    // ---------------------------------------------------------------------
+    // Terminal: keep the screen inside the visual viewport
+    //
+    // The bundled terminal mounts xterm in a div and fits it from a
+    // ResizeObserver on that div (`fitScreen`: `fit.proposeDimensions()` then
+    // `xterm.resize` + `model.resize`, so the Host grid follows too). On iOS
+    // the keyboard shrinks `visualViewport` without shrinking the layout
+    // viewport, so that observer never fires and the last rows stay behind the
+    // keyboard. There is no public handle on the xterm instance and no fit
+    // event to call; the observable path is geometry. Shrinking the mount node
+    // to the visible band makes the app's own observer run the real fit.
+    //
+    // There is deliberately no synthetic scroll here. xterm 6 builds a
+    // `SmoothScrollableElement`, whose `setScrollPosition` feeds an internal
+    // `Scrollable` and re-renders rows; `.xterm-scrollable-element` is only a
+    // `position: relative` wrapper with no overflow (see client.terminal.js
+    // `AbstractScrollableElement`). Its `HTMLElement.scrollTop` is not the
+    // terminal's scroll position, and a wheel event is application input for
+    // mouse-tracking / alternate-buffer programs. Fit alone is what this
+    // plugin may do; the upstream `xterm.resize` keeps the viewport where the
+    // terminal itself decides.
+    //
+    // `fitScreen` is gated on the screen being writable, so a read-only
+    // terminal keeps its Host grid and does not refit.
+    // ---------------------------------------------------------------------
+    let terminalFitFrame = 0;
+    let terminalFitHeight = 0;
+    let terminalFitMount = null;
+
+    function clearTerminalFit() {
+      if (terminalFitFrame !== 0) {
+        cancelAnimationFrame(terminalFitFrame);
+        terminalFitFrame = 0;
+      }
+      terminalFitHeight = 0;
+      terminalFitMount = null;
+      for (const mount of document.querySelectorAll("[data-rdsh-terminal-fit]")) {
+        mount.style.removeProperty("height");
+        mount.style.removeProperty("flex");
+        mount.removeAttribute("data-rdsh-terminal-fit");
+      }
+    }
+
+    /**
+     * Fit the mounted terminal to the part of it the visual viewport shows.
+     *
+     * Runs in one rAF and only writes when the measured height changes, so the
+     * ResizeObserver the app installed cannot bounce.
+     */
+    function applyTerminalFit() {
+      terminalFitFrame = 0;
+      if (!narrow() || !document.documentElement.hasAttribute("data-rdsh-rightpanel-open")) {
+        clearTerminalFit();
+        return;
+      }
+      const viewport = window.visualViewport;
+      if (viewport === null || viewport === undefined) {
+        clearTerminalFit();
+        return;
+      }
+      // Android resizes the layout viewport, so the app's observer already
+      // fits; only the iOS-style "layout stays, visual viewport shrinks" case
+      // needs this path. A URL bar alone is a smaller inset but still real.
+      const layoutHeight = Number.isFinite(window.innerHeight) ? window.innerHeight : 0;
+      if (!(layoutHeight - viewport.height > 1)) {
+        clearTerminalFit();
+        return;
+      }
+      let mount = null;
+      for (const section of document.querySelectorAll("[data-sidebar-terminal]")) {
+        if (section.closest("[hidden]") !== null) continue;
+        const xterm = section.querySelector(".xterm");
+        if (xterm === null || xterm.parentElement === null) continue;
+        const rect = xterm.parentElement.getBoundingClientRect();
+        if (!(rect.width > 0) || !(rect.height > 0)) continue;
+        mount = xterm.parentElement;
+        break;
+      }
+      if (mount === null) {
+        clearTerminalFit();
+        return;
+      }
+      const rect = mount.getBoundingClientRect();
+      const visibleBottom = viewport.offsetTop + viewport.height;
+      const height = Math.floor(visibleBottom - rect.top);
+      if (!(height >= 24)) {
+        clearTerminalFit();
+        return;
+      }
+      if (terminalFitMount !== null && terminalFitMount !== mount) {
+        terminalFitMount.style.removeProperty("height");
+        terminalFitMount.style.removeProperty("flex");
+        terminalFitMount.removeAttribute("data-rdsh-terminal-fit");
+      }
+      if (Math.abs(height - terminalFitHeight) > 0.5 || terminalFitMount !== mount) {
+        terminalFitHeight = height;
+        terminalFitMount = mount;
+        mount.setAttribute("data-rdsh-terminal-fit", "");
+        mount.style.height = `${height}px`;
+        mount.style.flex = "0 0 auto";
+      }
+    }
+
+    function scheduleTerminalFit() {
+      if (!narrow()) {
+        clearTerminalFit();
+        return;
+      }
+      if (typeof requestAnimationFrame !== "function") return;
+      if (terminalFitFrame !== 0) return;
+      terminalFitFrame = requestAnimationFrame(applyTerminalFit);
+    }
+
     function scrollableAncestor(target) {
       let node = target;
       while (node !== null && node !== undefined && node !== document.body) {
@@ -6261,6 +6547,22 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     function onTouchMove(event) {
       if (moveTerminalDrag(event)) return;
+      const tabMove = tabCandidate;
+      if (tabMove !== null) {
+        if (event.touches.length === 1) {
+          const touch = event.touches[0];
+          if (!tabMove.held && !tabMove.cancelled
+            && Math.abs(touch.clientX - tabMove.x) + Math.abs(touch.clientY - tabMove.y) > TAB_HOLD_SLOP_PX) {
+            tabMove.cancelled = true;
+            cancelTabHold();
+          }
+          // The hold owns the gesture now: stop the browser from scrolling
+          // the panel under a reorder. Before the hold, the strip is
+          // `touch-action: pan-y`, so a vertical drag still scrolls content.
+          if (tabMove.held && event.cancelable) event.preventDefault();
+        }
+        return;
+      }
       if (touchStart === null || event.touches.length !== 1) return;
       const touch = event.touches[0];
       const dy = touch.clientY - touchStart.y;
@@ -6429,6 +6731,19 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // the old panel's outside-pointer close switches panels naturally.
       const activityChip = activityChipOf(target);
       if (activityChip !== null && handleActivityChipClick(activityChip, event)) return;
+
+      // A completed hold-drag is a reorder, not a tab selection. The browser
+      // can still synthesise the release click on the tab that was dragged;
+      // eat that one only, and only for a moment so the next tap works.
+      if (tabDraggedTab !== null) {
+        if (Date.now() >= tabDragSuppressUntil) {
+          tabDraggedTab = null;
+        } else if (target.closest("[data-rdsh-rtab]") === tabDraggedTab) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          return;
+        }
+      }
 
       // The app delivered the tab click itself; the replay must stay cancelled.
       if (tabCandidate !== null && target.closest("[data-rdsh-rtab]") === tabCandidate.tab) tabCandidate.fired = true;
@@ -9377,7 +9692,30 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   /* Right panel tabs (dockkit's file/preview strip).
      The reference build leaves their dimensions and hover affordances to
      upstream (28px rows, hover-only close). The tap replay in the pointer
-     handlers is kept, but it must not restyle the tab strip. */
+     handlers is kept, but it must not restyle the tab strip.
+     dockkit sets touch-action: none on the tab, the strip and the scroller
+     because a finger drag is its reorder gesture. touch-action is the
+     intersection along every ancestor up to the scroll container, so all
+     three layers must be reopened; the plugin owns the horizontal pan
+     (pointermove -> scrollLeft) and leaves only the vertical axis to the
+     browser. The hold cancels that pan in the touch handler. */
+  [data-sidebar-right-panel] [data-dockkit-strip],
+  [data-sidebar-right-panel] [data-dockkit-strip-tabs],
+  [data-sidebar-right-panel] [data-dockkit-tab] { touch-action: pan-y; }
+  /* A long press must reach the reorder gate, not start a selection/callout. */
+  [data-rdsh-rtab] {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  /* The hold lifts the tab without changing its box: dockkit measures tab
+     rects to choose a drop index, so no transform here. */
+  [data-rdsh-rtab][data-rdsh-tab-hold] {
+    position: relative;
+    z-index: 3;
+    opacity: .92;
+    box-shadow: var(--dsw-elevation-prominent, 0 2px 8px rgba(0, 0, 0, .28));
+  }
 
   /* Code files: wrap every line, including a single long token (URLs,
      minified lines). Wrapping only at spaces left those overflowing, which
@@ -9546,7 +9884,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         document.addEventListener("pointermove", onPointerMove, true);
         document.addEventListener("focusout", onModelFocusOut, true);
         document.addEventListener("pointerup", onPointerUp, true);
-        document.addEventListener("pointercancel", cancelQueuePress, true);
+        document.addEventListener("pointercancel", onPointerCancel, true);
         document.addEventListener("mousedown", onMouseDownCapture, true);
         document.addEventListener("click", onClickCapture, true);
         // Phone-only tree long-press and search listeners; installed here so
@@ -9590,7 +9928,11 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           rotationTimer = window.setTimeout(() => {
             measureSafeArea();
             scheduleDecorate();
+            scheduleTerminalFit();
           }, 350);
+          // The keyboard inset has already changed when this runs; fit the
+          // terminal (if one is open) on the same coalesced frame.
+          scheduleTerminalFit();
         };
         const onResize = () => {
           if (window.innerWidth !== gestureWidth) {
@@ -9612,6 +9954,9 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         // the covered viewport. It must not reset gestures: it fires for
         // height-only changes during a swipe.
         window.visualViewport?.addEventListener("resize", onLayoutResize);
+        // The visual viewport can move without resizing (the browser scrolls a
+        // focused field above the keyboard); both events share the rAF fit.
+        window.visualViewport?.addEventListener("scroll", onLayoutResize);
         patchCommandUi(ctx);
         document.addEventListener("dragstart", onDragStartCapture, true);
         document.addEventListener("dragend", onDragEndCapture, true);
@@ -9688,7 +10033,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             contextRefreshFor = null;
             document.removeEventListener("pointerdown", onPointerDown, true);
             document.removeEventListener("pointerup", onPointerUp, true);
-            document.removeEventListener("pointercancel", cancelQueuePress, true);
+            document.removeEventListener("pointercancel", onPointerCancel, true);
             document.removeEventListener("mousedown", onMouseDownCapture, true);
             document.removeEventListener("click", onClickCapture, true);
             window.removeEventListener("keydown", onKeyDownCapture, true);
@@ -9698,6 +10043,9 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             window.removeEventListener("resize", onResize);
             window.removeEventListener("orientationchange", onOrientation);
             window.visualViewport?.removeEventListener("resize", onLayoutResize);
+            window.visualViewport?.removeEventListener("scroll", onLayoutResize);
+            clearTerminalFit();
+            resetGestures();
             clearTimeout(rotationTimer);
             clearTimeout(sendSettleTimer);
             document.removeEventListener("dragstart", onDragStartCapture, true);

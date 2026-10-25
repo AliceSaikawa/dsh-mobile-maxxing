@@ -5103,6 +5103,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     const queuePreviewOriginal = new WeakMap();
 
     function clearQueueDockHooks() {
+      for (const bridge of document.querySelectorAll("[data-rdsh-queue-join]")) bridge.remove();
+      for (const panel of document.querySelectorAll("[data-rdsh-queue-clip]")) {
+        panel.style.removeProperty("clip-path");
+        panel.removeAttribute("data-rdsh-queue-clip");
+      }
       for (const dock of document.querySelectorAll("[data-rdsh-queue-dock]")) dock.style.removeProperty("margin-bottom");
       for (const preview of document.querySelectorAll("[data-rdsh-queue-preview]")) {
         const original = queuePreviewOriginal.get(preview);
@@ -5113,7 +5118,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         if (original.tabindex === null) preview.removeAttribute("tabindex");
         else preview.setAttribute("tabindex", original.tabindex);
       }
-      for (const attribute of ["data-rdsh-queue-dock", "data-rdsh-queue-panel", "data-rdsh-queue-row", "data-rdsh-queue-index", "data-rdsh-queue-preview", "data-rdsh-queue-for", "data-rdsh-queue-text"]) {
+      for (const attribute of ["data-rdsh-queue-dock", "data-rdsh-queue-panel", "data-rdsh-queue-row", "data-rdsh-queue-index", "data-rdsh-queue-preview", "data-rdsh-queue-for", "data-rdsh-queue-text", "data-rdsh-queue-join"]) {
         for (const element of document.querySelectorAll(`[${attribute}]`)) element.removeAttribute(attribute);
       }
     }
@@ -5784,6 +5789,125 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       clearWorkspacePicker();
       teardownWorkspaceFiles();
     }
+
+
+    // Draw corner-only patches below the queue row. The composer itself is never changed.
+    function decorateQueueJoin(panel, dock) {
+      const editor = document.querySelector("[data-composer-input]");
+      const card = editor === null ? null : editor.closest('[class*="_card"]');
+      const oldBridge = dock?.querySelector("[data-rdsh-queue-join]");
+      const clear = () => {
+        oldBridge?.remove();
+        panel?.style.removeProperty("clip-path");
+        panel?.removeAttribute("data-rdsh-queue-clip");
+      };
+      if (!phone() || panel === null || card === null || dock === null) {
+        clear();
+        return;
+      }
+
+      panel.style.removeProperty("clip-path");
+      panel.removeAttribute("data-rdsh-queue-clip");
+      const queueRect = panel.getBoundingClientRect();
+      const cardRect = card.getBoundingClientRect();
+      const dockRect = dock.getBoundingClientRect();
+      const radiusPair = (value, width, height) => {
+        const parts = String(value || "0").trim().split(/\s+/);
+        const resolve = (part, dimension) => part.endsWith("%")
+          ? dimension * (parseFloat(part) || 0) / 100
+          : parseFloat(part) || 0;
+        return { x: resolve(parts[0], width), y: resolve(parts[1] || parts[0], height) };
+      };
+      const cardStyle = getComputedStyle(card);
+      const leftRadius = radiusPair(cardStyle.borderTopLeftRadius, cardRect.width, cardRect.height);
+      const rightRadius = radiusPair(cardStyle.borderTopRightRadius, cardRect.width, cardRect.height);
+      const leftRx = Math.min(leftRadius.x, cardRect.width / 2);
+      const leftRy = Math.min(leftRadius.y, cardRect.height / 2);
+      const rightRx = Math.min(rightRadius.x, cardRect.width / 2);
+      const rightRy = Math.min(rightRadius.y, cardRect.height / 2);
+      const overlap = queueRect.bottom - cardRect.top;
+      const fmt = (value) => String(Number(value.toFixed(3)));
+      const paths = [];
+      let maxY = 0;
+
+      const addCorner = (side, rx, ry) => {
+        if (rx <= 0 || ry <= 0 || overlap >= ry) return;
+        const tangent = side === "left" ? cardRect.left + rx : cardRect.right - rx;
+        const start = side === "left"
+          ? Math.max(queueRect.left, cardRect.left)
+          : Math.min(queueRect.right, cardRect.right);
+        let end = side === "left"
+          ? Math.min(queueRect.right, tangent)
+          : Math.max(queueRect.left, tangent);
+        if (side === "left" ? start >= end : start <= end) return;
+        if (overlap > 0) {
+          const inset = rx * Math.sqrt(Math.max(0, 1 - Math.pow(1 - overlap / ry, 2)));
+          const zeroY = side === "left" ? tangent - inset : tangent + inset;
+          end = side === "left" ? Math.min(end, zeroY) : Math.max(end, zeroY);
+        }
+        if (side === "left" ? start >= end : start <= end) return;
+        const depthAt = (x) => {
+          const t = side === "left" ? (tangent - x) / rx : (x - tangent) / rx;
+          return ry * (1 - Math.sqrt(Math.max(0, 1 - t * t))) - overlap;
+        };
+        if (depthAt(start) <= 0) return;
+        const startLocal = start - queueRect.left;
+        const endLocal = end - queueRect.left;
+        let path = "M " + fmt(startLocal) + " 0 L " + fmt(endLocal) + " 0";
+        for (let i = 1; i <= 20; i += 1) {
+          const x = end + (start - end) * i / 20;
+          const y = Math.max(0, depthAt(x));
+          maxY = Math.max(maxY, y);
+          path += " L " + fmt(x - queueRect.left) + " " + fmt(y);
+        }
+        paths.push(path + " Z");
+      };
+
+      addCorner("left", leftRx, leftRy);
+      addCorner("right", rightRx, rightRy);
+      const gap = Math.max(0, -overlap);
+      const flatLeft = cardRect.left + leftRx;
+      const flatRight = cardRect.right - rightRx;
+      const centerLeft = Math.max(queueRect.left, flatLeft);
+      const centerRight = Math.min(queueRect.right, flatRight);
+      if (gap > 0 && centerRight > centerLeft) {
+        paths.push("M " + fmt(centerLeft - queueRect.left) + " 0 H " + fmt(centerRight - queueRect.left)
+          + " V " + fmt(gap) + " H " + fmt(centerLeft - queueRect.left) + " Z");
+        maxY = Math.max(maxY, gap);
+      }
+
+      if (paths.length === 0 || maxY <= 0) {
+        oldBridge?.remove();
+        return;
+      }
+      const svgNS = "http://www.w3.org/2000/svg";
+      const bridge = oldBridge || document.createElementNS(svgNS, "svg");
+      bridge.setAttribute("data-rdsh-queue-join", "");
+      bridge.setAttribute("aria-hidden", "true");
+      bridge.setAttribute("viewBox", "0 0 " + fmt(queueRect.width) + " " + fmt(maxY));
+      bridge.setAttribute("preserveAspectRatio", "none");
+      Object.assign(bridge.style, {
+        position: "absolute",
+        left: (queueRect.left - dockRect.left) + "px",
+        top: (queueRect.bottom - dockRect.top) + "px",
+        width: queueRect.width + "px",
+        height: maxY + "px",
+        overflow: "visible",
+        pointerEvents: "none",
+        zIndex: "0",
+      });
+      bridge.replaceChildren();
+      const panelColor = getComputedStyle(panel).backgroundColor;
+      const fill = panelColor && panelColor !== "rgba(0, 0, 0, 0)" ? panelColor : cardStyle.backgroundColor;
+      for (const data of paths) {
+        const shape = document.createElementNS(svgNS, "path");
+        shape.setAttribute("d", data);
+        shape.setAttribute("fill", fill);
+        bridge.append(shape);
+      }
+      if (!oldBridge) dock.append(bridge);
+    }
+
     function decorateQueueDock() {
       if (!phone()) {
         if (queuePreview !== null || queueMenu !== null) closeQueueUi();
@@ -5808,6 +5932,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         // line across the join.
         if (Number.isFinite(gapPx) && gapPx > 0) dock.style.marginBottom = (-(gapPx + 1)) + "px";
       }
+
+      decorateQueueJoin(panel, dock);
       let index = 0;
       for (const row of dock.querySelectorAll("li")) {
         const preview = row.querySelector('[class*="_preview"]');
@@ -9455,14 +9581,14 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   [data-rdsh-question-arrow]:active { transform: scale(.94); }
   [data-rdsh-question-arrow][hidden] { display: none !important; }
   [data-rdsh-question-arrow] svg { width: 15px; height: 15px; }
-  /* Queue dock: match the composer card's width and sit flush on its top
-     edge. The panel has a top radius only; its bottom is the composer. */
+  /* Only the queue's lower corner join is layered over the composer. */
   [data-rdsh-queue-dock] {
     /* Layered over the composer so the queue's straight bottom edge crosses
        the card's top fillets instead of leaving them cut: this is the join
        the reference screenshot shows. */
     position: relative !important;
     z-index: 1 !important;
+    overflow: visible !important;
     /* Same width as the composer card: the percentage resolves against the
        composer stack, which is exactly 32px wider than the card. */
     width: calc(100% - 32px) !important;
@@ -9476,17 +9602,16 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
     padding-left: 0 !important;
     padding-right: 0 !important;
   }
-  /* Only while a queue is present: the composer's top corners join the queue
-     so the pair reads as one panel. Removed the moment the queue empties. */
-  [data-rdsh-queue-dock]:has(li) ~ * [class*="_card"] {
-    border-top-left-radius: 0 !important;
-    border-top-right-radius: 0 !important;
-  }
   [data-rdsh-queue-panel] {
     position: relative !important;
     z-index: 1 !important;
     border-bottom-left-radius: 0 !important;
     border-bottom-right-radius: 0 !important;
+  }
+  [data-rdsh-queue-join] {
+    display: block !important;
+    overflow: visible !important;
+    pointer-events: none !important;
   }
   .rdsh-mux-queue-preview {
     position: fixed; left: 16px; right: 16px; z-index: 985;

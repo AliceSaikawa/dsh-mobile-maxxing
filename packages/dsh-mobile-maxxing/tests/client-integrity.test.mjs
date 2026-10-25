@@ -779,22 +779,36 @@ test("the question card viewport sizing is mobile-only", () => {
 	assert.ok(card, "the question card rule is missing from the mobile sheet");
 });
 
-test("the queue dock meets the composer and the preview never covers it", () => {
-	// Phone-only: the dock is inset 24px per side from the composer card, sits
-	// flush on its top edge (the gap is cancelled from the live row-gap), and
-	// keeps square bottom corners. The preview is fixed and height capped so a
-	// long queued text scrolls above the composer.
-	assert.match(CLIENT, /\[data-rdsh-queue-dock\] \{[^}]*width: calc\(100% - 32px\) !important;[^}]*margin-bottom: 0;/, "the queue dock is not attached to the composer");
-	assert.match(CLIENT, /dock\.style\.marginBottom = \(-\(gapPx \+ 1\)\) \+ "px";/, "the queue dock does not cancel the composer gap");
-	assert.match(CLIENT, /\[data-rdsh-queue-panel\] \{[^}]*border-bottom-left-radius: 0 !important;[^}]*border-bottom-right-radius: 0 !important;/, "the queue panel keeps floating bottom corners");
-	assert.match(CLIENT, /\.rdsh-mux-queue-preview \{[^}]*position: fixed;[^}]*max-height: min\(50vh, 360px\);[^}]*overflow-y: auto;/, "the queued text preview is not a capped overlay");
-	assert.match(CLIENT, /\.rdsh-mux-queue-menu \{[^}]*position: fixed;/, "the long-press menu is not an overlay");
+test("the queue joins only at its lower corners and leaves the composer unchanged", () => {
+	assert.match(CLIENT, /function decorateQueueJoin\(panel, dock\)/);
+	assert.match(CLIENT, /data-rdsh-queue-join/);
+	assert.match(CLIENT, /panel\.style\.removeProperty\("clip-path"\)/);
+	assert.match(CLIENT, /queueRect\.bottom - cardRect\.top/);
+	assert.match(CLIENT, /borderTopLeftRadius/);
+	assert.match(CLIENT, /borderTopRightRadius/);
+	assert.match(CLIENT, /addCorner\("left"/);
+	assert.match(CLIENT, /addCorner\("right"/);
+	assert.match(CLIENT, /decorateQueueJoin\(panel, dock\);/);
+	// Main #37's measured seam is still what attaches the queue to the card.
+	assert.match(CLIENT, /dock\.style\.marginBottom = \(-\(gapPx \+ 1\)\) \+ "px";/, "the measured seam was dropped");
+	assert.match(CLIENT, /\[data-rdsh-queue-dock\] \{[^}]*z-index: 1 !important;/, "the join layer must paint above the composer");
+	assert.match(CLIENT, /\[data-rdsh-queue-dock\] \{[^}]*overflow: visible !important;/, "the join cannot paint outside the dock");
+	assert.match(CLIENT, /\[data-rdsh-queue-panel\] \{[^}]*border-bottom-left-radius: 0 !important;[^}]*border-bottom-right-radius: 0 !important;/);
+	assert.match(CLIENT, /\.rdsh-mux-queue-preview \{[^}]*position: fixed;[^}]*max-height: min\(50vh, 360px\);[^}]*overflow-y: auto;/);
+	assert.match(CLIENT, /\.rdsh-mux-queue-menu \{[^}]*position: fixed;/);
+	const joinStart = CLIENT.indexOf("function decorateQueueJoin(panel, dock) {");
+	const joinEnd = CLIENT.indexOf("\n\n    function decorateQueueDock()", joinStart);
+	assert.ok(joinStart >= 0 && joinEnd > joinStart, "queue join helper is missing");
+	const joinSource = CLIENT.slice(joinStart, joinEnd);
+	assert.doesNotMatch(joinSource, /card\.style\.|card\.setAttribute\(/, "the composer must not be mutated");
+	// The composer's own top corners stay untouched; #37's corner-zeroing rule
+	// contradicted the PR47 contract and was removed in the integration.
+	assert.doesNotMatch(CLIENT, /\[data-rdsh-queue-dock\]:has\(li\)[^{]*\{[^}]*border-top-left-radius:\s*0/, "the composer radius is still zeroed");
 	const rules = cssRules(cssTemplate("CSS_PHONE"));
-	for (const head of ["[data-rdsh-queue-dock]", "[data-rdsh-queue-panel]", ".rdsh-mux-queue-preview", ".rdsh-mux-queue-menu"]) {
+	for (const head of ["[data-rdsh-queue-dock]", "[data-rdsh-queue-panel]", "[data-rdsh-queue-join]", ".rdsh-mux-queue-preview", ".rdsh-mux-queue-menu"]) {
 		assert.ok(rules.some((entry) => entry.head === head), `${head} is missing from the mobile sheet`);
 	}
 });
-
 test("the workspace picker caps its list and keeps Add workspace outside it", () => {
 	assert.match(CLIENT, /\[data-rdsh-workspace-menu\] \{[^}]*max-height: min\(70vh, 520px\) !important;/, "the workspace menu is not height-bounded");
 	assert.match(CLIENT, /\[data-rdsh-workspace-menu\] \[data-rdsh-workspace-viewport\] \{[^}]*max-height: min\(40vh, 320px\) !important;[^}]*overflow-y: auto !important;/, "the workspace list is not the scroll viewport");

@@ -107,9 +107,9 @@ function storage(seed = {}) {
 
 /**
  * Boot the module against the stub DOM.
- * @param {object} options - theme service (or null) and initial storage.
+ * @param {object} options - theme service (or null), initial storage, width.
  */
-function boot({ theme = null, seed = {} } = {}) {
+function boot({ theme = null, seed = {}, narrow = true } = {}) {
 	let definition;
 	const listeners = new Map();
 	const body = element();
@@ -132,7 +132,7 @@ function boot({ theme = null, seed = {} } = {}) {
 		location: stub(),
 		localStorage: storage(seed),
 		sessionStorage: storage(),
-		matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
+		matchMedia: (query) => ({ matches: narrow && String(query).includes("max-width: 767px"), addEventListener() {}, removeEventListener() {} }),
 		addEventListener() {},
 		removeEventListener() {},
 		setTimeout: () => 0,
@@ -270,6 +270,20 @@ test("a registered palette turns the override off instead of mixing tokens", () 
 	assert.equal(body.hasAttribute("data-ds-dark-theme"), false, "the shared registered theme's palette stands");
 	assert.equal(documentElement.getAttribute("data-rdsh-device-theme"), null);
 	assert.equal(api.state.deviceThemeNote, "custom");
+});
+
+test("a wide window never applies the phone palette", () => {
+	// #44: a desktop keeps upstream's palette. The choice stays in storage for
+	// the next phone-width visit, but nothing is painted at 768px and up.
+	const snapshot = { preference: "light", active: { colorScheme: "light", tokens: {} } };
+	const { api, body, documentElement } = boot({
+		theme: { getTheme: () => snapshot },
+		seed: { "rdsh-pwa:device-theme": "dark" },
+		narrow: false,
+	});
+	assert.equal(body.hasAttribute("data-ds-dark-theme"), false, "a desktop got the phone palette");
+	assert.equal(documentElement.getAttribute("data-rdsh-device-theme"), null);
+	assert.equal(api.state.deviceTheme, "dark", "the stored choice was discarded instead of kept");
 });
 
 test("an empty store reads as the shared theme", () => {

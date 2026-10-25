@@ -44,7 +44,7 @@ test("the hide-settings attribute follows the phone width", () => {
 	assert.match(CLIENT, /const onPhone = phone\(\);/, "decorateFast does not ask the device");
 	assert.match(
 		CLIENT,
-		/document\.documentElement\.toggleAttribute\("data-rdsh-hide-settings", !hideListDisabled && narrow\(\)\);/,
+		/document\.documentElement\.toggleAttribute\("data-rdsh-hide-settings", onPhone && !hideListDisabled\);/,
 		"the settings-hiding attribute is not width-gated",
 	);
 	assert.match(CLIENT, /html\[data-rdsh-hide-settings\] \[data-rdsh-setting-hidden\]/);
@@ -57,7 +57,9 @@ test("label rewrites and the plus hijack follow phone()", () => {
 	const sidebar = functionBody("decorateSidebarSettingsRow");
 	assert.match(sidebar, /if \(!phone\(\)\) \{/, "the sidebar Settings row is not phone-gated");
 	assert.match(sidebar, /removeAttribute\("data-rdsh-more-row"\)/, "leaving the phone layout leaves the account row hidden");
-	assert.match(functionBody("decorateComposer"), /if \(phone\(\)\) \{/, "the composer label is not phone-gated");
+	const composer = functionBody("decorateComposer");
+	assert.match(composer, /if \(!narrow\(\)\) \{/, "the composer decoration is not phone-gated");
+	assert.match(composer, /clearComposerHooks\(\)/, "leaving the phone layout does not restore the stock composer");
 	assert.match(functionBody("onMouseDownCapture"), /if \(!phone\(\)\) return;/, "the mousedown guard is not phone-gated");
 	assert.match(functionBody("onClickCapture"), /addButtonOf\(target\) !== null && phone\(\)/, "the + hijack is not phone-gated");
 });

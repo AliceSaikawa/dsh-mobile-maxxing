@@ -644,26 +644,42 @@ test("the detail popover dismisses inside/outside/Escape and dispose leaves noth
 	assert.equal(removedHandlers.some(([, handler]) => handler === key), true, "dispose leaked the Escape listener");
 });
 
-test("a wide desktop still gets the session colour frame hook", () => {
-	const frames = [];
-	const row = element();
-	row.setAttribute("data-row-key", "session:s1");
-	let frameColor = null;
-	row.style = { setProperty(name, value) { if (name === "--rdsh-session-frame") frameColor = value; }, removeProperty() {} };
-	const booted = bootClient({
-		narrow: false,
-		frames,
-		storage: { "rdsh-mobile-ux:session-frames": JSON.stringify({ s1: "#ff6b6b" }) },
-		configureDocument(doc) {
-			doc.querySelectorAll = (selector) => (selector === '[data-row-key^="session:"]' ? [row] : []);
-			doc.querySelector = () => null;
-		},
-	});
-	for (let index = 0; index < 10 && frames.length > 0; index += 1) frames.shift()();
-	assert.equal(row.hasAttribute("data-rdsh-session"), true, "the desktop row was not decorated");
-	assert.equal(row.hasAttribute("data-rdsh-session-frame"), true, "the desktop colour frame hook was not generated");
-	assert.equal(frameColor, "#ff6b6b", "the frame colour was not written");
-	booted.disposeAll();
+test("the session colour frame is a phone-only hook", () => {
+	// #44: the frame is phone layout now. A wide window must leave the row
+	// exactly as upstream rendered it; 390px paints the chosen colour.
+	const frameRow = (narrow) => {
+		const frames = [];
+		const row = element();
+		row.setAttribute("data-row-key", "session:s1");
+		let frameColor = null;
+		row.style = {
+			setProperty(name, value) { if (name === "--rdsh-session-frame") frameColor = value; },
+			removeProperty(name) { if (name === "--rdsh-session-frame") frameColor = null; },
+		};
+		const booted = bootClient({
+			narrow,
+			frames,
+			storage: { "rdsh-mobile-ux:session-frames": JSON.stringify({ s1: "#ff6b6b" }) },
+			configureDocument(doc) {
+				doc.querySelectorAll = (selector) => (selector === '[data-row-key^="session:"]' ? [row] : []);
+				doc.querySelector = () => null;
+			},
+		});
+		for (let index = 0; index < 20 && frames.length > 0; index += 1) frames.shift()();
+		return { row, frameColor, booted };
+	};
+
+	const wide = frameRow(false);
+	assert.equal(wide.row.hasAttribute("data-rdsh-session"), false, "a desktop row was decorated");
+	assert.equal(wide.row.hasAttribute("data-rdsh-session-frame"), false, "a desktop row got the phone frame hook");
+	assert.equal(wide.frameColor, null, "a desktop row got the frame colour");
+	wide.booted.disposeAll();
+
+	const phone = frameRow(true);
+	assert.equal(phone.row.hasAttribute("data-rdsh-session"), true, "the phone row was not decorated");
+	assert.equal(phone.row.hasAttribute("data-rdsh-session-frame"), true, "the phone colour frame hook was not generated");
+	assert.equal(phone.frameColor, "#ff6b6b", "the phone frame colour was not written");
+	phone.booted.disposeAll();
 });
 
 test("a rightward swipe closes an open right panel from the left edge too", () => {

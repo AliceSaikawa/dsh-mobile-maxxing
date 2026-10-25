@@ -248,11 +248,23 @@ test("the device theme never writes the shared preference", () => {
 // has to stay inside the phone query or a desktop session looks like a phone.
 // ---------------------------------------------------------------------------
 
-/** Both `const CSS = \`…\`` blocks, with the query interpolated in. */
+/** One `const NAME = \`…\`;` template, with the query interpolated in. */
+function cssTemplate(name) {
+	const tick = String.fromCharCode(96);
+	const match = CLIENT.match(new RegExp(`const ${name} = ${tick}([\\s\\S]*?)${tick};\\n`));
+	assert.ok(match, `${name} exists`);
+	return match[1].replace(/\$\{NARROW_QUERY\}/g, "(max-width: 767px)");
+}
+
+/**
+ * Both stylesheets as the browser receives them: the PWA shell, and the phone
+ * half wrapped mechanically by `phoneStyles()`.
+ */
 function cssBlocks() {
-	const blocks = [...CLIENT.matchAll(/const CSS = `([\s\S]*?)`;\n/g)].map((match) => match[1]);
-	assert.ok(blocks.length >= 2, "expected the shell and the layout stylesheets");
-	return blocks.map((css) => css.replace(/\$\{NARROW_QUERY\}/g, "(max-width: 767px)"));
+	const shell = cssTemplate("CSS");
+	const device = cssTemplate("CSS_DEVICE");
+	const phone = cssTemplate("CSS_PHONE");
+	return [shell, `${device}\n@media (max-width: 767px) {\n${phone}\n}`];
 }
 
 /**
@@ -299,18 +311,16 @@ function functionHead(name, length = 900) {
 test("upstream hooks are styled only inside the phone query", () => {
 	// The report behind this test: on a desktop, running sessions showed the
 	// phone ring, the open row was painted with a hard-coded #232324, image
-	// previews were darkened and cropped. Those rules used to sit outside the
-	// media block. The safe-area rules are the only exception: they key off
-	// `env()` values, which are zero on a desktop. The hide-list rules are the
-	// second: their attribute is only written at phone width, so the attribute
-	// itself is the gate. The session colour frame is the third: the reference
-	// build paints it on desktop too.
+	// previews were darkened and cropped. #44 makes the boundary explicit: a
+	// desktop keeps upstream's paint, including no session colour frame.
+	// The safe-area rules are the only exception: they key off `env()` values,
+	// which are zero on a desktop. The hide-list rules are gated by an
+	// attribute that is only written at phone width, and they live in the
+	// phone half as well.
 	const allow = [
 		/^html\[data-rdsh-safe-(top|bottom|left|right)\]/,
 		/^html\[data-rdsh-native-gap\]/,
 		/^html\[data-dsh-mobile-maxxing=/,
-		/^html\[data-rdsh-hide-settings\]/,
-		/^\[data-rdsh-session-frame\]$/,
 	];
 	const phone = (at) => at.some((head) => /max-width:\s*767px/.test(head));
 	const leaked = [];
@@ -361,21 +371,28 @@ test("Enter follows the phone width, as in the reference build", () => {
 });
 
 test("panel-wide decorations stay off the desktop", () => {
-	// Both of these reach across upstream UI: the stats dock opens the context
-	// panel to read a number, and the lightbox injects a crop button.
-	assert.match(functionHead("decorateStatsDock", 500), /if \(!narrow\(\)\) return;/, "decorateStatsDock is not phone-gated");
-	assert.match(functionHead("decorateLightbox", 400), /if \(!narrow\(\)\) return;/, "decorateLightbox is not phone-gated");
+	// Both of these reach across upstream UI: the stats dock reads a number
+	// from upstream buttons and the lightbox injects a crop button. A wide
+	// window must also undo what a narrower pass left behind.
+	const stats = functionHead("decorateStatsDock", 700);
+	assert.match(stats, /if \(!narrow\(\)\) \{/, "decorateStatsDock is not phone-gated");
+	assert.match(stats, /clearOwnedAttribute\("data-rdsh-stat-text"\)/, "leaving the phone leaves the stats hook");
+	const lightbox = functionHead("decorateLightbox", 700);
+	assert.match(lightbox, /if \(!narrow\(\)\) \{/, "decorateLightbox is not phone-gated");
+	assert.match(lightbox, /clearLightboxHooks\(\)/, "leaving the phone leaves the crop button");
 });
 
-test("leaving the phone layout removes its hooks, while desktop frames stay", () => {
+test("leaving the phone layout removes its hooks, including the colour frame", () => {
 	// Attributes survive a resize on their own: the stylesheet stops applying
 	// but the DOM keeps claiming a row is running, and the header title keeps
-	// a hook whose sheen no longer exists.
+	// a hook whose sheen no longer exists. #44 makes the session colour frame
+	// a phone hook too, so it is stripped with the rest and its CSS lives in
+	// the phone stylesheet.
 	assert.match(CLIENT, /function clearSessionRowHooks\(\)/, "no row cleanup");
 	assert.match(CLIENT, /function clearPhoneHooks\(\)/, "no header/typing cleanup");
 	assert.match(
 		CLIENT,
-		/if \(!media\.matches\) \{\s*\n\s*resetGestures\(\);\s*\n\s*clearPhoneHooks\(\);/,
+		/const applyWidthBoundary = \(\) => \{[\s\S]{0,600}?if \(active\) \{[\s\S]{0,500}?\} else \{\s*\n\s*clearPhoneHooks\(\);/,
 		"a resize to desktop keeps the phone hooks",
 	);
 	assert.match(CLIENT, /"data-rdsh-sidebar-toggle"/, "the sidebar toggle tag is not cleaned up");
@@ -383,10 +400,18 @@ test("leaving the phone layout removes its hooks, while desktop frames stay", ()
 	assert.match(toggle, /if \(!narrow\(\)\)/, "the sidebar toggle is tagged on a desktop");
 	assert.match(toggle, /\[data-slot="sidebar"\]/, "the sidebar toggle search is not bounded by its slot");
 	assert.match(toggle, /button\[aria-label="Open sidebar"\], button\[aria-label="Collapse sidebar"\]/, "the toggle action label is not used");
-	// The reference decorates rows at every width, so the desktop colour frame
-	// exists as a hook and is painted by a rule outside the phone query.
-	assert.match(CLIENT, /^\s+decorateSessionRows\(\);\s*$/m, "session rows are no longer decorated on desktop");
-	assert.match(CLIENT, /^\[data-rdsh-session-frame\] \{\s*\n\s*box-shadow: inset 0 0 0 2px var\(--rdsh-session-frame\) !important;/m, "the frame hook has no desktop style");
+	// Session rows are still visited at every width, but the function only
+	// writes the phone hooks (frame included) while narrow.
+	assert.match(CLIENT, /^\s+decorateSessionRows\(\);\s*$/m, "session rows are no longer visited on desktop");
+	assert.match(
+		CLIENT,
+		/function decorateSessionRows\(\) \{\s*\n\s*\/\/[^\n]*\n(?:\s*\/\/[^\n]*\n)*\s*if \(!narrow\(\)\) \{\s*\n\s*if \(rowHooksActive\) clearSessionRowHooks\(\);\s*\n\s*return;\s*\n\s*\}/,
+		"the desktop pass does not clear the phone row hooks",
+	);
+	const frame = cssBlocks().flatMap((css) => cssRules(css)).find((rule) => rule.head === "[data-rdsh-session-frame]");
+	assert.ok(frame, "the session frame rule is missing");
+	assert.ok(frame.at.some((head) => /max-width:\s*767px/.test(head)), "the session frame rule is outside the phone query");
+	assert.match(CLIENT, /"data-rdsh-session-frame",/, "the frame hook is not in the cleanup list");
 });
 
 test("the live-speed poller only runs on a phone", () => {
@@ -646,13 +671,21 @@ test("a right-panel swipe closes it even from the left edge", () => {
 	assert.match(body, /target\.closest\("input, textarea, \[contenteditable=true\], \.xterm/, "the input/xterm exclusion is gone");
 });
 
-test("the reference viewport zoom lock is restored", () => {
+test("the viewport zoom lock is phone-only and restorable", () => {
+	// The legacy contract is the phone lock, but #44 keeps a desktop's own
+	// viewport: the value this page shipped with is captured before the first
+	// override and put back on 768px (or dispose).
+	const body = functionHead("enforceNoZoomViewport", 1600);
+	assert.match(body, /if \(!narrow\(\)\) \{\s*\n\s*releaseViewportLock\(\);/, "the lock is applied on a desktop");
 	assert.match(
-		CLIENT,
+		body,
 		/const content = "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover";/,
 		"the fixed viewport string is gone",
 	);
-	assert.match(CLIENT, /if \(meta\.getAttribute\("content"\) !== content\) meta\.setAttribute\("content", content\);/, "the viewport is not applied");
+	assert.match(body, /if \(meta\.getAttribute\("content"\) !== content\) meta\.setAttribute\("content", content\);/, "the viewport is not applied");
+	assert.match(CLIENT, /viewportBaseline = \{ content: viewportMetaOwned \? null : meta\.getAttribute\("content"\) \};/, "the original content is not captured");
+	assert.match(CLIENT, /meta\.setAttribute\("content", baseline\.content\)/, "the original content is not restored");
+	assert.match(CLIENT, /if \(viewportMetaOwned\) meta\.remove\(\);/, "a meta this module created is not removed");
 	assert.match(CLIENT, /input, textarea, \[contenteditable="true"\] \{\s*\n\s*font-size: 16px !important;/, "the 16px focus guard is gone");
 });
 

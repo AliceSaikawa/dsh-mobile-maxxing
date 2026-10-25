@@ -33,7 +33,8 @@ import { createHash } from "node:crypto";
 import { applyNotify, normalizeNotifyConfig } from "./notify/host.js";
 import { apply as applyMobileUx } from "./lib/mobile-ux.js";
 import { apply as applySessionIdCopy } from "./lib/session-id-copy.js";
-import { COPY, PROBES, copyFor, serviceWorkerCopy } from "./lib/copy.js";
+import { COPY, copyFor, serviceWorkerCopy } from "./lib/copy.js";
+import { copyTable } from "./lib/copy-source.js";
 import { MANIFEST_FILE, MODE_GLOBAL, earlyModeScript } from "./lib/device-mode.js";
 import { readFile } from "node:fs/promises";
 
@@ -218,12 +219,13 @@ function scriptJson(value) {
  * @param {boolean} parts.copy - include `__RDSH_PWA_COPY__`.
  * @param {boolean} parts.probes - include `__RDSH_PWA_PROBES__`.
  * @param {string} [parts.lang] - include `__RDSH_PWA_LANG__` with this value.
+ * @param {object} table - the dictionary snapshot for this document.
  * @returns {string} a script tag, or "" when nothing is missing.
  */
-function payloadScript({ copy, probes, lang }) {
+function payloadScript({ copy, probes, lang }, table) {
 	const assignments = [];
-	if (copy) assignments.push(`globalThis.__RDSH_PWA_COPY__=${scriptJson(COPY)}`);
-	if (probes) assignments.push(`globalThis.__RDSH_PWA_PROBES__=${scriptJson(PROBES)}`);
+	if (copy) assignments.push(`globalThis.__RDSH_PWA_COPY__=${scriptJson(table.COPY)}`);
+	if (probes) assignments.push(`globalThis.__RDSH_PWA_PROBES__=${scriptJson(table.PROBES)}`);
 	if (typeof lang === "string" && lang !== "") assignments.push(`globalThis.__RDSH_PWA_LANG__=${scriptJson(lang)}`);
 	return assignments.length === 0 ? "" : `<script>${assignments.join(";")}<\/script>`;
 }
@@ -254,6 +256,12 @@ function insertInHead(html, fragment) {
  * shell's `document.lang`, so the plugin UI follows the profile without
  * rewriting the shell document.
  *
+ * The dictionary is read per call, not captured at import time: `lib/copy.js`
+ * is edited while the host runs, and a wording fix has to reach the next page
+ * without a restart. The reader caches on the file's mtime, so an unchanged
+ * file costs one `stat`; the fallback is the snapshot this process started
+ * with, so a save halfway through can never produce a half document.
+ *
  * @param {string} html - the index document the Web server rendered.
  * @param {object} [config] - profile config for this plugin.
  * @returns {string} the decorated document.
@@ -261,11 +269,14 @@ function insertInHead(html, fragment) {
 export function decorateIndex(html, config) {
 	if (typeof html !== "string" || html === "") return html;
 	const cfg = normalizeConfig(config);
+	// One snapshot per response: the copy and the probes must describe the same
+	// file version, and the file can change between two requests.
+	const strings = copyTable();
 	const payload = payloadScript({
 		copy: !COPY_ASSIGNMENT.test(html),
 		probes: !PROBES_ASSIGNMENT.test(html),
 		lang: LANG_ASSIGNMENT.test(html) ? undefined : cfg.lang,
-	});
+	}, strings);
 	const mode = MODE_ASSIGNMENT.test(html) ? "" : earlyModeScript(cfg.appleStatusBarStyle);
 	if (html.includes(INDEX_MARKER)) {
 		const missing = `${mode}${payload}`;
@@ -436,6 +447,9 @@ export function apply(ctx, config) {
 			}));
 		}
 
+		// The tap is synchronous by contract, so the decoration re-reads
+		// `lib/copy.js` itself (mtime-cached) instead of capturing the table at
+		// activation: an edit reaches the next document without a restart.
 		disposes.push(webServer.tapIndex((html) => decorateIndex(html, cfg)));
 
 		return () => {

@@ -9398,9 +9398,7 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   /* Overlay UI belongs on top of the drawer's own chrome, not across it. */
   html[data-rdsh-drawer="open"] .dsh-mobile-maxxing-install,
   html[data-rdsh-drawer="open"] .dsh-mobile-maxxing-card { display: none; }
-  /* The right sidebar menu owns the screen; the floating hamburger would sit
-     on top of it (and keep its hover state). */
-  html[data-rdsh-rightpanel-open] .rdsh-mux-fab { display: none !important; }
+  /* Keep the hamburger in place at z-index 40; the right panel overlays it at 60. */
 
   /* Sessions: give the label the room the row actions used to take. */
   [data-rdsh-session] { padding-inline: 6px !important; }

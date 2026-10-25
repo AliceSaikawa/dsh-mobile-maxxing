@@ -2108,6 +2108,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       root.removeAttribute("data-rdsh-native-gap");
       root.style.removeProperty("--rdsh-safe-top");
       root.style.removeProperty("--rdsh-safe-bottom");
+      root.style.removeProperty("--rdsh-safe-left");
+      root.style.removeProperty("--rdsh-safe-right");
       root.style.removeProperty("--rdsh-native-gap-px");
     }
 
@@ -2141,7 +2143,20 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       }
       root.style.setProperty("--rdsh-safe-top", `${top}px`);
       root.style.setProperty("--rdsh-safe-bottom", `${bottom}px`);
+      root.style.setProperty("--rdsh-safe-left", `${left}px`);
+      root.style.setProperty("--rdsh-safe-right", `${right}px`);
       root.style.setProperty("--rdsh-native-gap-px", `${nativeGap ? Math.max(0, Math.round(screenHeight - window.innerHeight)) : 0}px`);
+    }
+
+    /**
+     * One measured safe-area edge, in CSS pixels. JS cannot read env(), and the
+     * popovers clamp their own position, so they use the same values
+     * measureSafeArea() read. A desktop (or a device that reports nothing)
+     * gives 0 and the old 12px gutters are unchanged.
+     */
+    function safeInset(edge) {
+      const value = parseFloat(document.documentElement.style.getPropertyValue(`--rdsh-safe-${edge}`));
+      return Number.isFinite(value) && value > 0 ? value : 0;
     }
 
     /** The host can still turn the standard hide list off; the browser cannot. */
@@ -5312,10 +5327,14 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       menu.append(cancel);
       document.body.append(menu);
       const rect = row.getBoundingClientRect();
-      const width = Math.min(260, window.innerWidth - 24);
+      // #59: keep the long-press menu inside the measured safe zone.
+      const left = safeInset("left");
+      const right = safeInset("right");
+      const floor = safeInset("top") + 12;
+      const width = Math.min(260, window.innerWidth - left - right - 24);
       menu.style.width = `${width}px`;
-      menu.style.left = `${Math.round(Math.max(12, Math.min(rect.left, window.innerWidth - width - 12)))}px`;
-      menu.style.top = `${Math.round(Math.max(12, rect.top - 8 - menu.getBoundingClientRect().height))}px`;
+      menu.style.left = `${Math.round(Math.max(left + 12, Math.min(rect.left, window.innerWidth - right - width - 12)))}px`;
+      menu.style.top = `${Math.round(Math.max(floor, rect.top - 8 - menu.getBoundingClientRect().height))}px`;
       queueMenu = menu;
       attachQueueDismiss();
     }
@@ -6111,12 +6130,15 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const rect = typeof hit.anchor.getBoundingClientRect === "function"
         ? hit.anchor.getBoundingClientRect()
         : { left: 12, top: 12, bottom: 12, right: 12 };
-      const width = Math.min(240, Math.max(160, window.innerWidth - 24));
+      const insetLeft = safeInset("left");
+      const insetRight = safeInset("right");
+      const floor = safeInset("top") + 12;
+      const width = Math.min(240, Math.max(160, window.innerWidth - insetLeft - insetRight - 24));
       menu.style.width = `${width}px`;
       const height = typeof menu.getBoundingClientRect === "function" ? menu.getBoundingClientRect().height : 0;
       let top = rect.bottom + 6;
-      if (height > 0 && top + height > window.innerHeight - 12) top = Math.max(12, rect.top - height - 6);
-      const left = Math.min(Math.max(12, rect.left), Math.max(12, window.innerWidth - width - 12));
+      if (height > 0 && top + height > window.innerHeight - 12) top = Math.max(floor, rect.top - height - 6);
+      const left = Math.min(Math.max(insetLeft + 12, rect.left), Math.max(insetLeft + 12, window.innerWidth - insetRight - width - 12));
       menu.style.top = `${Math.round(top)}px`;
       menu.style.left = `${Math.round(left)}px`;
       filesMenu = { node: menu, anchor: hit.anchor, items };
@@ -7305,13 +7327,17 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       pop.append(head, body);
       document.body.append(pop);
       const rect = anchor.getBoundingClientRect();
-      const width = Math.min(360, window.innerWidth - 24);
+      // #59: the status bar sits above the page; keep the popover below it.
+      const left = safeInset("left");
+      const right = safeInset("right");
+      const floor = safeInset("top") + 12;
+      const width = Math.min(360, window.innerWidth - left - right - 24);
       pop.style.width = `${width}px`;
       const height = pop.getBoundingClientRect().height;
       let top = rect.top - height - 8;
-      if (top < 12) top = Math.min(window.innerHeight - height - 12, rect.bottom + 8);
-      pop.style.top = `${Math.round(Math.max(12, top))}px`;
-      pop.style.left = `${Math.round(Math.max(12, Math.min(rect.left, window.innerWidth - width - 12)))}px`;
+      if (top < floor) top = Math.min(window.innerHeight - height - 12, rect.bottom + 8);
+      pop.style.top = `${Math.round(Math.max(floor, top))}px`;
+      pop.style.left = `${Math.round(Math.max(left + 12, Math.min(rect.left, window.innerWidth - right - width - 12)))}px`;
       const dismiss = (event) => {
         if (!pop.contains(event.target)) closeDetailPopover();
       };
@@ -7339,10 +7365,14 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const rect = crumbs.getBoundingClientRect();
       const header = document.querySelector("header[data-window-drag]");
       const belowHeader = header === null ? rect.bottom : header.getBoundingClientRect().bottom;
-      popover.style.top = `${Math.round(Math.max(rect.bottom + 8, belowHeader + 4))}px`;
-      const width = Math.min(320, window.innerWidth - 24);
+      // #59: the status bar is part of the page inset, not of the header.
+      const left = safeInset("left");
+      const right = safeInset("right");
+      const floor = safeInset("top") + 12;
+      popover.style.top = `${Math.round(Math.max(floor, rect.bottom + 8, belowHeader + 4))}px`;
+      const width = Math.min(320, window.innerWidth - left - right - 24);
       popover.style.width = `${width}px`;
-      popover.style.left = `${Math.round(Math.max(12, Math.min(rect.left, window.innerWidth - width - 12)))}px`;
+      popover.style.left = `${Math.round(Math.max(left + 12, Math.min(rect.left, window.innerWidth - right - width - 12)))}px`;
       document.body.append(popover);
       const dismiss = () => popover.remove();
       setTimeout(dismiss, 2600);
@@ -9233,8 +9263,9 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
 }
 
 .rdsh-mux-live-speed { color: var(--dsw-alias-label-secondary, #a1a1aa); font-size: 11px; white-space: nowrap; }
+/* #59: the drawer button follows the notch inset instead of a fixed 8px. */
 .rdsh-mux-fab {
-  position: fixed; left: 8px; top: calc(env(safe-area-inset-top, 0px) + 8px);
+  position: fixed; left: calc(env(safe-area-inset-left, 0px) + 8px); top: calc(env(safe-area-inset-top, 0px) + 8px);
   width: 40px; height: 40px; border: 0; border-radius: 12px; z-index: 40;
   display: none; align-items: center; justify-content: center;
   color: var(--dsw-alias-label-primary, #f9fafb);
@@ -9436,7 +9467,10 @@ html[data-rdsh-anim="breathing"] [data-rdsh-running] [data-rdsh-session-title] {
 html[data-rdsh-anim="outline"] [data-rdsh-running] [data-rdsh-session-title]::before,
 html[data-rdsh-anim="outline"] [data-rdsh-running] [data-rdsh-session-title]::after { display: none !important; }
 html[data-rdsh-anim="outline"] [data-rdsh-ring-row] {
-  --rdsh-ring-fill: #1b1b1c;
+  /* #58: the fill is a surface, not an accent, so it comes from the palette.
+     The hex fallbacks are the fixed values this block shipped with, which is
+     still what a profile without ui-theme paints. */
+  --rdsh-ring-fill: var(--dsw-alias-bg-layer-2, #1b1b1c);
   position: relative !important;
   isolation: isolate;
   overflow: hidden;
@@ -9453,14 +9487,14 @@ html[data-rdsh-anim="outline"] [data-rdsh-ring-row]::before {
   z-index: 0;
   background: conic-gradient(
     from 0deg,
-    rgba(122,170,255,0) 0deg,
-    rgba(122,170,255,0) 215deg,
-    rgba(122,170,255,.14) 235deg,
-    rgba(140,185,255,.68) 268deg,
-    #cfe0ff 292deg,
-    rgba(122,170,255,.3) 315deg,
-    rgba(122,170,255,0) 336deg,
-    rgba(122,170,255,0) 360deg
+    transparent 0deg,
+    transparent 215deg,
+    color-mix(in srgb, var(--dsw-alias-link, #7aaaff) 14%, transparent) 235deg,
+    color-mix(in srgb, var(--dsw-alias-link, #7aaaff) 68%, transparent) 268deg,
+    color-mix(in srgb, var(--dsw-alias-link, #7aaaff) 55%, var(--dsw-alias-label-primary, #f9fafb)) 292deg,
+    color-mix(in srgb, var(--dsw-alias-link, #7aaaff) 30%, transparent) 315deg,
+    transparent 336deg,
+    transparent 360deg
   );
   transform: translate(-50%, -50%) rotate(0deg);
   animation: rdsh-ring-rotate 2.8s linear infinite;
@@ -9481,23 +9515,23 @@ html[data-rdsh-anim="outline"] [data-rdsh-ring-row] > * {
 }
 /* Yellow only while a running session is also the open one. */
 html[data-rdsh-anim="outline"] [data-rdsh-ring-row][aria-selected="true"] {
-  --rdsh-ring-fill: #2d2d2e;
+  --rdsh-ring-fill: var(--dsw-alias-bg-layer-3, #2d2d2e);
 }
 html[data-rdsh-anim="outline"] [data-rdsh-ring-row][aria-selected="true"]::before {
   background: conic-gradient(
     from 0deg,
-    rgba(255,209,102,0) 0deg,
-    rgba(255,209,102,0) 215deg,
-    rgba(255,209,102,.14) 235deg,
-    rgba(255,224,130,.68) 268deg,
-    #fff3c4 292deg,
-    rgba(255,209,102,.3) 315deg,
-    rgba(255,209,102,0) 336deg,
-    rgba(255,209,102,0) 360deg
+    transparent 0deg,
+    transparent 215deg,
+    color-mix(in srgb, var(--dsw-alias-state-warn-primary, #ffd166) 14%, transparent) 235deg,
+    color-mix(in srgb, var(--dsw-alias-state-warn-primary, #ffd166) 68%, transparent) 268deg,
+    color-mix(in srgb, var(--dsw-alias-state-warn-primary, #ffd166) 55%, var(--dsw-alias-label-primary, #f9fafb)) 292deg,
+    color-mix(in srgb, var(--dsw-alias-state-warn-primary, #ffd166) 30%, transparent) 315deg,
+    transparent 336deg,
+    transparent 360deg
   );
 }
 html[data-rdsh-anim="outline"] [data-rdsh-ring-row]:hover:not([aria-selected="true"]) {
-  --rdsh-ring-fill: #242425;
+  --rdsh-ring-fill: var(--dsw-alias-interactive-bg-hover-solid, #242425);
 }
 html[data-rdsh-anim="outline"] [data-rdsh-ring-row]:not([data-rdsh-session-frame]) {
   box-shadow: none !important;
@@ -9505,12 +9539,12 @@ html[data-rdsh-anim="outline"] [data-rdsh-ring-row]:not([data-rdsh-session-frame
 /* An idle session that is merely open: a plain frame and a slightly lighter
    fill, with no sweep, so "open" and "working" stay distinguishable. */
 html[data-rdsh-anim="outline"] [data-rdsh-open-row]:not([data-rdsh-ring-row]) {
-  background: #232324 !important;
-  box-shadow: inset 0 0 0 1px rgba(255,255,255,.2) !important;
+  background: var(--dsw-alias-bg-layer-1, #232324) !important;
+  box-shadow: inset 0 0 0 1px var(--dsw-alias-border-l2, rgba(255,255,255,.2)) !important;
   border-radius: 12px !important;
 }
 html[data-rdsh-anim="outline"] [data-rdsh-open-row]:not([data-rdsh-ring-row]):hover {
-  background: #29292b !important;
+  background: var(--dsw-alias-interactive-bg-hover-solid, #29292b) !important;
 }
 /* A row with a user-chosen colour frame keeps that frame: only the fill moves. */
 html[data-rdsh-anim="outline"] [data-rdsh-open-row][data-rdsh-session-frame]:not([data-rdsh-ring-row]) {
@@ -9660,6 +9694,10 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
     box-sizing: border-box;
     padding-top: env(safe-area-inset-top, 0px);
     padding-bottom: env(safe-area-inset-bottom, 0px);
+    /* #59: a landscape notch can sit on either side; the drawer's own padding
+       keeps its rows clear of it (a fixed layer ignores #root's padding). */
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
     width: 280px !important; max-width: 86vw; height: 100dvh !important; min-height: 100dvh;
     z-index: 50; overflow: hidden;
     transform: translateX(-104%);
@@ -9927,7 +9965,7 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   [data-shortcut-modal="settings"] [class*="VOzbGW_close"] {
     position: fixed !important;
     top: calc(env(safe-area-inset-top, 0px) + 12px) !important;
-    right: 12px !important;
+    right: calc(env(safe-area-inset-right, 0px) + 12px) !important;
     width: 36px !important; height: 36px !important;
     padding: 0 !important;
     display: grid !important; place-items: center !important;
@@ -9982,6 +10020,9 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
     flex-direction: column;
     padding-top: env(safe-area-inset-top, 0px);
     padding-bottom: env(safe-area-inset-bottom, 0px);
+    /* #59: the sheet is viewport-anchored, so it pads the notch sides itself. */
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
   }
   [data-shortcut-modal="settings"] > nav {
     width: 100%; padding: 16px 12px 0; gap: 8px;
@@ -10314,8 +10355,12 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
        this layer only has to stay in the sheet's own context. */
     isolation: isolate;
     box-sizing: border-box;
-    padding-top: 0 !important;
+    /* #59: the sheet is viewport-anchored. A zero top put the tab strip and the
+       path under the status bar, and the sides ran under a landscape notch. */
+    padding-top: env(safe-area-inset-top, 0px) !important;
     padding-bottom: calc(env(safe-area-inset-bottom, 0px) + var(--rdsh-native-gap-px, 0px)) !important;
+    padding-left: env(safe-area-inset-left, 0px) !important;
+    padding-right: env(safe-area-inset-right, 0px) !important;
   }
   /* The preview's close control is drawn as a panel glyph, which reads as
      "collapse this pane" rather than "leave the preview". Swap it for an X,
@@ -10425,6 +10470,12 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
    the status bar. */
 html[data-rdsh-safe-top] #root { box-sizing: border-box; padding-top: env(safe-area-inset-top, 0px); }
 html[data-rdsh-safe-bottom] #root { box-sizing: border-box; padding-bottom: env(safe-area-inset-bottom, 0px); }
+/* #59: a landscape notch lands on the left or the right. The header, the
+   transcript and the composer are in flow inside #root, so these two rules are
+   what keeps them out of the camera housing; the fixed layers carry their own
+   insets because padding on #root cannot reach them. */
+html[data-rdsh-safe-left] #root { box-sizing: border-box; padding-left: env(safe-area-inset-left, 0px); }
+html[data-rdsh-safe-right] #root { box-sizing: border-box; padding-right: env(safe-area-inset-right, 0px); }
 /* iOS 26 standalone native gap: the home indicator is in the unpainted strip
    below the web view, so an inner bottom safe-area pad only widens the blank. */
 html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !important; }

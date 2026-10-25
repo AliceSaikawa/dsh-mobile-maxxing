@@ -33,6 +33,15 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * The language chosen for this device's mobile UI, or "" when this device
+     * follows the shared/browser locale. Set only after the desktop gate in the
+     * mobile half; the copy lookup above must see it before the host global.
+     */
+    let localDisplayLanguage = "";
+    /** The shared DSH locale, tracked so "System" copy follows the shell. */
+    let localDisplayHostLanguage = "";
+
+    /**
      * The language host injected for this page, then the document language,
      * then English.
      *
@@ -44,6 +53,18 @@ window.__ModuleLoader__.load({
      * inject the global.
      */
     function currentLang() {
+      // A device-local display language wins. If the selected DSH locale has
+      // no copy pack in this package (for example zh), render English rather
+      // than inventing a partial translation; the DSH UI itself still follows
+      // the selected locale.
+      const local = knownLang(localDisplayLanguage);
+      if (local !== "") return local;
+      if (localDisplayLanguage !== "") return "en";
+      // With a locale service, "System" means the shared DSH UI language, not
+      // the host's independent ja-by-default copy global.
+      const host = knownLang(localDisplayHostLanguage);
+      if (host !== "") return host;
+      if (localDisplayHostLanguage !== "") return "en";
       return knownLang(globalThis.__RDSH_PWA_LANG__)
         || knownLang(document.documentElement.lang)
         || "en";
@@ -1444,6 +1465,15 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     /** Browser-local theme choice; also read while the store initialises. */
     const DEVICE_THEME_KEY = "dsh-mobile-maxxing:device-theme";
+    /** Browser-local display choices. Never a Host setting and never synced. */
+    const LOCAL_DISPLAY_KEY = "rdsh-mobile-ux:local-display";
+    /** The three published theme font roles and their accepted integer ranges. */
+    const LOCAL_FONT_SPECS = {
+      text: { min: 10, max: 22, default: 14, variable: "--dsh-content-font-size" },
+      code: { min: 10, max: 16, default: 11, variable: "--dsh-code-font-size" },
+      terminal: { min: 10, max: 20, default: 13, variable: "--dsh-terminal-font-size" },
+    };
+    const LOCAL_FONT_ROLES = ["text", "code", "terminal"];
     const DEVICE_THEME_MODES = ["", "light", "dark", "system"];
     // The device-theme choices are rendered through the copy table so a future
     // Japanese pack can translate them without touching this file.
@@ -1475,6 +1505,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       permissionOptions: [],
       permissionSharedDefault: "",
       permissionError: "",
+      localDisplay: readLocalDisplaySettings(),
     };
     const subscribers = new Set();
     function emit(patch) {
@@ -1944,6 +1975,342 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           releaseDeviceTheme();
         };
       }, "rdsh-mobile-ux: device theme");
+    }
+
+    // ---------------------------------------------------------------------
+    // Device-local display: font sizes and UI language.
+    //
+    // Both controls are deliberately browser-local. The theme and locale
+    // services expose only shared writers (`setFontSize` / `setLocale`), so
+    // this block never calls them: it projects a local snapshot onto each
+    // service for the lifetime of the mobile page and restores the Host
+    // snapshot on dispose. `theme.getTheme()` / `locale.getSnapshot()` remain
+    // the public read API; the local projection is a runtime/DOM override, not
+    // a durable setting and not a remote call.
+    // ---------------------------------------------------------------------
+    let localDisplayRuntime = null;
+
+    /** Read only this browser's display choices; malformed data means "follow Host". */
+    function readLocalDisplaySettings() {
+      const empty = {
+        fonts: null,
+        fontsLocal: false,
+        language: "",
+        languages: [],
+        available: { fonts: true, language: true },
+        reason: { fonts: "", language: "" },
+      };
+      try {
+        const raw = JSON.parse(localStorage.getItem(LOCAL_DISPLAY_KEY) || "null");
+        if (raw === null || typeof raw !== "object") return empty;
+        const fonts = raw.fonts;
+        const validFonts = fonts !== null && fonts !== undefined && typeof fonts === "object"
+          && LOCAL_FONT_ROLES.every((role) => {
+            const value = Number(fonts[role]);
+            const spec = LOCAL_FONT_SPECS[role];
+            return Number.isInteger(value) && value >= spec.min && value <= spec.max;
+          });
+        return {
+          fonts: validFonts ? {
+            text: Number(fonts.text),
+            code: Number(fonts.code),
+            terminal: Number(fonts.terminal),
+          } : null,
+          fontsLocal: validFonts,
+          language: typeof raw.language === "string" ? raw.language : "",
+          languages: [],
+          available: { fonts: true, language: true },
+          reason: { fonts: "", language: "" },
+        };
+      } catch (error) {
+        return empty;
+      }
+    }
+
+    /** Persist only this browser's choices. Never a settings/remote write. */
+    function writeLocalDisplaySettings(display) {
+      try {
+        localStorage.setItem(LOCAL_DISPLAY_KEY, JSON.stringify({
+          fonts: display.fontsLocal ? display.fonts : null,
+          language: display.language,
+        }));
+      } catch (error) {
+        /* private mode: the choice lasts for this page */
+      }
+    }
+
+    function clampLocalFont(role, value) {
+      const spec = LOCAL_FONT_SPECS[role];
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed)) return spec.default;
+      return Math.max(spec.min, Math.min(spec.max, Math.round(parsed)));
+    }
+
+    /** Apply one-step font changes to the local state and the local projection. */
+    function setLocalDisplayFont(role, delta) {
+      if (!LOCAL_FONT_SPECS[role] || state.localDisplay.available.fonts === false) return;
+      const current = state.localDisplay.fonts;
+      if (current === null || current === undefined) return;
+      const next = {
+        ...current,
+        [role]: clampLocalFont(role, current[role] + delta),
+      };
+      if (next[role] === current[role]) return;
+      const display = { ...state.localDisplay, fonts: next, fontsLocal: true };
+      writeLocalDisplaySettings(display);
+      emit({ localDisplay: display });
+      localDisplayRuntime?.applyTheme();
+    }
+
+    /** Select a supported locale for this browser only; "" follows the Host. */
+    function setLocalDisplayLanguage(id) {
+      const display = state.localDisplay;
+      if (display.available.language === false) return;
+      const next = typeof id === "string" ? id : "";
+      const supported = next === "" || display.languages.some((entry) => entry.id === next);
+      if (!supported) return;
+      const updated = { ...display, language: next };
+      localDisplayLanguage = next;
+      writeLocalDisplaySettings(updated);
+      emit({ localDisplay: updated });
+      localDisplayRuntime?.applyLocale();
+    }
+
+    /**
+     * Local-only projection of the theme and locale services.
+     *
+     * Public API evidence: reads use `theme.getTheme()` and
+     * `locale.getSnapshot()`; no `setFontSize`, `setFontSize` shortcut,
+     * `setLocale`, `ctx.settings`, `configForms`, `remote` or `fetch` is used.
+     * The snapshots are replaced on the service object only for this mobile
+     * page and restored by the effect cleanup. Locale listeners are notified
+     * directly (not through `locale/change`) so the native shell bridge never
+     * observes the device-local choice.
+     */
+    function attachLocalDisplay(ctx) {
+      let theme;
+      let locale;
+      try {
+        theme = typeof ctx.get === "function" ? ctx.get("theme") : undefined;
+      } catch (error) {
+        theme = undefined;
+      }
+      try {
+        locale = ctx.locale ?? (typeof ctx.get === "function" ? ctx.get("locale") : undefined);
+      } catch (error) {
+        locale = undefined;
+      }
+      const themeService = theme !== null && theme !== undefined && typeof theme.getTheme === "function" ? theme : null;
+      const localeService = locale !== null && locale !== undefined && typeof locale.getSnapshot === "function" ? locale : null;
+      let hostTheme = null;
+      let hostLocale = null;
+      try {
+        hostTheme = themeService?.getTheme() ?? null;
+      } catch (error) {
+        hostTheme = null;
+      }
+      try {
+        hostLocale = localeService?.getSnapshot() ?? null;
+      } catch (error) {
+        hostLocale = null;
+      }
+      const hostFonts = hostTheme?.fontSizes;
+      const themeUsable = themeService !== null
+        && hostFonts !== null && hostFonts !== undefined && typeof hostFonts === "object"
+        && LOCAL_FONT_ROLES.every((role) => Number.isInteger(hostFonts[role]))
+        && "snapshot" in themeService;
+      const themeReason = themeService === null
+        ? "theme-missing"
+        : (!themeUsable ? "theme-shape" : "");
+      const localeShape = localeService !== null
+        && hostLocale !== null && hostLocale !== undefined
+        && typeof hostLocale.active === "string"
+        && Array.isArray(hostLocale.locales)
+        && "snapshot" in localeService
+        && localeService.listeners !== null && localeService.listeners !== undefined
+        && typeof localeService.listeners[Symbol.iterator] === "function";
+      const options = localeShape ? localeOptionsFrom(hostLocale) : [];
+      const localeUsable = localeShape && options.length > 0;
+      const localeReason = localeService === null
+        ? "locale-missing"
+        : (!localeShape ? "locale-shape" : (options.length === 0 ? "no-locales" : ""));
+      const stored = readLocalDisplaySettings();
+      const language = localeUsable && stored.language !== "" && options.some((entry) => entry.id === stored.language)
+        ? stored.language
+        : "";
+      const fonts = stored.fonts ?? (themeUsable ? hostFonts : {
+        text: 14,
+        code: 11,
+        terminal: 13,
+      });
+      state.localDisplay = {
+        fonts,
+        fontsLocal: themeUsable && stored.fonts !== null,
+        language,
+        languages: options,
+        available: { fonts: themeUsable, language: localeUsable },
+        reason: { fonts: themeReason, language: localeReason },
+      };
+      localDisplayLanguage = language;
+      localDisplayHostLanguage = typeof hostLocale?.active === "string" ? hostLocale.active : "";
+      localDisplayRuntime = {
+        applyTheme: () => {},
+        applyLocale: () => {},
+      };
+
+      const themeEpoch = { value: 0 };
+      const localeEpoch = { value: 0 };
+      let projectingTheme = false;
+      let disposed = false;
+      const baseDocumentLang = document.documentElement.lang;
+
+      const emitTheme = (snapshot) => {
+        projectingTheme = true;
+        try {
+          ctx.emit("theme/change", snapshot);
+        } finally {
+          projectingTheme = false;
+        }
+      };
+
+      const notifyLocale = () => {
+        const listeners = localeService?.listeners;
+        if (listeners === null || listeners === undefined || typeof listeners[Symbol.iterator] !== "function") return;
+        for (const listener of [...listeners]) {
+          try {
+            listener();
+          } catch (error) {
+            /* one broken LocaleFace must not stop the rest */
+          }
+        }
+      };
+
+      const applyTheme = () => {
+        if (state.localDisplay.available.fonts !== true || themeService === null || hostTheme === null) return;
+        if (!state.localDisplay.fontsLocal) {
+          if (themeService.snapshot !== hostTheme) themeService.snapshot = hostTheme;
+          return;
+        }
+        themeEpoch.value += 1;
+        const revision = hostTheme.revision + 1000 + themeEpoch.value;
+        themeService.snapshot = Object.freeze({
+          ...hostTheme,
+          fontSizes: Object.freeze({ ...state.localDisplay.fonts }),
+          revision,
+        });
+        emitTheme(themeService.snapshot);
+      };
+
+      const applyLocale = () => {
+        if (state.localDisplay.available.language !== true || localeService === null || hostLocale === null) return;
+        const chosen = state.localDisplay.language;
+        if (chosen === "" || !state.localDisplay.languages.some((entry) => entry.id === chosen)) {
+          if (localeService.snapshot !== hostLocale) localeService.snapshot = hostLocale;
+          if (document.documentElement.lang !== baseDocumentLang) document.documentElement.lang = baseDocumentLang;
+          notifyLocale();
+          return;
+        }
+        localeEpoch.value += 1;
+        const revision = hostLocale.revision + 1000 + localeEpoch.value;
+        localeService.snapshot = Object.freeze({
+          ...hostLocale,
+          active: chosen,
+          revision,
+        });
+        document.documentElement.lang = chosen === "zh" ? "zh-CN" : chosen;
+        notifyLocale();
+      };
+
+      localDisplayRuntime = { applyTheme, applyLocale };
+      emit({ localDisplay: state.localDisplay });
+
+      ctx.effect(() => {
+        const offTheme = ctx.on("theme/change", (snapshot) => {
+          if (projectingTheme || disposed || snapshot === null || snapshot === undefined) return;
+          if (state.localDisplay.available.fonts !== true) return;
+          hostTheme = snapshot;
+          if (!state.localDisplay.fontsLocal) {
+            emit({
+              localDisplay: {
+                ...state.localDisplay,
+                fonts: snapshot.fontSizes,
+              },
+            });
+          }
+          queueMicrotask(() => {
+            if (!disposed) applyTheme();
+          });
+        });
+        const offLocale = ctx.on("locale/change", (snapshot) => {
+          if (disposed || snapshot === null || snapshot === undefined) return;
+          if (state.localDisplay.available.language !== true) return;
+          hostLocale = snapshot;
+          localDisplayHostLanguage = typeof snapshot.active === "string" ? snapshot.active : "";
+          const nextOptions = localeOptionsFrom(snapshot);
+          const chosen = state.localDisplay.language;
+          const valid = chosen === "" || nextOptions.some((entry) => entry.id === chosen);
+          if (nextOptions.length !== state.localDisplay.languages.length
+            || nextOptions.some((entry, index) => entry.id !== state.localDisplay.languages[index]?.id)) {
+            emit({ localDisplay: { ...state.localDisplay, languages: nextOptions, language: valid ? chosen : "" } });
+          }
+          if (!valid) {
+            localDisplayLanguage = "";
+            writeLocalDisplaySettings({ ...state.localDisplay, language: "" });
+          }
+          queueMicrotask(() => {
+            if (!disposed) applyLocale();
+          });
+        });
+        try {
+          applyTheme();
+          applyLocale();
+        } catch (error) {
+          console.error("[rdsh-mobile-ux] local display failed", error);
+        }
+        return () => {
+          disposed = true;
+          offTheme?.();
+          offLocale?.();
+          try {
+            if (state.localDisplay.available.fonts === true && themeService !== null && hostTheme !== null) {
+              themeService.snapshot = hostTheme;
+              emitTheme(hostTheme);
+            }
+          } catch (error) {
+            /* the theme fiber may already be gone */
+          }
+          try {
+            if (state.localDisplay.available.language === true && localeService !== null && hostLocale !== null) {
+              localeService.snapshot = hostLocale;
+              notifyLocale();
+            }
+            if (document.documentElement.lang !== baseDocumentLang) document.documentElement.lang = baseDocumentLang;
+          } catch (error) {
+            /* the locale fiber may already be gone */
+          }
+          localDisplayLanguage = "";
+          localDisplayHostLanguage = "";
+          localDisplayRuntime = null;
+        };
+      }, "rdsh-mobile-ux: local display");
+    }
+
+    /** The locale definitions the shared service currently exposes. */
+    function localeOptions(localeService) {
+      let snapshot;
+      try {
+        snapshot = localeService?.getSnapshot?.();
+      } catch (error) {
+        return [];
+      }
+      return localeOptionsFrom(snapshot);
+    }
+
+    function localeOptionsFrom(snapshot) {
+      const list = Array.isArray(snapshot?.locales) ? snapshot.locales : [];
+      return list
+        .filter((entry) => entry !== null && entry !== undefined && typeof entry.id === "string" && entry.id !== "")
+        .map((entry) => ({ id: entry.id, label: typeof entry.label === "string" && entry.label !== "" ? entry.label : entry.id }));
     }
 
     /**
@@ -8800,6 +9167,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         h(LocalChatSettingsSection),
         // One Mobile tab carries both sections inline; the separate tabs are
         // no longer registered.
+        onPhone ? h(LocalDisplaySettingsSection) : null,
         onPhone ? h(InputSection) : null,
         onPhone && typeof globalThis.__RDSH_PWA_SETTINGS_SECTION__ === "function"
           ? h(globalThis.__RDSH_PWA_SETTINGS_SECTION__)
@@ -8831,6 +9199,96 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           h("p", { className: "rdsh-mux-note" }, s.enterToSend
             ? t("mux.input.current.enterSends")
             : t("mux.input.current.enterNewline")),
+        ),
+      );
+    }
+
+    /**
+     * Device-local font size and language controls.
+     *
+     * Kept as its own component (not folded into the Mobile card) so another
+     * unrelated Settings block can be cherry-picked beside it. All writes go
+     * to localStorage and the local projections above; no Host setting is
+     * touched.
+     */
+    function LocalDisplaySettingsSection() {
+      const s = useStore();
+      const display = s.localDisplay;
+      const fonts = display.fonts ?? { text: 14, code: 11, terminal: 13 };
+      const languages = display.languages ?? [];
+      const available = display.available ?? { fonts: true, language: true };
+      const reasons = display.reason ?? {};
+      const reasonText = (kind) => {
+        const reason = String(reasons[kind] ?? "");
+        const key = {
+          "theme-missing": "localDisplay.reason.themeMissing",
+          "theme-shape": "localDisplay.reason.themeShape",
+          "locale-missing": "localDisplay.reason.localeMissing",
+          "locale-shape": "localDisplay.reason.localeShape",
+          "no-locales": "localDisplay.reason.noLocales",
+        }[reason];
+        return key === undefined ? reason : t(key);
+      };
+      return h(
+        "section",
+        { className: "rdsh-mux-section" },
+        h(
+          "div",
+          { className: "rdsh-mux-card" },
+          h("h3", { className: "rdsh-mux-title" }, t("localDisplay.title")),
+          h("p", { className: "rdsh-mux-desc" }, t("localDisplay.desc")),
+          ...LOCAL_FONT_ROLES.map((role) => {
+            const spec = LOCAL_FONT_SPECS[role];
+            const value = fonts[role];
+            const label = t(`localDisplay.${role}`);
+            return h(
+              "div",
+              { className: "rdsh-mux-font-row", key: role },
+              h("span", { className: "rdsh-mux-font-label" }, label),
+              h(
+                "div",
+                { className: "rdsh-mux-font-control" },
+                h("button", {
+                  type: "button",
+                  className: "rdsh-mux-step",
+                  "aria-label": `${label} −`,
+                  disabled: available.fonts === false || value <= spec.min,
+                  onClick: () => setLocalDisplayFont(role, -1),
+                }, "−"),
+                h("span", { className: "rdsh-mux-font-value" }, `${value}px`),
+                h("button", {
+                  type: "button",
+                  className: "rdsh-mux-step",
+                  "aria-label": `${label} +`,
+                  disabled: available.fonts === false || value >= spec.max,
+                  onClick: () => setLocalDisplayFont(role, 1),
+                }, "+"),
+              ),
+            );
+          }),
+          available.fonts === false
+            ? h("p", { className: "rdsh-mux-note" }, t("localDisplay.unavailable", { reason: reasonText("fonts") }))
+            : null,
+          h(
+            "label",
+            { className: "rdsh-mux-slider" },
+            h("span", null, t("localDisplay.language")),
+            h(
+              "select",
+              {
+                className: "rdsh-mux-select",
+                value: display.language,
+                disabled: available.language === false,
+                onChange: (event) => setLocalDisplayLanguage(event.target.value),
+              },
+              h("option", { value: "" }, t("localDisplay.language.system")),
+              languages.map((entry) => h("option", { key: entry.id, value: entry.id }, entry.label)),
+            ),
+          ),
+          available.language === false
+            ? h("p", { className: "rdsh-mux-note" }, t("localDisplay.unavailable", { reason: reasonText("language") }))
+            : h("p", { className: "rdsh-mux-note" }, t("localDisplay.language.note")),
+          h("p", { className: "rdsh-mux-note" }, t("localDisplay.note")),
         ),
       );
     }
@@ -8967,6 +9425,18 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 .rdsh-mux-actions button:disabled { opacity: .45; cursor: default; }
 .rdsh-mux-note { margin: 0; font-size: 12px; line-height: 1.6; color: var(--dsw-alias-label-tertiary, #adb2b8); }
 .rdsh-mux-check { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.rdsh-mux-font-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 13px; color: var(--dsw-alias-label-secondary, #cfd3d6); }
+.rdsh-mux-font-label { min-width: 0; }
+.rdsh-mux-font-control { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.rdsh-mux-font-value { min-width: 40px; text-align: center; font-variant-numeric: tabular-nums; color: var(--dsw-alias-label-primary, #f9fafb); }
+.rdsh-mux-step {
+  width: 30px; height: 30px; padding: 0; border-radius: 8px;
+  font: inherit; font-size: 16px; line-height: 1; cursor: pointer;
+  color: var(--dsw-alias-label-primary, #f9fafb);
+  background: var(--dsw-alias-bg-layer-2, #26262a);
+  border: .5px solid var(--dsw-alias-border-l3, rgba(255,255,255,.16));
+}
+.rdsh-mux-step:disabled { opacity: .4; cursor: default; }
 
 `;
 
@@ -10565,6 +11035,11 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           console.error("[rdsh-mobile-ux] device theme failed", error);
         }
         try {
+          attachLocalDisplay(ctx);
+        } catch (error) {
+          console.error("[rdsh-mobile-ux] local display failed", error);
+        }
+        try {
           boot(ctx);
         } catch (error) {
           console.error("[rdsh-mobile-ux] boot failed", error);
@@ -10616,9 +11091,9 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
     const ENTRY_ID = "rdsh-session-id-copy";
     // After the shipped rows (pin 100 / rename 200 / fork 300 / archive 400).
     const ORDER = 500;
-    const LABEL = t("sessionId.label");
-    const COPIED = t("sessionId.copied");
-    const MANUAL_PROMPT = t("sessionId.manualPrompt");
+    // Resolved at render time so the device-local display language reaches
+    // this row too; the registration label is likewise a getter.
+    const label = () => t("sessionId.label");
 
     /** One "..." menu row: copy this Session's ID, then close the menu. */
     function CopySessionIdMenuItem({ sessionId, useMenuOpenState }) {
@@ -10632,16 +11107,16 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           setMenuOpen(false);
           void copyText(id).then((copied) => {
             if (copied) {
-              notify(COPIED);
+              notify(t("sessionId.copied"));
               return;
             }
             // 自動コピーが両方とも塞がれている環境では、選択済みの ID を見せる。
             if (typeof window === "object" && window !== null && typeof window.prompt === "function") {
-              window.prompt(MANUAL_PROMPT, id);
+              window.prompt(t("sessionId.manualPrompt"), id);
             }
           });
         },
-        children: LABEL,
+        children: label(),
       });
     }
 
@@ -10650,7 +11125,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
       apply(ctx) {
         // Wait for ui-workspace's declaration before contributing to it.
         ctx.slots.inject(SLOT, () =>
-          ctx.slots.register({ name: SLOT, id: ENTRY_ID, order: ORDER, label: LABEL }, CopySessionIdMenuItem),
+          ctx.slots.register({ name: SLOT, id: ENTRY_ID, order: ORDER, label }, CopySessionIdMenuItem),
         );
       },
     };

@@ -150,6 +150,8 @@ function bootClient({
 	fetchImpl = null,
 	navigator = null,
 	computedStyle = () => stub(),
+	theme = null,
+	locale = null,
 } = {}) {
 	let definition;
 	const disposers = [];
@@ -235,6 +237,7 @@ function bootClient({
 		innerHeight: 844,
 		devicePixelRatio: 3,
 		performance: { now: () => 0 },
+		queueMicrotask,
 		globalThis: undefined,
 	};
 	sandbox.globalThis = sandbox;
@@ -270,6 +273,7 @@ function bootClient({
 
 	// `apply` is what boot() runs from. It touches a lot of DOM; the stub
 	// absorbs that, and an undeclared identifier still throws.
+	const eventHandlers = new Map();
 	const ctx = {
 		effect(fn) {
 			const dispose = fn();
@@ -292,8 +296,24 @@ function bootClient({
 				return () => {};
 			},
 		},
-		get: () => undefined,
-		on: () => () => {},
+		get(name) {
+			if (name === "theme") return theme ?? undefined;
+			if (name === "locale") return locale ?? undefined;
+			return undefined;
+		},
+		on(event, handler) {
+			let list = eventHandlers.get(event);
+			if (list === undefined) {
+				list = new Set();
+				eventHandlers.set(event, list);
+			}
+			list.add(handler);
+			return () => list.delete(handler);
+		},
+		emit(event, payload) {
+			for (const handler of [...(eventHandlers.get(event) ?? [])]) handler(payload);
+		},
+		locale: locale ?? undefined,
 	};
 	plugin.apply(ctx);
 	return {
@@ -301,6 +321,7 @@ function bootClient({
 		sandbox,
 		ctx,
 		disposers,
+		emit: (event, payload) => ctx.emit(event, payload),
 		disposeAll() {
 			const errors = [];
 			for (const dispose of disposers.splice(0).reverse()) {
@@ -1293,4 +1314,133 @@ test("the queue bridge paints the queue ::before colour and tears down", () => {
 	assert.equal(desktop.nodes.dock.children.some((child) => child.hasAttribute("data-rdsh-queue-join")), false, "a desktop got the queue bridge");
 	assert.equal(desktop.nodes.dock.style.marginBottom, undefined, "a desktop got the seam margin");
 	desktop.booted.disposeAll();
+});
+
+test("device-local display projects font/locale and restores the Host snapshots", async () => {
+	const writes = [];
+	const hostTheme = {
+		preference: "system",
+		revision: 4,
+		fontSizes: { text: 14, code: 11, terminal: 13 },
+		fontFamilies: { text: "", code: "", terminal: "" },
+		active: { id: "light", colorScheme: "light", tokens: {} },
+		themes: [],
+	};
+	const theme = {
+		snapshot: hostTheme,
+		getTheme() { return this.snapshot; },
+		setFontSize(role, px) { writes.push(["font", role, px]); },
+	};
+	const listeners = new Set();
+	const hostLocale = {
+		active: "zh",
+		revision: 2,
+		locales: [
+			{ id: "zh", label: "中文", fallback: "en" },
+			{ id: "en", label: "English" },
+		],
+	};
+	const locale = {
+		snapshot: hostLocale,
+		listeners,
+		getSnapshot() { return this.snapshot; },
+		getLocale() { return this.snapshot; },
+		subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
+		setLocale(id) { writes.push(["locale", id]); },
+	};
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		theme,
+		locale,
+		configureDocument(doc) { doc.documentElement.lang = "zh-CN"; },
+		storage: {
+			"rdsh-mobile-ux:local-display": JSON.stringify({
+				fonts: { text: 18, code: 13, terminal: 15 },
+				language: "en",
+			}),
+		},
+	});
+	const state = booted.sandbox.__RDSH_MOBILE_UX__.state;
+	assert.equal(state.localDisplay.fonts.text, 18);
+	assert.equal(state.localDisplay.language, "en");
+	assert.equal(theme.snapshot.fontSizes.text, 18, "the local font size was not projected");
+	assert.equal(theme.snapshot.fontSizes.code, 13);
+	assert.equal(theme.snapshot.fontSizes.terminal, 15);
+	assert.equal(locale.snapshot.active, "en", "the local locale was not projected");
+	assert.equal(booted.sandbox.document.documentElement.lang, "en");
+	assert.deepEqual(writes, [], "a shared Host writer was called");
+
+	// A Host sync must not win over the device-local projection.
+	booted.emit("theme/change", {
+		...hostTheme,
+		revision: 8,
+		fontSizes: { text: 20, code: 12, terminal: 14 },
+	});
+	booted.emit("locale/change", { ...hostLocale, active: "zh", revision: 6 });
+	await Promise.resolve();
+	await Promise.resolve();
+	assert.equal(theme.snapshot.fontSizes.text, 18, "the Host theme overwrote the local size");
+	assert.equal(locale.snapshot.active, "en", "the Host locale overwrote the local choice");
+	assert.deepEqual(writes, [], "a Host sync caused a shared write");
+
+	booted.disposeAll();
+	assert.equal(theme.snapshot.fontSizes.text, 20, "the latest Host theme was not restored");
+	assert.equal(locale.snapshot.active, "zh", "the Host locale was not restored");
+	assert.equal(booted.sandbox.document.documentElement.lang, "zh-CN");
+	assert.deepEqual(writes, [], "dispose wrote a shared setting");
+});
+
+test("font and language availability are independent and fail soft", () => {
+	const fontTheme = {
+		snapshot: { preference: "system", revision: 1, fontSizes: { text: 14, code: 11, terminal: 13 }, fontFamilies: {}, active: {}, themes: [] },
+		getTheme() { return this.snapshot; },
+		setFontSize() { throw new Error("shared font writer was called"); },
+	};
+	const fontOnly = bootClient({
+		mode: "mobile",
+		narrow: true,
+		theme: fontTheme,
+		storage: {
+			"rdsh-mobile-ux:local-display": JSON.stringify({ fonts: { text: 20, code: 12, terminal: 14 }, language: "en" }),
+		},
+	});
+	const fontState = fontOnly.sandbox.__RDSH_MOBILE_UX__.state;
+	assert.equal(fontState.localDisplay.available.fonts, true);
+	assert.equal(fontState.localDisplay.available.language, false);
+	assert.equal(fontState.localDisplay.reason.language, "locale-missing");
+	assert.equal(fontTheme.snapshot.fontSizes.text, 20, "fonts were not projected with only the theme service");
+	fontOnly.disposeAll();
+
+	const listeners = new Set();
+	const localeOnlyService = {
+		snapshot: {
+			active: "zh",
+			revision: 1,
+			locales: [{ id: "en", label: "English" }, { id: "zh", label: "中文" }],
+		},
+		listeners,
+		getSnapshot() { return this.snapshot; },
+		getLocale() { return this.snapshot; },
+		subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
+		setLocale() { throw new Error("shared locale writer was called"); },
+	};
+	const localeOnly = bootClient({
+		mode: "mobile",
+		narrow: true,
+		locale: localeOnlyService,
+		configureDocument(doc) { doc.documentElement.lang = "zh-CN"; },
+		storage: {
+			"rdsh-mobile-ux:local-display": JSON.stringify({ fonts: { text: 20, code: 12, terminal: 14 }, language: "en" }),
+		},
+	});
+	const localeState = localeOnly.sandbox.__RDSH_MOBILE_UX__.state;
+	assert.equal(localeState.localDisplay.available.fonts, false);
+	assert.equal(localeState.localDisplay.available.language, true);
+	assert.equal(localeState.localDisplay.reason.fonts, "theme-missing");
+	assert.equal(localeOnlyService.snapshot.active, "en", "the locale was not projected with only the locale service");
+	assert.equal(localeOnly.sandbox.document.documentElement.lang, "en");
+	localeOnly.disposeAll();
+	assert.equal(localeOnlyService.snapshot.active, "zh");
+	assert.equal(localeOnly.sandbox.document.documentElement.lang, "zh-CN");
 });

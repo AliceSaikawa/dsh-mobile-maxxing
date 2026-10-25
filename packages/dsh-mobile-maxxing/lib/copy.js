@@ -30,6 +30,23 @@ export const COPY = {
 		// --- settings tabs --------------------------------------------------
 		"tab.mobile": "Mobile",
 
+		// --- local display -------------------------------------------------
+		"localDisplay.title": "Display",
+		"localDisplay.desc": "Text, code and terminal sizes for this device. These choices stay in this browser.",
+		"localDisplay.text": "Body text",
+		"localDisplay.code": "Code",
+		"localDisplay.terminal": "Terminal",
+		"localDisplay.language": "Display language",
+		"localDisplay.language.system": "System",
+		"localDisplay.language.note": "Changes the DSH UI language on this device only. It does not change the shared Host setting.",
+		"localDisplay.note": "Saved only in this browser. Other devices keep their own display choices.",
+		"localDisplay.unavailable": "Not adjustable here ({reason})",
+		"localDisplay.reason.themeMissing": "The theme service is not available.",
+		"localDisplay.reason.themeShape": "The theme service does not expose mutable font sizes.",
+		"localDisplay.reason.localeMissing": "The locale service is not available.",
+		"localDisplay.reason.localeShape": "The locale service does not expose a mutable locale.",
+		"localDisplay.reason.noLocales": "No display language is registered.",
+
 		// --- PWA section ----------------------------------------------------
 		"pwa.install.promptable": "Install DSH as an app",
 		"pwa.install.iosHint": "Add it to your Home Screen from Safari's Share menu",
@@ -268,6 +285,23 @@ export const COPY = {
 
 		// --- settings tabs --------------------------------------------------
 		"tab.mobile": "モバイル",
+
+		// --- local display -------------------------------------------------
+		"localDisplay.title": "表示",
+		"localDisplay.desc": "この端末の本文・コード・ターミナルの文字サイズです。設定はこのブラウザだけに保存されます。",
+		"localDisplay.text": "本文",
+		"localDisplay.code": "コード",
+		"localDisplay.terminal": "ターミナル",
+		"localDisplay.language": "表示言語",
+		"localDisplay.language.system": "システム",
+		"localDisplay.language.note": "この端末の DSH UI の表示言語だけを変更します。共有のホスト設定は変更しません。",
+		"localDisplay.note": "このブラウザだけに保存されます。他の端末の表示設定は変わりません。",
+		"localDisplay.unavailable": "ここでは変更できません（{reason}）",
+		"localDisplay.reason.themeMissing": "テーマサービスがありません。",
+		"localDisplay.reason.themeShape": "テーマサービスが文字サイズの変更に対応していません。",
+		"localDisplay.reason.localeMissing": "ロケールサービスがありません。",
+		"localDisplay.reason.localeShape": "ロケールサービスが表示言語の変更に対応していません。",
+		"localDisplay.reason.noLocales": "表示言語が登録されていません。",
 
 		// --- PWA section ----------------------------------------------------
 		"pwa.install.promptable": "DSH をアプリとしてインストールできます",

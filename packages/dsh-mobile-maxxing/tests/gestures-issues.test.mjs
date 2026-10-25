@@ -688,10 +688,8 @@ test("a touch pan that starts on the strip gutter or fill scrolls without arming
 	desktop.drainFrames();
 	const desktopDown = desktop.handler("pointerdown", "onPointerDown");
 	const desktopMove = desktop.handler("pointermove", "onPointerMove");
-	strip.scrollLeft = 100;
-	desktopDown(pointerEvent(gutter, 300, 50));
-	desktopMove(pointerEvent(gutter, 270, 50));
-	assert.equal(strip.scrollLeft, 100, "a desktop gutter pan moved the strip");
+	assert.equal(desktopDown, undefined, "desktop must not install a gutter pointerdown handler");
+	assert.equal(desktopMove, undefined, "desktop must not install a gutter pointermove handler");
 	desktop.disposeAll();
 });
 

@@ -29,7 +29,7 @@ PC の描画を書き換えるため、このパッケージには含めず任�
 | インストール | Chrome / Edge / Android で「アプリをインストール」。192/512px + maskable アイコン、`display: standalone`、`launch_handler: focus-existing`（アイコン再タップで既存ウィンドウを前面に） |
 | オフライン起動 | アプリシェルをキャッシュし、圏外でも画面が出る（`/api` は絶対にキャッシュしない）。接続が戻ると自動で通常動作に戻る |
 | ホーム画面 | iOS 用 `apple-touch-icon` / `apple-mobile-web-app-status-bar-style`、`format-detection: telephone=no`。`apple-mobile-web-app-capable` / `apple-mobile-web-app-title` / `application-name` は**付けない**（iOS 26 でレガシーな view frame になり、下にステータスバー分の未描画帯が出るため）。standalone は manifest の `display` で指定 |
-| セーフエリア | モバイルモードで `env(safe-area-inset-*)` を `#root` に反映（standalone は4方向、ブラウザ表示は上下）。固定レイヤーの左右は既知の制限（#59） |
+| セーフエリア | モバイルモードで `env(safe-area-inset-*)` を `#root`・固定レイヤー（ドロワー、FAB、設定、右パネル）・ポップオーバーに反映。縦横どちらのノッチにも従う（#59） |
 | キーボード | `interactive-widget=resizes-content` で、ソフトキーボード表示時に入力欄が隠れない |
 | インストール導線 | サイドバー下部のアイコン、スマホ用カード（「あとで」で30日スヌーズ）、設定 →「モバイル」内のアプリ設定 |
 | 更新通知 | 新しいビルドのサービスワーカーが待機したら「新しいバージョンがあります → 再読み込み」。勝手にリロードはしない（実行中のセッションを壊さない） |

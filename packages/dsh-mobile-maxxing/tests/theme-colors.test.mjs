@@ -26,38 +26,23 @@ const DARK_BY_DESIGN = [
 	// scrim over the app, not text or chrome whose contrast depends on the
 	// palette.
 	{ match: /\.rdsh-mux-backdrop$/, reason: "drawer scrim is a fixed mask" },
-	// Variant B's ring and idle open-row paint is the reference implementation
-	// verbatim: the brief is an exact reproduction of DSH-PWA mobile-ux before
-	// any theme adaptation, so this one block keeps the original hex/rgba
-	// values instead of tokens. The exception is limited to those rows; the
-	// reference colours themselves are asserted below.
-	{ match: /\[data-rdsh-anim="outline"\] \[data-rdsh-(?:ring|open)-row\]/, reason: "reference Variant B ring/open row paint" },
 ];
 
 /**
- * Every colour the reference Variant B block paints (DSH-PWA
- * mobile-ux/client.js): the ring fill in its idle/selected/hover states, both
- * conic gradients, and the idle open row and its hover. Asserting them here
- * pins the reproduction: swapping one back to a light theme token is a test
- * failure even though the block is exempt from the raw-colour scan.
+ * #58: the Variant B session rows used to be an exact copy of DSH-PWA
+ * mobile-ux, fixed dark palette and all, which kept the whole session list
+ * black under the light theme. Every surface and accent in that block now
+ * names a palette token; these are the declarations that pin it.
  */
-const REFERENCE_OUTLINE_PAINT = [
-	"--rdsh-ring-fill: #1b1b1c;",
-	"--rdsh-ring-fill: #2d2d2e;",
-	"--rdsh-ring-fill: #242425;",
-	"rgba(122,170,255,0) 0deg",
-	"rgba(122,170,255,.14) 235deg",
-	"rgba(140,185,255,.68) 268deg",
-	"#cfe0ff 292deg",
-	"rgba(122,170,255,.3) 315deg",
-	"rgba(255,209,102,0) 0deg",
-	"rgba(255,209,102,.14) 235deg",
-	"rgba(255,224,130,.68) 268deg",
-	"#fff3c4 292deg",
-	"rgba(255,209,102,.3) 315deg",
-	"background: #232324 !important;",
-	"box-shadow: inset 0 0 0 1px rgba(255,255,255,.2) !important;",
-	"background: #29292b !important;",
+const OUTLINE_TOKENS = [
+	"--rdsh-ring-fill: var(--dsw-alias-bg-layer-2",
+	"--rdsh-ring-fill: var(--dsw-alias-bg-layer-3",
+	"--rdsh-ring-fill: var(--dsw-alias-interactive-bg-hover-solid",
+	"background: var(--dsw-alias-bg-layer-1",
+	"box-shadow: inset 0 0 0 1px var(--dsw-alias-border-l2",
+	"background: var(--dsw-alias-interactive-bg-hover-solid",
+	"color-mix(in srgb, var(--dsw-alias-link",
+	"color-mix(in srgb, var(--dsw-alias-state-warn-primary",
 ];
 
 /** Properties that must name a token, not a literal. */
@@ -172,17 +157,29 @@ function violations() {
 	return bad;
 }
 
-test("no shared stylesheet paints a raw colour", () => {
-	const bad = violations();
-	assert.deepEqual(bad, [], `raw colours in a theme-aware stylesheet:\n${bad.join("\n")}`);
-	// The one exemption must still reproduce the reference exactly.
+/** The Variant B block: its ring rows and idle open row, up to the title sheen. */
+function outlineBlock() {
 	const start = CLIENT.indexOf('html[data-rdsh-anim="outline"] [data-rdsh-ring-row] {');
 	const end = CLIENT.indexOf("/* The open session's title carries its running state", start);
 	assert.ok(start !== -1 && end > start, "Variant B ring block is present");
-	const outline = CLIENT.slice(start, end);
-	for (const literal of REFERENCE_OUTLINE_PAINT) {
-		assert.ok(outline.includes(literal), `Variant B block lost a reference colour: ${literal}`);
+	return CLIENT.slice(start, end);
+}
+
+test("no shared stylesheet paints a raw colour", () => {
+	const bad = violations();
+	assert.deepEqual(bad, [], `raw colours in a theme-aware stylesheet:\n${bad.join("\n")}`);
+});
+
+test("the session list follows the palette in both themes", () => {
+	const outline = outlineBlock();
+	for (const declaration of OUTLINE_TOKENS) {
+		assert.ok(outline.includes(declaration), `Variant B block lost a palette token: ${declaration}`);
 	}
+	// #58: a literal outside a var() fallback is what kept the light theme's
+	// session list black, ring gradients included. The fallbacks are the old
+	// dark values, which only paint when ui-theme is missing.
+	const bare = outline.replace(/var\([^)]*\)/g, "VAR");
+	assert.equal(LITERAL.test(bare), false, `Variant B block still paints a raw colour: ${bare.match(LITERAL)?.[0]}`);
 });
 
 test("the detector catches a literal it should", () => {

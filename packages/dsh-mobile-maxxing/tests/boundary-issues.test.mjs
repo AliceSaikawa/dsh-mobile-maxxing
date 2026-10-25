@@ -359,7 +359,7 @@ function stub(depth = 0) {
  * are about the boundary path itself: `syncWidth()` is what the media listener
  * calls.
  */
-function bootBoundary({ mode = null, narrow = true, seed = {}, safeTop = 0 } = {}) {
+function bootBoundary({ mode = null, narrow = true, seed = {}, safeTop = 0, safeLeft = 0, safeRight = 0 } = {}) {
 	const viewport = { narrow };
 	const deviceMode = mode ?? (narrow ? "mobile" : "desktop");
 	const document = makeDocument();
@@ -406,7 +406,7 @@ function bootBoundary({ mode = null, narrow = true, seed = {}, safeTop = 0 } = {
 			observe() {}
 			disconnect() {}
 		},
-		getComputedStyle: () => ({ paddingTop: `${safeTop}px`, paddingBottom: "0px", paddingLeft: "0px", paddingRight: "0px", overflowY: "", overflowX: "", visibility: "visible", backgroundColor: "", rowGap: "0", getPropertyValue: () => "" }),
+		getComputedStyle: () => ({ paddingTop: `${safeTop}px`, paddingBottom: "0px", paddingLeft: `${safeLeft}px`, paddingRight: `${safeRight}px`, overflowY: "", overflowX: "", visibility: "visible", backgroundColor: "", rowGap: "0", getPropertyValue: () => "" }),
 		console,
 		URL,
 		URLSearchParams,
@@ -642,14 +642,22 @@ test("the mobile viewport merges the keyboard token without duplicating a key", 
 });
 
 test("safe-area root padding and style follow the device mode", () => {
-	const mobile = bootBoundary({ mode: "mobile", narrow: false, safeTop: 47 });
+	// #59: a landscape notch is reported as a left/right inset, so the module
+	// has to publish those too (the popovers read them back).
+	const mobile = bootBoundary({ mode: "mobile", narrow: false, safeTop: 47, safeLeft: 59, safeRight: 0 });
 	assert.equal(mobile.html.hasAttribute("data-rdsh-safe-top"), true, "a wide mobile device did not write the inset attribute");
 	assert.equal(mobile.html.style.getPropertyValue("--rdsh-safe-top"), "47px", "a wide mobile device did not write the inset variable");
+	assert.equal(mobile.html.hasAttribute("data-rdsh-safe-left"), true, "a landscape notch did not write the left inset attribute");
+	assert.equal(mobile.html.style.getPropertyValue("--rdsh-safe-left"), "59px", "a landscape notch did not write the left inset variable");
+	assert.equal(mobile.html.hasAttribute("data-rdsh-safe-right"), false, "a zero right inset wrote an attribute");
+	assert.equal(mobile.html.style.getPropertyValue("--rdsh-safe-right"), "0px", "a zero right inset was not written as 0px");
 	mobile.setWidth(true);
 	assert.equal(mobile.html.hasAttribute("data-rdsh-safe-top"), true, "a rotation removed the inset");
 	mobile.dispose();
 	assert.equal(mobile.html.hasAttribute("data-rdsh-safe-top"), false, "the safe-area attribute survived dispose");
 	assert.equal(mobile.html.style.getPropertyValue("--rdsh-safe-top"), "", "the safe-area variable survived dispose");
+	assert.equal(mobile.html.style.getPropertyValue("--rdsh-safe-left"), "", "the left safe-area variable survived dispose");
+	assert.equal(mobile.html.style.getPropertyValue("--rdsh-safe-right"), "", "the right safe-area variable survived dispose");
 	assert.equal(mobile.html.style.getPropertyValue("--rdsh-native-gap-px"), "", "the native-gap variable survived dispose");
 
 	const desktop = bootBoundary({ mode: "desktop", narrow: true, safeTop: 47 });

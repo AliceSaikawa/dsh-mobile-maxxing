@@ -81,7 +81,7 @@ class FakeNode {
 		this.parentElement = null;
 		this.childNodes = [];
 		this.attributes = new Map();
-		this.style = {};
+		this.style = { setProperty() {}, removeProperty() {}, getPropertyValue: () => "" };
 		this.className = "";
 		this.hidden = false;
 		this.listeners = [];

@@ -29,15 +29,99 @@ const CDP = process.env.CDP_URL || "http://127.0.0.1:9222";
 const CLIENT = readFileSync(new URL("../client.js", import.meta.url), "utf8");
 const LONG_TOKEN = `https://example.invalid/${"a".repeat(96)}`;
 
-/** Both shipped stylesheets with the phone query interpolated. */
-function pluginStylesheet() {
-	const blocks = [...CLIENT.matchAll(/const CSS = `([\s\S]*?)`;\n/g)].map((match) => match[1]);
+/**
+ * Extract the shipped stylesheets from either client layout.
+ *
+ * Before the #44 foundation split, `client.js` had two `const CSS = \`…\``
+ * literals. The foundation build instead declares `CSS_DEVICE` and
+ * `CSS_PHONE` and composes them with `phoneStyles()` into a `CSS` alias that
+ * contains no rules itself. Read the real declarations in both shapes rather
+ * than tying this fixture to one spelling: the question-card rules must stay
+ * covered across that refactor.
+ *
+ * @param {string} source - `client.js` contents.
+ * @returns {string} CSS with the phone query resolved to a real media rule.
+ */
+function shippedStylesheet(source) {
+	const narrowMatch = source.match(/const NARROW_QUERY = "([^"]+)"/);
+	const narrow = narrowMatch === null ? "(max-width: 767px)" : narrowMatch[1];
+	const resolve = (css) => css.replace(/\$\{NARROW_QUERY\}/g, narrow);
+
+	const blocks = [];
+	for (const match of source.matchAll(/const CSS = `([\s\S]*?)`;(?:\r?\n|$)/g)) {
+		const css = match[1];
+		// The foundation's `CSS` alias is only `${CSS_DEVICE}\n${phoneStyles(...)}`.
+		// Skip that composition; the two constants below carry the rules.
+		if (!css.includes("{") || /^\s*\$\{/.test(css)) continue;
+		blocks.push(resolve(css));
+	}
+
+	const device = source.match(/const CSS_DEVICE = `([\s\S]*?)`;(?:\r?\n|$)/);
+	const phone = source.match(/const CSS_PHONE = `([\s\S]*?)`;(?:\r?\n|$)/);
+	if (device !== null && phone !== null) {
+		blocks.push(resolve(device[1]));
+		blocks.push(`@media ${narrow} {\n${resolve(phone[1])}\n}`);
+	}
+
 	assert.ok(blocks.length >= 2, "the shipped stylesheets are missing");
-	const css = blocks.join("\n").replace(/\$\{NARROW_QUERY\}/g, "(max-width: 767px)");
+	const css = blocks.join("\n");
 	assert.equal(css.includes("${"), false, "an uninterpolated template token reached the fixture");
 	return css;
 }
 
+const SHIPPED_STYLESHEET = shippedStylesheet(CLIENT);
+
+test("the stylesheet extractor understands the old and foundation client layouts", () => {
+	const oldStyle = [
+		'const NARROW_QUERY = "(max-width: 767px)";',
+		"const CSS = `",
+		".shell { color: red; }",
+		"`;",
+		"const CSS = `",
+		"@media ${NARROW_QUERY} {",
+		".phone { color: green; }",
+		"}",
+		"`;",
+	].join("\n");
+	const old = shippedStylesheet(oldStyle);
+	assert.match(old, /\.shell \{ color: red; \}/, "the shell stylesheet was dropped");
+	assert.match(old, /@media \(max-width: 767px\) \{/, "the old phone query was not resolved");
+	assert.match(old, /\.phone \{ color: green; \}/, "the old phone stylesheet was dropped");
+
+	// #44 splits the layout sheet into CSS_DEVICE / CSS_PHONE and composes an
+	// alias with phoneStyles(). The alias has no rules of its own, so reading
+	// only `const CSS =` would silently feed the fixture no layout at all.
+	const foundationStyle = [
+		'const NARROW_QUERY = "(max-width: 767px)";',
+		"const CSS = `",
+		".shell { color: red; }",
+		"`;",
+		"const CSS_DEVICE = `",
+		".device { color: blue; }",
+		"`;",
+		"const CSS_PHONE = `",
+		".phone { color: green; }",
+		"`;",
+		"const phoneStyles = (css) => `@media ${NARROW_QUERY} {\\n${css}\\n}`;",
+		"const CSS = `${CSS_DEVICE}\\n${phoneStyles(CSS_PHONE)}`;",
+	].join("\n");
+	const foundation = shippedStylesheet(foundationStyle);
+	assert.match(foundation, /\.shell \{ color: red; \}/, "the foundation shell stylesheet was dropped");
+	assert.match(foundation, /\.device \{ color: blue; \}/, "CSS_DEVICE was not read");
+	assert.match(foundation, /@media \(max-width: 767px\) \{/, "CSS_PHONE was not wrapped in the phone query");
+	assert.match(foundation, /\.phone \{ color: green; \}/, "CSS_PHONE was not read");
+	assert.doesNotMatch(foundation, /\$\{CSS_DEVICE\}/, "the composition alias leaked into the fixture");
+	assert.equal(foundation.includes("${"), false, "an uninterpolated token reached the fixture");
+
+	// Whichever layout the file currently uses, the fixture must still contain
+	// the question-card rules it measures.
+	assert.match(SHIPPED_STYLESHEET, /\[data-rdsh-question-frame\] \{/, "the real question frame rule is missing");
+	assert.match(
+		SHIPPED_STYLESHEET,
+		/\[data-rdsh-question-frame\] > \[data-rdsh-question-card\]/,
+		"the real question card rule is missing",
+	);
+});
 /**
  * The small slice of upstream card CSS the layout needs. Copied from the live
  * `Mbwy4a_*` rules; deliberately not the whole upstream stylesheet.
@@ -107,7 +191,7 @@ function card({ plan = false } = {}) {
 function fixtureHtml() {
 	return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<style>${UPSTREAM_SCAFFOLD}${pluginStylesheet()}</style></head>
+<style>${UPSTREAM_SCAFFOLD}${SHIPPED_STYLESHEET}</style></head>
 <body>${card()}${card({ plan: true })}</body></html>`;
 }
 

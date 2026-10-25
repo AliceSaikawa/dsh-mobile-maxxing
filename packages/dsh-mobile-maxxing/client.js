@@ -1129,8 +1129,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      */
     const HIDE_DEFAULT = [
       "Open configuration file",
-      "Open in Files",
-      "More ways to open",
       "More actions",
       "Feedback",
       "Sign in",
@@ -1138,17 +1136,36 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       "Desktop notifications",
       "Show coding view",
       "Built-in plugins",
-      // Bundled editors and file managers are desktop affordances; on a phone
-      // the tap only produces an error or a dead end.
-      "Open in Text Editor",
-      "Open in editor",
-      "Open in Explorer",
-      "Reveal in Finder",
     ];
+
+    /**
+     * Upstream's native "open in <app>" split button (#33).
+     *
+     * `@deepseek-ai/dsh-client-ui-open-in-app` marks the wrapper with
+     * `data-open-target` (directory|file) and its halves with
+     * `data-open-path-open` / `data-open-path-more`. The visible wording is the
+     * host app's own name ("Open in Chrome"), which is not in the shipped
+     * locales, so a label list can never catch it; the prominent half also has
+     * no aria-label at all. Hiding the wrapper is therefore the only complete
+     * match. It is a phone-only CSS rule, and it must not hide browser
+     * preview features (wrap, reload, the viewer picker) that live in the same
+     * header.
+     */
+    const OPEN_TARGET_SELECTOR = "[data-open-target]";
 
     // ---------------------------------------------------------------------
     // Store
     // ---------------------------------------------------------------------
+    /**
+     * Wrap code-review lines by default on a phone (#34).
+     *
+     * A code default, not a user setting: upstream owns the toggle and the
+     * only remembered choice is an explicit OFF on a surface (see
+     * `suppressReviewWrap`). Keeping this as a flag documents the decision
+     * without adding a second source of truth or a new settings row.
+     */
+    const REVIEW_WRAP_DEFAULT = true;
+
     /** Browser-local theme choice; also read while the store initialises. */
     const DEVICE_THEME_KEY = "dsh-mobile-maxxing:device-theme";
     const DEVICE_THEME_MODES = ["", "light", "dark", "system"];
@@ -2100,6 +2117,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       clearQuestionArrows();
       clearModelSearch();
       clearActivityChips();
+      clearPreviewTools();
       clearComposerHooks();
       clearTypingAnimations();
       removeDrawerNodes();
@@ -2280,6 +2298,487 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           node = node.parentElement;
         }
       }
+    }
+
+    // ---------------------------------------------------------------------
+    // #34 / #35: review wrap default and the phone preview kebab
+    //
+    // Both features own only their `data-rdsh-*` hooks and only act inside the
+    // right panel. The upstream surfaces are matched through attributes
+    // (`data-changes-review`, `data-textpreview-*`), never through a hashed
+    // class. A wide desktop never gets a node, an attribute or a style from
+    // this section: decoration creates the kebab only in the phone query, and
+    // `clearPhoneHooks` takes everything down when the window widens.
+    // ---------------------------------------------------------------------
+
+    /** True only while a user (not this plugin) changed a review wrap toggle. */
+    let reviewWrapProbeTimer = 0;
+    /** Auto-fired / opted-out surfaces; pane ids survive a rerender of the root. */
+    let reviewWrapAutoFired = new WeakSet();
+    let reviewWrapUserOff = new WeakSet();
+    const reviewWrapAutoKeys = new Set();
+    const reviewWrapUserOffKeys = new Set();
+
+    /** The stable piece of a review surface: its dockkit pane, else its file. */
+    function reviewSurfaceKey(root) {
+      const pane = root.closest?.("[data-dockkit-pane]");
+      const paneId = pane === null || pane === undefined ? null : pane.getAttribute("data-dockkit-pane");
+      if (paneId !== null && paneId !== "") {
+        // dockkit gives every tab an id and only the active pane's active tab
+        // is laid out, so this identifies the review tab across rerenders.
+        const tab = pane.querySelector?.('[data-dockkit-tab][aria-selected="true"]');
+        const tabId = tab === null || tab === undefined ? null : tab.getAttribute("data-dockkit-tab");
+        if (tabId !== null && tabId !== "") return `pane:${paneId}:tab:${tabId}`;
+        return `pane:${paneId}`;
+      }
+      const file = root.querySelector?.("[data-review-file]");
+      const path = file === null || file === undefined ? null : file.getAttribute("data-review-file");
+      if (path !== null && path !== "") return `file:${path}`;
+      return "";
+    }
+
+    function reviewWrapIsOff(root) {
+      if (reviewWrapUserOff.has(root)) return true;
+      const key = reviewSurfaceKey(root);
+      return key !== "" && reviewWrapUserOffKeys.has(key);
+    }
+
+    function reviewWrapAutoDone(root) {
+      const key = reviewSurfaceKey(root);
+      // A stable tab key must be the only signal. React can reuse the same
+      // review root element when the pane switches tabs, so a root/pane
+      // marker would suppress the next diff tab too.
+      if (key !== "") return reviewWrapAutoKeys.has(key);
+      if (reviewWrapAutoFired.has(root)) return true;
+      return root.getAttribute("data-rdsh-review-auto") === "1"
+        || root.parentElement?.getAttribute?.("data-rdsh-review-auto") === "1";
+    }
+
+    function markReviewWrapAuto(root) {
+      const key = reviewSurfaceKey(root);
+      if (key !== "") {
+        // Memory only. The key is what survives a width round trip and the
+        // review root being replaced by React.
+        reviewWrapAutoKeys.add(key);
+        return;
+      }
+      // Only keyless surfaces need a DOM marker, and only their own wrapper:
+      // there is no tab identity to keep the two apart otherwise.
+      reviewWrapAutoFired.add(root);
+      // A desktop click is remembered, but the phone hooks are not painted on
+      // a wide layout (desktop must stay untouched).
+      if (!narrow()) return;
+      root.setAttribute("data-rdsh-review-auto", "1");
+      root.parentElement?.setAttribute?.("data-rdsh-review-auto", "1");
+    }
+
+    function suppressReviewWrap(root) {
+      reviewWrapUserOff.add(root);
+      const key = reviewSurfaceKey(root);
+      if (key !== "") reviewWrapUserOffKeys.add(key);
+      if (narrow()) root.setAttribute("data-rdsh-review-off", "");
+      markReviewWrapAuto(root);
+    }
+
+    function allowReviewWrap(root) {
+      reviewWrapUserOff.delete(root);
+      const key = reviewSurfaceKey(root);
+      if (key !== "") reviewWrapUserOffKeys.delete(key);
+      if (narrow()) root.removeAttribute("data-rdsh-review-off");
+      markReviewWrapAuto(root);
+    }
+
+    /**
+     * Turn wrap on once per review surface, through upstream's own button.
+     *
+     * Clicking the real `[data-review-tool="wrap"]` is what makes upstream
+     * render the wrapped layout; forcing CSS alone leaves the side-by-side
+     * grid (and its horizontal travel) in place. A user who turns it off wins:
+     * the surface (pane id, else file path) is remembered for this page and is
+     * never clicked again, including after React replaces the review root.
+     *
+     * Upstream side effect, stated in the PR: with wrap on, the diff falls back
+     * from side-by-side to the unified row layout. This plugin never clicks the
+     * split toggle, so a reader who wants both columns turns wrap off and that
+     * choice stays off for the surface.
+     */
+    function decorateReviewWrap() {
+      if (!narrow() || REVIEW_WRAP_DEFAULT !== true) return;
+      for (const root of document.querySelectorAll("[data-rdsh-rightpanel] [data-changes-review]")) {
+        const toggle = root.querySelector('[data-review-tool="wrap"]');
+        root.setAttribute("data-rdsh-review", "");
+        if (toggle === null) continue;
+        if (toggle.disabled === true) continue;
+        if (toggle.getAttribute("aria-pressed") === "true") root.setAttribute("data-rdsh-review-wrap", "");
+        else root.removeAttribute("data-rdsh-review-wrap");
+        const pressed = toggle.getAttribute("aria-pressed") === "true";
+        // An explicit user OFF wins; see noteReviewWrapClick.
+        if (reviewWrapIsOff(root)) {
+          root.setAttribute("data-rdsh-review-off", "");
+          continue;
+        }
+        if (pressed) {
+          if (!reviewWrapAutoDone(root)) markReviewWrapAuto(root);
+          continue;
+        }
+        if (reviewWrapAutoDone(root)) continue;
+        markReviewWrapAuto(root);
+        toggle.click();
+      }
+    }
+
+    /**
+     * Remember a real user's wrap choice after React has committed the toggle.
+     *
+     * `HTMLElement.click()` from this plugin produces an untrusted event, so an
+     * explicit OFF (untrusted === false) can never be mistaken for our own
+     * default-on click. The check runs after the upstream handler so the new
+     * `aria-pressed` is the source of truth.
+     */
+    function noteReviewWrapClick(event) {
+      if (event.isTrusted !== true) return;
+      const toggle = event.target.closest?.('[data-review-tool="wrap"]');
+      if (toggle === null || toggle === undefined) return;
+      const root = toggle.closest("[data-changes-review]");
+      if (root === null) return;
+      const pane = root.closest("[data-dockkit-pane]");
+      clearTimeout(reviewWrapProbeTimer);
+      reviewWrapProbeTimer = setTimeout(() => {
+        const liveRoot = pane !== null && pane.isConnected ? pane.querySelector("[data-changes-review]") : root;
+        if (liveRoot === null || liveRoot.isConnected !== true) return;
+        const current = liveRoot.querySelector('[data-review-tool="wrap"]');
+        if (current === null) return;
+        if (current.getAttribute("aria-pressed") === "true") allowReviewWrap(liveRoot);
+        else suppressReviewWrap(liveRoot);
+        scheduleDecorate();
+      }, 0);
+    }
+
+    /** The preview menu currently owned by the kebab (null when closed). */
+    let previewMenu = null;
+    let previewMenuAnchor = null;
+    let previewMenuHeader = null;
+    let previewMenuDismiss = null;
+    let previewMenuSignature = "";
+    let previewMenuSeq = 0;
+
+    /**
+     * The header that owns a text preview: the path's direct parent, and only
+     * when it also carries Reload. Climbing further could mistake a container
+     * holding several previews for one header.
+     */
+    function previewHeaderOf(path) {
+      const header = path.parentElement;
+      if (header === null || header === document.body) return null;
+      return header.querySelector?.('[data-textpreview-tool="reload"]') !== null && header.querySelector?.('[data-textpreview-tool="reload"]') !== undefined
+        ? header
+        : null;
+    }
+
+    function previewActionLabel(button) {
+      const aria = button.getAttribute("aria-label");
+      if (aria !== null && aria.trim() !== "") return aria.trim();
+      const title = button.getAttribute("title");
+      if (title !== null && title.trim() !== "") return title.trim();
+      return (button.textContent || "").trim().replace(/\s+/g, " ");
+    }
+
+    /**
+     * Buttons the kebab may offer.
+     *
+     * The path and the viewer picker stay in the header (the picker renders
+     * the current renderer's name and its upstream Menu is anchored to the
+     * visible button). Wrap is excluded on purpose: the phone stylesheet
+     * already forces text previews to wrap, so the stock toggle is hidden by
+     * the same query and would be a dead control. `#33`'s native open targets
+     * and upstream's deliberately-hidden auto-refresh stay out too.
+     */
+    function previewSecondaryButtons(header) {
+      return [...header.querySelectorAll("button")].filter((button) => {
+        if (button.hasAttribute("data-rdsh-preview-kebab")) return false;
+        if (button.hasAttribute("data-document-viewer-menu")) return false;
+        if (button.getAttribute("data-textpreview-tool") === "wrap") return false;
+        if (button.closest("[hidden]") !== null) return false;
+        if (button.closest(OPEN_TARGET_SELECTOR) !== null) return false;
+        return previewActionLabel(button) !== "";
+      });
+    }
+
+    function previewMenuSignatureOf(header) {
+      return previewSecondaryButtons(header)
+        .map((button) => `${previewActionLabel(button)}:${button.disabled === true ? "1" : "0"}:${button.getAttribute("aria-pressed") ?? ""}`)
+        .join("|");
+    }
+
+    function closePreviewMenu({ restore = false } = {}) {
+      if (previewMenu === null) return false;
+      const menu = previewMenu;
+      const anchor = previewMenuAnchor;
+      menu.remove();
+      if (previewMenuDismiss !== null) {
+        document.removeEventListener("pointerdown", previewMenuDismiss.pointer, true);
+        document.removeEventListener("keydown", previewMenuDismiss.key, true);
+        window.removeEventListener("resize", previewMenuDismiss.resize);
+        previewMenuDismiss = null;
+      }
+      anchor?.setAttribute("aria-expanded", "false");
+      anchor?.removeAttribute("aria-controls");
+      previewMenu = null;
+      previewMenuAnchor = null;
+      previewMenuHeader = null;
+      previewMenuSignature = "";
+      if (restore && anchor !== null && anchor !== undefined && anchor.isConnected) anchor.focus({ preventScroll: true });
+      return true;
+    }
+
+    function livePreviewAction(header, button) {
+      if (header.isConnected !== true) return null;
+      // Resolve by the visible label first: a rerender may reuse an action id
+      // for a different control, and calling the wrong one is worse than not
+      // finding it. The id remains a fallback for an unlabelled icon button.
+      const label = previewActionLabel(button);
+      const byLabel = previewSecondaryButtons(header).find((entry) => previewActionLabel(entry) === label);
+      if (byLabel !== undefined) return byLabel;
+      const id = button.getAttribute("data-rdsh-preview-action");
+      if (id === null) return null;
+      return header.querySelector(`[data-rdsh-preview-action="${cssValue(id)}"]`);
+    }
+
+    function focusPreviewMenuItem(index) {
+      if (previewMenu === null) return;
+      const items = [...previewMenu.querySelectorAll('[role="menuitem"]')].filter((item) => item.disabled !== true);
+      if (items.length === 0) return;
+      const at = Math.max(0, Math.min(items.length - 1, index));
+      items[at].focus({ preventScroll: true });
+    }
+
+    function onPreviewMenuKey(event) {
+      if (previewMenu === null) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        closePreviewMenu({ restore: true });
+        return;
+      }
+      const active = document.activeElement;
+      if (active === null || !previewMenu.contains(active)) return;
+      const items = [...previewMenu.querySelectorAll('[role="menuitem"]')].filter((item) => item.disabled !== true);
+      if (items.length === 0) return;
+      const at = items.indexOf(active);
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        focusPreviewMenuItem(at < 0 ? 0 : (at + 1) % items.length);
+      } else if (event.key === "ArrowUp") {
+        event.preventDefault();
+        focusPreviewMenuItem(at < 0 ? items.length - 1 : (at - 1 + items.length) % items.length);
+      } else if (event.key === "Home") {
+        event.preventDefault();
+        focusPreviewMenuItem(0);
+      } else if (event.key === "End") {
+        event.preventDefault();
+        focusPreviewMenuItem(items.length - 1);
+      } else if (event.key === "Tab") {
+        // Let the browser move focus, but do not leave a floating menu behind.
+        closePreviewMenu({ restore: false });
+      }
+    }
+
+    function openPreviewMenu(header, kebab, focusLast = false) {
+      closePreviewMenu();
+      const buttons = previewSecondaryButtons(header);
+      if (buttons.length === 0) return false;
+      const menu = document.createElement("div");
+      menu.className = "rdsh-mux-preview-menu";
+      menu.setAttribute("role", "menu");
+      menu.setAttribute("aria-label", t("mux.preview.menu"));
+      menu.setAttribute("data-rdsh-preview-menu", "");
+      menu.id = `rdsh-preview-menu-${++previewMenuSeq}`;
+      for (const button of buttons) {
+        const item = document.createElement("button");
+        item.type = "button";
+        item.setAttribute("role", "menuitem");
+        item.setAttribute("tabindex", "-1");
+        item.textContent = previewActionLabel(button);
+        item.disabled = button.disabled === true;
+        if (item.disabled) item.setAttribute("aria-disabled", "true");
+        item.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const live = livePreviewAction(header, button);
+          closePreviewMenu({ restore: true });
+          if (live !== null && live.disabled !== true) live.click();
+        });
+        menu.append(item);
+      }
+      // The listener is registered before the menu is shown so a tap on the
+      // very next frame cannot miss it; closing removes both listeners.
+      const dismiss = (event) => {
+        if (previewMenu?.contains(event.target)) return;
+        if (previewMenuAnchor?.contains(event.target)) return;
+        closePreviewMenu({ restore: false });
+      };
+      const key = (event) => onPreviewMenuKey(event);
+      const resize = () => closePreviewMenu({ restore: false });
+      previewMenu = menu;
+      previewMenuAnchor = kebab;
+      previewMenuHeader = header;
+      previewMenuSignature = previewMenuSignatureOf(header);
+      previewMenuDismiss = { pointer: dismiss, key, resize };
+      document.addEventListener("pointerdown", dismiss, true);
+      document.addEventListener("keydown", key, true);
+      window.addEventListener("resize", resize);
+      document.body.append(menu);
+      const rect = kebab.getBoundingClientRect();
+      const width = Math.min(240, window.innerWidth - 24);
+      menu.style.width = `${width}px`;
+      menu.style.left = `${Math.round(Math.max(12, Math.min(rect.right - width, window.innerWidth - width - 12)))}px`;
+      const height = menu.getBoundingClientRect().height;
+      let top = rect.bottom + 6;
+      if (top + height > window.innerHeight - 12) top = Math.max(12, rect.top - height - 6);
+      menu.style.top = `${Math.round(top)}px`;
+      kebab.setAttribute("aria-expanded", "true");
+      kebab.setAttribute("aria-controls", menu.id);
+      const enabled = [...menu.querySelectorAll('[role="menuitem"]')].filter((item) => item.disabled !== true);
+      const target = focusLast ? enabled[enabled.length - 1] : enabled[0];
+      target?.focus({ preventScroll: true });
+      return true;
+    }
+
+    function togglePreviewMenu(header, kebab) {
+      if (previewMenu !== null && previewMenuAnchor === kebab) {
+        closePreviewMenu({ restore: true });
+        return;
+      }
+      openPreviewMenu(header, kebab);
+    }
+
+    /**
+     * Keep an open menu in step with upstream instead of closing it.
+     *
+     * A rerender can disable a control (busy reload) or relabel it; mirroring
+     * that into the existing items preserves focus and avoids a menu that
+     * disappears under the user's finger. A changed item count (a new action
+     * appeared) cannot be mapped safely, so that case closes the menu.
+     */
+    function refreshPreviewMenuItems() {
+      if (previewMenu === null || previewMenuHeader === null) return false;
+      const buttons = previewSecondaryButtons(previewMenuHeader);
+      const items = [...previewMenu.querySelectorAll('[role="menuitem"]')];
+      if (items.length !== buttons.length) return false;
+      for (let index = 0; index < items.length; index += 1) {
+        const button = buttons[index];
+        const item = items[index];
+        item.textContent = previewActionLabel(button);
+        const disabled = button.disabled === true;
+        item.disabled = disabled;
+        if (disabled) item.setAttribute("aria-disabled", "true");
+        else item.removeAttribute("aria-disabled");
+      }
+      return true;
+    }
+
+    function ensurePreviewKebab(header) {
+      let kebab = [...header.children].find((child) => child.hasAttribute?.("data-rdsh-preview-kebab"));
+      if (kebab !== undefined) return kebab;
+      kebab = document.createElement("button");
+      kebab.type = "button";
+      kebab.className = "rdsh-mux-preview-kebab";
+      kebab.setAttribute("data-rdsh-preview-kebab", "");
+      kebab.setAttribute("aria-label", t("mux.preview.more"));
+      kebab.setAttribute("aria-haspopup", "menu");
+      kebab.setAttribute("aria-expanded", "false");
+      kebab.innerHTML = '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><circle cx="3" cy="8" r="1.4"/><circle cx="8" cy="8" r="1.4"/><circle cx="13" cy="8" r="1.4"/></svg>';
+      kebab.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        togglePreviewMenu(header, kebab);
+      });
+      kebab.addEventListener("keydown", (event) => {
+        if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+        event.preventDefault();
+        // The same keydown bubbles to the document handler; without this the
+        // just-opened menu would immediately advance one extra item.
+        event.stopPropagation();
+        openPreviewMenu(header, kebab, event.key === "ArrowUp");
+      });
+      header.append(kebab);
+      return kebab;
+    }
+
+    /** Tag headers, refresh moved actions and close a menu that went stale. */
+    function decoratePreviewTools() {
+      if (!narrow()) {
+        clearPreviewTools();
+        return;
+      }
+      const seenHeaders = new Set();
+      for (const path of document.querySelectorAll("[data-rdsh-rightpanel] [data-textpreview-path]")) {
+        const header = previewHeaderOf(path);
+        if (header === null) continue;
+        seenHeaders.add(header);
+        header.setAttribute("data-rdsh-preview-header", "");
+        // Recompute the moved set every pass: a changed file can add or remove
+        // an upstream action in the same header.
+        const secondary = new Set(previewSecondaryButtons(header));
+        for (const old of header.querySelectorAll("[data-rdsh-preview-secondary]")) {
+          if (!secondary.has(old)) {
+            old.removeAttribute("data-rdsh-preview-secondary");
+            old.removeAttribute("data-rdsh-preview-action");
+          }
+        }
+        let index = 0;
+        for (const button of secondary) {
+          button.setAttribute("data-rdsh-preview-secondary", "");
+          button.setAttribute("data-rdsh-preview-action", String(index++));
+        }
+        ensurePreviewKebab(header);
+      }
+      if (previewMenu !== null) {
+        const alive = seenHeaders.has(previewMenuHeader)
+          && previewMenuAnchor?.isConnected === true
+          && previewMenuHeader.contains(previewMenuAnchor);
+        if (!alive) {
+          closePreviewMenu({ restore: false });
+        } else {
+          const signature = previewMenuSignatureOf(previewMenuHeader);
+          if (signature !== previewMenuSignature) {
+            if (refreshPreviewMenuItems()) previewMenuSignature = signature;
+            else closePreviewMenu({ restore: false });
+          }
+        }
+      }
+      decorateReviewWrap();
+    }
+
+    /**
+     * Remove every node, attribute and listener this section owns.
+     *
+     * Deliberately leaves the per-surface memory alone: a user's explicit OFF
+     * must survive a phone -> desktop -> phone round trip. Only dispose clears
+     * that memory.
+     */
+    function clearPreviewTools() {
+      closePreviewMenu();
+      for (const attribute of ["data-rdsh-preview-header", "data-rdsh-preview-secondary", "data-rdsh-preview-action", "data-rdsh-review", "data-rdsh-review-wrap", "data-rdsh-review-auto", "data-rdsh-review-off"]) {
+        for (const element of document.querySelectorAll(`[${attribute}]`)) element.removeAttribute(attribute);
+      }
+      for (const node of document.querySelectorAll("[data-rdsh-preview-kebab]")) node.remove();
+      // An auto-fired surface is not a user choice: after a width round trip a
+      // remounted review should get the default once again. An explicit OFF is
+      // different and stays in `reviewWrapUserOff*` until dispose.
+      reviewWrapAutoFired = new WeakSet();
+      reviewWrapAutoKeys.clear();
+    }
+
+    /** Full teardown: DOM plus the in-memory choices (boot dispose only). */
+    function disposePreviewTools() {
+      clearPreviewTools();
+      clearTimeout(reviewWrapProbeTimer);
+      reviewWrapProbeTimer = 0;
+      reviewWrapAutoFired = new WeakSet();
+      reviewWrapUserOff = new WeakSet();
+      reviewWrapAutoKeys.clear();
+      reviewWrapUserOffKeys.clear();
     }
 
     function decorateRightPanel() {
@@ -3844,6 +4343,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       decorateRightPanelTabs();
       decorateWorkspaceFiles();
       decorateCodePreview();
+      decoratePreviewTools();
       decorateQuestionCards();
       decorateTodoPanel();
       decorateGoalBar();
@@ -5931,6 +6431,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
       // The app delivered the tab click itself; the replay must stay cancelled.
       if (tabCandidate !== null && target.closest("[data-rdsh-rtab]") === tabCandidate.tab) tabCandidate.fired = true;
+
+      // #34: a real click on a review's wrap toggle is the user's choice. The
+      // trusted check keeps this plugin's own default-on click out of the
+      // record, so OFF is respected on every later render pass.
+      noteReviewWrapClick(event);
 
       // Workspace picker: remember that the next visible menu is the
       // new-session workspace chooser, then decorate it with search. The
@@ -8894,6 +9399,26 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
      anything. Hide it rather than leave a control that does nothing. */
   [data-rdsh-rightpanel] [data-textpreview-tool="wrap"] { display: none !important; }
 
+  /* #33: the host's native "open in <app>" split button. The wrapper carries
+     data-open-target and both halves carry data-open-path-*; hiding it takes
+     the dead half, the chevron and the missing-label case together. Only the
+     native target, not browser preview controls in the same header. */
+  [data-open-target] { display: none !important; }
+
+  /* #35: the phone header keeps the path and the viewer picker visible. Every
+     other action is offered by the kebab, which calls the original button. */
+  [data-rdsh-preview-header] [data-rdsh-preview-secondary] { display: none !important; }
+
+  /* #34: long unbroken tokens wrap only while upstream's own wrap state says
+     ON. With wrap OFF (a user's explicit choice) the stock horizontal travel
+     stays, so this rule cannot override that choice. */
+  [data-rdsh-rightpanel] [data-changes-review] [data-review-wrap] [data-diff-line],
+  [data-rdsh-rightpanel] [data-changes-review] [data-review-wrap] [data-diff-code] {
+    white-space: pre-wrap !important;
+    overflow-wrap: anywhere !important;
+    word-break: break-word !important;
+  }
+
   /* Two controls in the panel header duplicate what the phone already is or
      cannot do: "Exit fullscreen" closes the panel exactly like the ✕ next to
      it, and "Split" needs width the phone does not have. Keep only the ✕. */
@@ -8904,7 +9429,6 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   html[data-rdsh-native-gap] [data-rdsh-sidebar],
   html[data-rdsh-native-gap] [data-rdsh-rightpanel],
   html[data-rdsh-native-gap] [data-shortcut-modal="settings"] { padding-bottom: 0 !important; }
-
 /* Safe-area insets measured at runtime: the attributes/style this module
    writes are mobile-only (#44) and releaseSafeArea() strips them on dispose.
    The values themselves come from env() so a notched phone still draws under
@@ -8914,6 +9438,57 @@ html[data-rdsh-safe-bottom] #root { box-sizing: border-box; padding-bottom: env(
 /* iOS 26 standalone native gap: the home indicator is in the unpainted strip
    below the web view, so an inner bottom safe-area pad only widens the blank. */
 html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !important; }
+
+/* #35: the kebab and its menu. The kebab is only ever created inside the
+   phone query by decoratePreviewTools; the wide desktop has no node. */
+.rdsh-mux-preview-kebab {
+  flex: none; box-sizing: border-box; width: 30px; height: 30px;
+  margin-left: 2px; padding: 0; border: 0; border-radius: 8px;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--dsw-alias-label-secondary, #cfd3d6);
+  background: transparent; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.rdsh-mux-preview-kebab:hover,
+.rdsh-mux-preview-kebab[aria-expanded="true"] {
+  color: var(--dsw-alias-label-primary, #f9fafb);
+  background: var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,.08));
+}
+.rdsh-mux-preview-kebab:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary, #7aaaff);
+  outline-offset: 1px;
+}
+.rdsh-mux-preview-kebab svg { fill: currentColor; }
+.rdsh-mux-preview-menu {
+  position: fixed; z-index: 995; box-sizing: border-box;
+  padding: 6px; border-radius: 12px;
+  display: flex; flex-direction: column; gap: 2px;
+  background: var(--dsw-alias-bg-layer-2, #2c2c2e);
+  border: .5px solid var(--dsw-alias-border-l3, rgba(255,255,255,.16));
+  box-shadow: var(--dsw-elevation-prominent, 0 14px 40px rgba(0,0,0,.3));
+}
+.rdsh-mux-preview-menu button {
+  box-sizing: border-box; width: 100%; min-height: 40px;
+  margin: 0; padding: 8px 10px; border: 0; border-radius: 8px;
+  display: block; text-align: left; overflow: hidden; white-space: nowrap;
+  text-overflow: ellipsis; font: inherit; font-size: 14px;
+  color: var(--dsw-alias-label-primary, #f9fafb); background: transparent;
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.rdsh-mux-preview-menu button:hover,
+.rdsh-mux-preview-menu button:focus-visible {
+  background: var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,.08));
+  outline: none;
+}
+.rdsh-mux-preview-menu button:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary, #7aaaff);
+  outline-offset: -2px;
+}
+.rdsh-mux-preview-menu button[disabled] {
+  color: var(--dsw-alias-label-tertiary, #a1a1aa);
+  cursor: default;
+}
+
 `;
 
     // The device half is always present. The mobile half is inserted as its
@@ -9089,10 +9664,14 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           // Re-reads the window width for the Settings readout and re-measures
           // mobile geometry. It cannot change the device mode.
           syncWidth: applyWidthBoundary,
+
           // Diagnostics used by the unit tests: the bootstrapped mode, the
           // layout predicate and the restored scroll hooks are observable
           // without a browser.
           get mode() { return DEVICE_MODE; },
+          // Diagnostics used by the unit tests: the layout predicate and the
+          // restored scroll hooks have to be observable without a browser.
+          decorateNow: decorate,
           phone,
           markMobileSession,
           closeDrawer,
@@ -9149,6 +9728,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             } catch (error) {
               console.error("[rdsh-mobile-ux] cleanup failed", error);
             }
+            disposePreviewTools();
             rightPanelFitPending = false;
             style.remove();
             phoneStyle?.remove();

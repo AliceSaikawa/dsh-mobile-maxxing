@@ -52,6 +52,7 @@ dsh plugin --profile web add link:/path/to/dsh-mobile-maxxing
 | 通知 | アプリを見ている間はアプリ内バナー、それ以外は Web Push |
 | 通知音 | 合成した5種類。音量も設定可。音声ファイルは同梱しません |
 | スマホ/タブレットのレイアウト | サイドバーがドロワーに、設定は1タップ、コードは折り返し。幅ではなく端末で判定 |
+| コードレビュー | 折り返しを既定でON。右端の操作は「…」に集約し、PC で開く系は非表示 |
 | テーマ（ライト／ダーク） | 上流のトークンに追従。PC と別に「この端末だけ」の配色を選べる |
 | CJK 表示の修正 | `**https://x**（メモ）` の太字とリンクが壊れない |
 | セッションIDのコピー | セッションメニューに1行追加 |
@@ -124,6 +125,7 @@ dsh plugin --profile web add link:/path/to/dsh-mobile-maxxing
 | Notifications | In-app banner while the app is on screen, Web Push otherwise |
 | Notification sounds | Five synthesised presets with a volume control; no audio files ship |
 | Mobile layout | Sidebar becomes a drawer, settings open in one tap, code wraps |
+| Code review | Wrap is on by default; header actions collapse into a "…" menu; native open-in-app buttons are hidden |
 | Light / dark theme | Follows the host tokens; a per-device palette can differ from the PC |
 | CJK rendering | `**https://x**（memo）` keeps its bold and its link |
 | Session id copy | One row in the session row menu |

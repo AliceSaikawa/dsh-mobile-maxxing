@@ -105,6 +105,13 @@ What changes:
 - The sidebar becomes an overlay drawer you open with the floating button
 - Settings get a single column and a scrolling tab strip
 - The code viewer always wraps and never scrolls sideways
+- Code review opens with wrap on; a wrap you turn off stays off for that
+  review tab for this page (upstream switches the diff from side-by-side to the unified
+  layout while wrap is on, so both columns come back when you turn wrap off)
+- Text-preview header actions (reload and file actions) move into a "…" menu
+  that calls the original buttons; the path and the viewer picker stay put
+- The native "Open in <app>" split button is not shown, because a phone cannot
+  hand the file to that desktop app
 - The composer stays above the keyboard
 - Session rows keep their actions hidden until the menu or a long press
 - Right-panel tabs are finger-sized, and the tab strip scrolls sideways

@@ -31,6 +31,7 @@ function arrayLiteral(name) {
 	return CLIENT.slice(start, end === -1 ? undefined : end);
 }
 
+
 test("hiding follows the device mode, not the window width", () => {
 	const body = functionBody("applyHideList");
 	assert.match(body, /const hideOnThisDevice = !disabled && phone\(\);/, "the hide decision ignores the mode");
@@ -61,11 +62,9 @@ test("label rewrites and the plus hijack follow phone()", () => {
 	assert.match(functionBody("onClickCapture"), /addButtonOf\(target\) !== null && phone\(\)/, "the + hijack is not mode-gated");
 });
 
-test("the reference 13-label hide list is restored", () => {
+test("the hide list no longer guesses native open-in-app labels", () => {
 	const defaults = arrayLiteral("HIDE_DEFAULT");
 	for (const label of [
-		"Open in Files",
-		"More ways to open",
 		"More actions",
 		"Feedback",
 		"Sign in",
@@ -73,14 +72,46 @@ test("the reference 13-label hide list is restored", () => {
 		"Desktop notifications",
 		"Show coding view",
 		"Built-in plugins",
-		"Open in Text Editor",
-		"Open in editor",
-		"Open in Explorer",
-		"Reveal in Finder",
 	]) {
 		assert.equal(defaults.includes(`"${label}"`), true, `${label} is missing from the hide list`);
 	}
 	assert.match(defaults, /"Open configuration file"/, "the merged-build addition was dropped");
+	// #33: the native split button is matched structurally, not by its visible
+	// wording (the host names the app itself, and the prominent half has no
+	// aria-label). A label entry would also risk hiding a browser preview
+	// control that happens to use the same text.
+	for (const label of ["Open in Files", "More ways to open", "Open in Text Editor", "Open in editor", "Open in Explorer", "Reveal in Finder"]) {
+		assert.equal(defaults.includes(`"${label}"`), false, `${label} still relies on the label list`);
+	}
+	assert.match(CLIENT, /const OPEN_TARGET_SELECTOR = "\[data-open-target\]";/, "the structural open-target selector is missing");
+});
+
+test("the native open target and diff wrap rules are lexically inside the phone query", () => {
+	const block = cssBlocks().find((entry) => entry.text.includes("[data-open-target]"));
+	assert.ok(block !== undefined, "the mobile stylesheet block was not found");
+	const parsed = cssRules(block.text.replaceAll("${NARROW_QUERY}", "(max-width: 767px)"));
+	const matching = (predicate) => parsed.rules.filter((rule) => rule.close !== null && predicate(rule));
+	const isOpenTarget = (rule) => rule.prelude.split(",").some((part) => part.trim() === "[data-open-target]");
+	const isDiffWrap = (rule) => rule.prelude.includes("[data-review-wrap]")
+		&& rule.prelude.includes("[data-diff-line]")
+		&& rule.prelude.includes("[data-diff-code]");
+
+	const openRules = matching(isOpenTarget);
+	assert.ok(openRules.length > 0, "the native open-target hide rule is missing");
+	assert.ok(openRules.every(insidePhoneQuery), "the native open-target hide rule escaped the phone query");
+
+	const wrapRules = matching(isDiffWrap);
+	assert.ok(wrapRules.length > 0, "the diff long-token wrap rule is missing");
+	assert.ok(wrapRules.every(insidePhoneQuery), "the diff wrap rule escaped the phone query");
+
+	// Negative control: move the real rule text outside the media block and
+	// prove this checker rejects it. A lastIndexOf/slice check passed here.
+	const moved = parsed.css.slice(0, openRules[0].start)
+		+ parsed.css.slice(openRules[0].close + 1)
+		+ "\n"
+		+ parsed.css.slice(openRules[0].start, openRules[0].close + 1);
+	const movedRules = cssRules(moved).rules.filter((rule) => rule.close !== null && isOpenTarget(rule));
+	assert.ok(movedRules.some((rule) => !insidePhoneQuery(rule)), "the checker accepted a rule moved outside the phone query");
 });
 
 test("the mobile tab inlines the other sections by mode, not by width", () => {

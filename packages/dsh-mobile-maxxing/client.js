@@ -10901,11 +10901,13 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
               keys: Object.keys(entry?.options ?? {}),
               inject: typeof entry?.options?.inject,
             })),
-            services: {
-              theme: typeof ctx.get?.("theme"),
-              locale: typeof ctx.locale,
-              localeGet: typeof ctx.get?.("locale"),
-            },
+            services: (() => {
+              const out = {};
+              for (const name of ["theme", "locale"]) {
+                try { out[name] = typeof ctx.get(name); } catch (error) { out[name] = String(error.message); }
+              }
+              return out;
+            })(),
           }),
           get badgeCount() { return notificationTotal; },
           applyNotificationCount,

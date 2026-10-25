@@ -1648,7 +1648,13 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       }
     }
 
-    /** Apply this browser's preset to one freshly opened blank session. */
+    /**
+     * Apply this browser's preset to one freshly opened blank session.
+     *
+     * shortcut: the command runs right after the blank session opens, so a
+     * prompt sent in the same instant could run once under the shared default;
+     * gate the first send if that ever matters.
+     */
     async function applyLocalPermissionToSession(sessionId) {
       const preset = readLocalPermission();
       if (preset === null || typeof sessionId !== "string" || sessionId === "") return;

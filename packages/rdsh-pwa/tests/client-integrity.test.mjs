@@ -163,7 +163,7 @@ test("every addEventListener handler is defined", () => {
 test("the bundle registers exactly one client module", () => {
 	const registrations = CLIENT.match(/window\.__ModuleLoader__\.load\(/g) ?? [];
 	assert.equal(registrations.length, 1, "one package is one browser module");
-	assert.match(CLIENT, /window\.__ModuleLoader__\.load\(\{\s*\n\s*id:\s*"rdsh-pwa",/);
+	assert.match(CLIENT, /window\.__ModuleLoader__\.load\(\{\s*\n\s*id:\s*"dsh-mobile-maxxing",/);
 });
 
 test("no data attribute is styled without ever being written", () => {

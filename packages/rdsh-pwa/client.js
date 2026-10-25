@@ -1,5 +1,5 @@
 window.__ModuleLoader__.load({
-  id: "rdsh-pwa",
+  id: "dsh-mobile-maxxing",
   factory(require) {
     // rdsh-pwa — browser half.
     //

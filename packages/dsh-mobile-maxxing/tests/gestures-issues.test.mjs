@@ -210,7 +210,7 @@ function stub(depth = 0) {
 /* Boot                                                                   */
 /* ---------------------------------------------------------------------- */
 
-function bootGestures({ narrow = true, configureDocument = () => {} } = {}) {
+function bootGestures({ narrow = true, mode = narrow ? "mobile" : "desktop", width = narrow ? 390 : 1024, configureDocument = () => {} } = {}) {
 	let definition;
 	const disposers = [];
 	const timers = new Map();
@@ -266,6 +266,7 @@ function bootGestures({ narrow = true, configureDocument = () => {} } = {}) {
 	const sandbox = {
 		__RDSH_PWA_PROBES__: PROBES,
 		__RDSH_PWA_COPY__: COPY,
+		__RDSH_DEVICE_MODE__: mode,
 		window: {
 			__ModuleLoader__: {
 				load(value) {
@@ -287,7 +288,7 @@ function bootGestures({ narrow = true, configureDocument = () => {} } = {}) {
 			localStorage: stub(),
 			screen: { height: 844 },
 			performance: { now: () => 0 },
-			innerWidth: 390,
+			innerWidth: width,
 			innerHeight: 844,
 			visualViewport,
 		},
@@ -340,7 +341,7 @@ function bootGestures({ narrow = true, configureDocument = () => {} } = {}) {
 		Notification: stub(),
 		AudioContext: class AudioContext {},
 		screen: { height: 844 },
-		innerWidth: 390,
+		innerWidth: width,
 		innerHeight: 844,
 		devicePixelRatio: 3,
 		performance: { now: () => 0 },
@@ -628,15 +629,15 @@ test("a plain tap still switches through the one-shot click replay", () => {
 /* #32: the panel close swipe ignores its tab strip and header            */
 /* ---------------------------------------------------------------------- */
 
-function panelFixture(doc) {
+function panelFixture(doc, width = 390) {
 	const root = new FakeElement("div");
 	const panel = new FakeElement("div");
 	const collapse = new FakeElement("button");
 	panel._closest = (selector) => (selector === "[data-sidebar-right-panel]" ? root : null);
-	panel._rect = () => ({ x: 0, y: 0, top: 0, left: 0, right: 390, bottom: 800, width: 390, height: 800 });
+	panel._rect = () => ({ x: 0, y: 0, top: 0, left: 0, right: width, bottom: 800, width, height: 800 });
 	collapse.setAttribute("aria-label", "Collapse right sidebar");
 	collapse._closest = (selector) => (selector === "[data-sidebar-right-panel]" ? root : null);
-	collapse._rect = () => ({ x: 300, y: 10, top: 10, left: 300, right: 324, bottom: 34, width: 24, height: 24 });
+	collapse._rect = () => ({ x: width - 90, y: 10, top: 10, left: width - 90, right: width - 66, bottom: 34, width: 24, height: 24 });
 	collapse.parentElement = panel;
 	doc.querySelectorAll = (selector) => (selector === '[aria-label="Collapse right sidebar"]' ? [collapse] : []);
 	return { root, panel, collapse };
@@ -849,15 +850,27 @@ test("a closed panel or a desktop width clears the terminal fit", () => {
 	assert.equal(terminal.screen.style.height, undefined, "a closed panel keeps no inline height");
 	booted.disposeAll();
 
-	const wide = bootGestures({ narrow: false });
-	const wideCollapse = panelFixture(wide.doc);
-	const wideTerminal = terminalFixture(wide.doc, wideCollapse);
-	wide.drainFrames();
-	wide.visualViewport.height = 544;
-	visualViewportHandler(wide)();
-	wide.drainFrames();
-	assert.equal(wideTerminal.screen.style.height, undefined, "a desktop width never fits");
-	wide.disposeAll();
+	// A 390px desktop window is still desktop mode and never fits.
+	const desktop = bootGestures({ mode: "desktop", width: 390 });
+	const desktopCollapse = panelFixture(desktop.doc);
+	const desktopTerminal = terminalFixture(desktop.doc, desktopCollapse);
+	desktop.drainFrames();
+	desktop.visualViewport.height = 544;
+	visualViewportHandler(desktop)();
+	desktop.drainFrames();
+	assert.equal(desktopTerminal.screen.style.height, undefined, "a desktop window never fits");
+	desktop.disposeAll();
+
+	// A 1024px mobile tablet keeps the fit feature.
+	const tablet = bootGestures({ mode: "mobile", width: 1024 });
+	const tabletCollapse = panelFixture(tablet.doc, 1024);
+	const tabletTerminal = terminalFixture(tablet.doc, tabletCollapse);
+	tablet.drainFrames();
+	tablet.visualViewport.height = 544;
+	visualViewportHandler(tablet)();
+	tablet.drainFrames();
+	assert.equal(tabletTerminal.screen.style.height, "500px", "a wide mobile tablet lost the fit");
+	tablet.disposeAll();
 });
 
 test("the phone stylesheet reopens the vertical axis on every dockkit tab layer", () => {

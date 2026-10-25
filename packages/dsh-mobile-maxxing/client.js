@@ -6462,7 +6462,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      */
     function applyTerminalFit() {
       terminalFitFrame = 0;
-      if (!narrow() || !document.documentElement.hasAttribute("data-rdsh-rightpanel-open")) {
+      if (!phone() || !document.documentElement.hasAttribute("data-rdsh-rightpanel-open")) {
         clearTerminalFit();
         return;
       }
@@ -6515,7 +6515,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     function scheduleTerminalFit() {
-      if (!narrow()) {
+      if (!phone()) {
         clearTerminalFit();
         return;
       }

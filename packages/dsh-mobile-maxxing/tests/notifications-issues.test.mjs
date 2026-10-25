@@ -67,7 +67,7 @@ function withHome(run) {
 		const previous = process.env.DSH_HOME;
 		process.env.DSH_HOME = home;
 		try {
-			await run(home, join(home, "rdsh-pwa", "push.json"));
+			await run(home, join(home, "dsh-mobile-maxxing", "push.json"));
 		} finally {
 			if (previous === undefined) delete process.env.DSH_HOME;
 			else process.env.DSH_HOME = previous;
@@ -277,11 +277,11 @@ test("a subscribe without body.origin falls back to the request origin", withHom
 	// future client that omits it still has the browser's Origin header, so
 	// the entry stays addressable by origin-scoped routing.
 	assert.equal(
-		(await request(newApp, "/api/rdsh-pwa/push/subscribe", { body: { subscription: phone, label: "phone" }, origin: NEW_ORIGIN })).status,
+		(await request(newApp, "/api/dsh-mobile-maxxing/push/subscribe", { body: { subscription: phone, label: "phone" }, origin: NEW_ORIGIN })).status,
 		200,
 	);
 	assert.equal(
-		(await request(oldApp, "/api/rdsh-pwa/push/subscribe", { body: { subscription: old, label: "old" }, origin: OLD_ORIGIN })).status,
+		(await request(oldApp, "/api/dsh-mobile-maxxing/push/subscribe", { body: { subscription: old, label: "old" }, origin: OLD_ORIGIN })).status,
 		200,
 	);
 
@@ -295,12 +295,12 @@ test("a subscribe without body.origin falls back to the request origin", withHom
 	const fetchRecorder = withFetch(() => ({ status: 201, ok: true }));
 	try {
 		fetchRecorder.calls.length = 0;
-		assert.equal((await request(newApp, "/api/rdsh-pwa/push/test", { body: {}, origin: NEW_ORIGIN })).status, 200);
+		assert.equal((await request(newApp, "/api/dsh-mobile-maxxing/push/test", { body: {}, origin: NEW_ORIGIN })).status, 200);
 		await settle();
 		assert.deepEqual(fetchRecorder.calls, [phone.endpoint], "the new app's test push reached the wrong app or none");
 
 		fetchRecorder.calls.length = 0;
-		assert.equal((await request(oldApp, "/api/rdsh-pwa/push/test", { body: {}, origin: OLD_ORIGIN })).status, 200);
+		assert.equal((await request(oldApp, "/api/dsh-mobile-maxxing/push/test", { body: {}, origin: OLD_ORIGIN })).status, 200);
 		await settle();
 		assert.deepEqual(fetchRecorder.calls, [old.endpoint], "the old app's test push reached the wrong app or none");
 
@@ -310,7 +310,7 @@ test("a subscribe without body.origin falls back to the request origin", withHom
 		// `newApp` already learned its origin above.
 		const coldApp = makeInstance();
 		fetchRecorder.calls.length = 0;
-		assert.equal((await request(coldApp, "/api/rdsh-pwa/push/test", { body: {} })).status, 200);
+		assert.equal((await request(coldApp, "/api/dsh-mobile-maxxing/push/test", { body: {} })).status, 200);
 		await settle();
 		assert.deepEqual(fetchRecorder.calls.sort(), [phone.endpoint, old.endpoint].sort(), "the unknown-origin fallback was silently suppressed");
 	} finally {
@@ -328,7 +328,7 @@ test("an explicit body.origin wins over a proxy's inner request origin", withHom
 	// inner http origin in Origin/Referer while the page still reports the
 	// public https origin in the body. Overwriting the body with the header
 	// would store the wrong owner and misroute later pushes.
-	const registered = await request(app, "/api/rdsh-pwa/push/subscribe", {
+	const registered = await request(app, "/api/dsh-mobile-maxxing/push/subscribe", {
 		body: { subscription: phone, label: "proxy", origin: NEW_ORIGIN },
 		origin: INTERNAL_ORIGIN,
 	});
@@ -343,7 +343,7 @@ test("an explicit body.origin wins over a proxy's inner request origin", withHom
 
 	const fetchRecorder = withFetch(() => ({ status: 201, ok: true }));
 	try {
-		assert.equal((await request(app, "/api/rdsh-pwa/push/test", { body: {}, origin: NEW_ORIGIN })).status, 200);
+		assert.equal((await request(app, "/api/dsh-mobile-maxxing/push/test", { body: {}, origin: NEW_ORIGIN })).status, 200);
 		await settle();
 		assert.deepEqual(fetchRecorder.calls, [phone.endpoint], "the public-origin test push could not find the subscription");
 	} finally {
@@ -362,14 +362,14 @@ test("a new subscription with a non-canonical origin still receives exact-origin
 	// Storing it verbatim would miss exact-origin routing, which compares
 	// against the request's normalized URL.origin.
 	assert.equal(
-		(await request(app, "/api/rdsh-pwa/push/subscribe", {
+		(await request(app, "/api/dsh-mobile-maxxing/push/subscribe", {
 			body: { subscription: slash, label: "slash", origin: `${NEW_ORIGIN}/` },
 			origin: INTERNAL_ORIGIN,
 		})).status,
 		200,
 	);
 	assert.equal(
-		(await request(app, "/api/rdsh-pwa/push/subscribe", {
+		(await request(app, "/api/dsh-mobile-maxxing/push/subscribe", {
 			body: { subscription: defaultPort, label: "port", origin: "https://app.example:443" },
 			origin: INTERNAL_ORIGIN,
 		})).status,
@@ -384,12 +384,12 @@ test("a new subscription with a non-canonical origin still receives exact-origin
 
 	const fetchRecorder = withFetch(() => ({ status: 201, ok: true }));
 	try {
-		assert.equal((await request(app, "/api/rdsh-pwa/push/test", { body: {}, origin: NEW_ORIGIN })).status, 200);
+		assert.equal((await request(app, "/api/dsh-mobile-maxxing/push/test", { body: {}, origin: NEW_ORIGIN })).status, 200);
 		await settle();
 		assert.deepEqual(fetchRecorder.calls, [slash.endpoint], "the trailing-slash subscription was not delivered to");
 
 		fetchRecorder.calls.length = 0;
-		assert.equal((await request(app, "/api/rdsh-pwa/push/test", { body: {}, origin: "https://app.example" })).status, 200);
+		assert.equal((await request(app, "/api/dsh-mobile-maxxing/push/test", { body: {}, origin: "https://app.example" })).status, 200);
 		await settle();
 		assert.deepEqual(fetchRecorder.calls, [defaultPort.endpoint], "the :443 subscription was not delivered to");
 	} finally {
@@ -438,7 +438,7 @@ test("before any page talks to a process, a question keeps the all-subscriptions
 		);
 
 		// A boot-time /config is what fixes it for the requesting process.
-		assert.equal((await request(newApp, "/api/rdsh-pwa/push/config", { method: "GET", origin: NEW_ORIGIN })).status, 200);
+		assert.equal((await request(newApp, "/api/dsh-mobile-maxxing/push/config", { method: "GET", origin: NEW_ORIGIN })).status, 200);
 		fetchRecorder.calls.length = 0;
 		question(newApp, "session-1");
 		await settle();
@@ -456,7 +456,7 @@ test("before any page talks to a process, a question keeps the all-subscriptions
 			"one process adopted the other process's origin",
 		);
 
-		assert.equal((await request(oldApp, "/api/rdsh-pwa/push/config", { method: "GET", origin: OLD_ORIGIN })).status, 200);
+		assert.equal((await request(oldApp, "/api/dsh-mobile-maxxing/push/config", { method: "GET", origin: OLD_ORIGIN })).status, 200);
 		fetchRecorder.calls.length = 0;
 		question(oldApp, "session-1");
 		await settle();
@@ -478,13 +478,13 @@ test("a phone turn only notifies the app that started it, even with the other ap
 	const oldApp = makeInstance();
 	newApp.addRoot("session-1");
 	oldApp.addRoot("session-1");
-	await request(newApp, "/api/rdsh-pwa/push/config", { method: "GET", origin: NEW_ORIGIN });
-	await request(oldApp, "/api/rdsh-pwa/push/config", { method: "GET", origin: OLD_ORIGIN });
+	await request(newApp, "/api/dsh-mobile-maxxing/push/config", { method: "GET", origin: NEW_ORIGIN });
+	await request(oldApp, "/api/dsh-mobile-maxxing/push/config", { method: "GET", origin: OLD_ORIGIN });
 
 	const fetchRecorder = withFetch(() => ({ status: 201, ok: true }));
 	try {
 		assert.equal(
-			(await request(newApp, "/api/rdsh-pwa/push/mobile-send", { body: { sessionId: "session-1" }, origin: NEW_ORIGIN })).status,
+			(await request(newApp, "/api/dsh-mobile-maxxing/push/mobile-send", { body: { sessionId: "session-1" }, origin: NEW_ORIGIN })).status,
 			200,
 		);
 		turn(newApp, "session-1", "turn/start");
@@ -536,7 +536,7 @@ test("unsubscribe drops only that endpoint; 404/410 prune retired ones", withHom
 	try {
 		// One app cannot retire the other app's subscription even if it names
 		// the endpoint: the store is shared, so the delete is origin-scoped.
-		const crossOrigin = await request(oldApp, "/api/rdsh-pwa/push/unsubscribe", {
+		const crossOrigin = await request(oldApp, "/api/dsh-mobile-maxxing/push/unsubscribe", {
 			body: { endpoint: liveNew.endpoint },
 			origin: OLD_ORIGIN,
 		});
@@ -550,7 +550,7 @@ test("unsubscribe drops only that endpoint; 404/410 prune retired ones", withHom
 
 		// Unsubscribing the new app's own endpoint must leave the old app's
 		// subscription untouched (they share one file).
-		const removed = await request(newApp, "/api/rdsh-pwa/push/unsubscribe", {
+		const removed = await request(newApp, "/api/dsh-mobile-maxxing/push/unsubscribe", {
 			body: { endpoint: liveNew.endpoint },
 			origin: NEW_ORIGIN,
 		});
@@ -565,7 +565,7 @@ test("unsubscribe drops only that endpoint; 404/410 prune retired ones", withHom
 		// A push to a retired endpoint is the only signal the host gets when
 		// an app is deleted without calling /unsubscribe. 404/410 must prune
 		// that endpoint and still report the live one.
-		const testPush = await request(newApp, "/api/rdsh-pwa/push/test", { body: {}, origin: NEW_ORIGIN });
+		const testPush = await request(newApp, "/api/dsh-mobile-maxxing/push/test", { body: {}, origin: NEW_ORIGIN });
 		assert.equal(testPush.status, 200);
 		await settle();
 		assert.deepEqual(
@@ -583,7 +583,7 @@ test("unsubscribe drops only that endpoint; 404/410 prune retired ones", withHom
 
 		// The other app still receives its own notification afterwards.
 		fetchRecorder.calls.length = 0;
-		assert.equal((await request(oldApp, "/api/rdsh-pwa/push/test", { body: {}, origin: OLD_ORIGIN })).status, 200);
+		assert.equal((await request(oldApp, "/api/dsh-mobile-maxxing/push/test", { body: {}, origin: OLD_ORIGIN })).status, 200);
 		await settle();
 		assert.deepEqual(fetchRecorder.calls, [liveOld.endpoint], "pruning in one app broke the other app's delivery");
 
@@ -591,7 +591,7 @@ test("unsubscribe drops only that endpoint; 404/410 prune retired ones", withHom
 		// removable, or an upgrade can never clean it up.
 		const legacy = subscription("https://web.push.apple.com/legacy");
 		new PushStore(file).add(legacy, {});
-		const cleaned = await request(newApp, "/api/rdsh-pwa/push/unsubscribe", {
+		const cleaned = await request(newApp, "/api/dsh-mobile-maxxing/push/unsubscribe", {
 			body: { endpoint: legacy.endpoint },
 			origin: NEW_ORIGIN,
 		});
@@ -603,7 +603,7 @@ test("unsubscribe drops only that endpoint; 404/410 prune retired ones", withHom
 		// not make a same-origin comparison fail.
 		const slash = subscription("https://web.push.apple.com/slash");
 		new PushStore(file).add(slash, { origin: `${NEW_ORIGIN}/` });
-		const slashRemoved = await request(newApp, "/api/rdsh-pwa/push/unsubscribe", {
+		const slashRemoved = await request(newApp, "/api/dsh-mobile-maxxing/push/unsubscribe", {
 			body: { endpoint: slash.endpoint },
 			origin: NEW_ORIGIN,
 		});
@@ -611,7 +611,7 @@ test("unsubscribe drops only that endpoint; 404/410 prune retired ones", withHom
 
 		const defaultPort = subscription("https://web.push.apple.com/default-port");
 		new PushStore(file).add(defaultPort, { origin: "https://app.example:443" });
-		const portRemoved = await request(newApp, "/api/rdsh-pwa/push/unsubscribe", {
+		const portRemoved = await request(newApp, "/api/dsh-mobile-maxxing/push/unsubscribe", {
 			body: { endpoint: defaultPort.endpoint },
 			origin: "https://app.example",
 		});
@@ -620,7 +620,7 @@ test("unsubscribe drops only that endpoint; 404/410 prune retired ones", withHom
 		// Normalization must not blur two different origins.
 		const otherSlash = subscription("https://web.push.apple.com/other-slash");
 		new PushStore(file).add(otherSlash, { origin: `${OLD_ORIGIN}/` });
-		const crossSlash = await request(newApp, "/api/rdsh-pwa/push/unsubscribe", {
+		const crossSlash = await request(newApp, "/api/dsh-mobile-maxxing/push/unsubscribe", {
 			body: { endpoint: otherSlash.endpoint },
 			origin: NEW_ORIGIN,
 		});
@@ -762,7 +762,7 @@ test("the worker never intercepts another origin or live state", () => {
 	listeners.get("fetch")(crossOrigin);
 	assert.notEqual(crossOrigin.responded, true, "a cross-origin request must stay with the browser");
 
-	const api = fetchEvent(`${origin}/api/rdsh-pwa/push/config`);
+	const api = fetchEvent(`${origin}/api/dsh-mobile-maxxing/push/config`);
 	listeners.get("fetch")(api);
 	assert.notEqual(api.responded, true, "live API state must never be served from cache");
 
@@ -792,16 +792,16 @@ test("install seeds the shell and activate retires only this app's stale builds"
 	const storage = new FakeCacheStorage(origin);
 	// A previous build of this app, plus a cache that belongs to something
 	// else on the same origin.
-	await storage.open("rdsh-pwa-previous");
+	await storage.open("dsh-mobile-maxxing-previous");
 	await storage.open("someone-elses-cache");
 	const { listeners } = loadServiceWorker({ origin, cacheStorage: storage });
 
 	await fire(listeners, "install");
 	assert.deepEqual(
 		(await storage.keys()).sort(),
-		["rdsh-pwa-build-a", "rdsh-pwa-previous", "someone-elses-cache"].sort(),
+		["dsh-mobile-maxxing-build-a", "dsh-mobile-maxxing-previous", "someone-elses-cache"].sort(),
 	);
-	const shell = await (await storage.open("rdsh-pwa-build-a")).keys();
+	const shell = await (await storage.open("dsh-mobile-maxxing-build-a")).keys();
 	assert.deepEqual(
 		shell.map((item) => item.url).sort(),
 		[`${origin}/`, `${origin}/manifest.webmanifest`].sort(),
@@ -811,7 +811,7 @@ test("install seeds the shell and activate retires only this app's stale builds"
 	await fire(listeners, "activate");
 	assert.deepEqual(
 		(await storage.keys()).sort(),
-		["rdsh-pwa-build-a", "someone-elses-cache"].sort(),
+		["dsh-mobile-maxxing-build-a", "someone-elses-cache"].sort(),
 		"activate did not retire the previous build, or it deleted a foreign cache",
 	);
 });
@@ -822,7 +822,7 @@ test("two origins keep independent caches and cannot share entries", async () =>
 	//
 	// Known limit, not fixed here: two instances served from the SAME origin
 	// under different sub-paths share one CacheStorage, and `activate` retires
-	// every `rdsh-pwa-*` cache it finds there. #28's two apps are distinct
+	// every `dsh-mobile-maxxing-*` cache it finds there. #28's two apps are distinct
 	// origins (the supported case); the same-origin sub-path deployment is
 	// recorded as a risk in the handoff rather than guessed at.
 	const oldOrigin = "https://app.example:8444";
@@ -834,25 +834,25 @@ test("two origins keep independent caches and cannot share entries", async () =>
 
 	await fire(oldWorker.listeners, "install");
 	await fire(newWorker.listeners, "install");
-	await oldStorage.open("rdsh-pwa-stale-old");
-	await newStorage.open("rdsh-pwa-stale-new");
+	await oldStorage.open("dsh-mobile-maxxing-stale-old");
+	await newStorage.open("dsh-mobile-maxxing-stale-new");
 
 	await fire(newWorker.listeners, "activate");
 	assert.deepEqual(
 		(await newStorage.keys()).sort(),
-		["rdsh-pwa-build-a"].sort(),
+		["dsh-mobile-maxxing-build-a"].sort(),
 		"the new origin's activation did not clean its own stale build",
 	);
 	// The old origin is a different CacheStorage: nothing the new worker did
 	// can retire (or otherwise touch) either of its caches.
 	assert.deepEqual(
 		(await oldStorage.keys()).sort(),
-		["rdsh-pwa-build-a", "rdsh-pwa-stale-old"].sort(),
+		["dsh-mobile-maxxing-build-a", "dsh-mobile-maxxing-stale-old"].sort(),
 		"activating one origin deleted the other origin's cache",
 	);
 
-	const oldPaths = (await (await oldStorage.open("rdsh-pwa-build-a")).keys()).map((item) => item.url);
-	const newPaths = (await (await newStorage.open("rdsh-pwa-build-a")).keys()).map((item) => item.url);
+	const oldPaths = (await (await oldStorage.open("dsh-mobile-maxxing-build-a")).keys()).map((item) => item.url);
+	const newPaths = (await (await newStorage.open("dsh-mobile-maxxing-build-a")).keys()).map((item) => item.url);
 	assert.ok(oldPaths.every((url) => url.startsWith(oldOrigin)), "an old-app cache entry points at another origin");
 	assert.ok(newPaths.every((url) => url.startsWith(newOrigin)), "a new-app cache entry points at another origin");
 });

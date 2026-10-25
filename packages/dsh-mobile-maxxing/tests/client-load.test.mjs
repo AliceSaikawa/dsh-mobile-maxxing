@@ -130,7 +130,10 @@ function memoryStorage(initial = {}) {
  * independent: pass `mode` explicitly when a test is about the device contract.
  * `standalone` answers the display-mode query, `storage` supplies remembered
  * localStorage entries, `configureDocument` lets a test wire up the few DOM
- * nodes it cares about, and `schedule` replaces setTimeout.
+ * nodes it cares about, and `schedule` replaces setTimeout. `requireImpl`
+ * replaces the module table the bundle loads (the default answers every name
+ * with a stub), `services` supplies named client services through `ctx.get`,
+ * and `log` replaces the sandbox console.
  */
 function bootClient({
 	mode = null,
@@ -152,6 +155,9 @@ function bootClient({
 	computedStyle = () => stub(),
 	theme = null,
 	locale = null,
+	requireImpl = null,
+	services = {},
+	log = console,
 } = {}) {
 	let definition;
 	const disposers = [];
@@ -209,7 +215,7 @@ function bootClient({
 			disconnect() {}
 		},
 		getComputedStyle: computedStyle,
-		console,
+		console: log,
 		// Real globals the layout code legitimately uses.
 		URL,
 		URLSearchParams,
@@ -268,7 +274,7 @@ function bootClient({
 	vm.runInContext(CLIENT, sandbox, { filename: "client.js" });
 	assert.ok(definition !== undefined, "the module registered itself");
 
-	const plugin = definition.factory((name) => stub());
+	const plugin = definition.factory(requireImpl ?? ((name) => stub()));
 	assert.equal(typeof plugin.apply, "function", "the module returns a plugin");
 
 	// `apply` is what boot() runs from. It touches a lot of DOM; the stub
@@ -299,7 +305,7 @@ function bootClient({
 		get(name) {
 			if (name === "theme") return theme ?? undefined;
 			if (name === "locale") return locale ?? undefined;
-			return undefined;
+			return services[name];
 		},
 		on(event, handler) {
 			let list = eventHandlers.get(event);
@@ -1173,6 +1179,136 @@ test("mobile-send carries the page origin so the host can route the turn back", 
 	const call = calls.find((entry) => entry.url.endsWith("api/dsh-mobile-maxxing/push/mobile-send"));
 	assert.ok(call, "mobile-send was not called");
 	assert.deepEqual(JSON.parse(call.body), { sessionId: "session-1", origin: "https://app.example:8446" });
+	booted.disposeAll();
+});
+
+/**
+ * A module table for the notification path.
+ *
+ * `Toast` and `createRoot` record what the banner renders; `state.primitives`
+ * can be switched to `"missing"` or `"no-toast"` after boot to model an older
+ * shell without changing the module tables the rest of the bundle needs.
+ */
+function noticeRequire(state) {
+	return (name) => {
+		if (name === "react") {
+			return {
+				createElement: (type, props) => ({ type, props }),
+				useState: (initial) => [typeof initial === "function" ? initial() : initial, () => {}],
+				useEffect: () => {},
+				useRef: () => ({ current: null }),
+				useMemo: (factory) => factory(),
+				useCallback: (factory) => factory,
+				Fragment: "fragment",
+			};
+		}
+		if (name === "@deepseek-ai/dsh-client-ui-primitives") {
+			if (state.primitives === "missing") throw new Error("Cannot find module '@deepseek-ai/dsh-client-ui-primitives'");
+			if (state.primitives === "no-toast") return {};
+			return { Toast: function Toast() {} };
+		}
+		if (name === "react-dom/client") {
+			return { createRoot: () => ({ render: (node) => state.renders.push(node) }) };
+		}
+		return stub();
+	};
+}
+
+/**
+ * Boot the client with a captured service-worker listener and a banner module
+ * table, then offer `send()` to deliver one message the way the worker does.
+ */
+function bootWorkerMessages({ visible = true, services = {} } = {}) {
+	const state = { primitives: "ok", renders: [], acks: [], appended: [], warnings: [] };
+	const messages = [];
+	const navigator = {
+		onLine: true,
+		userAgent: "test",
+		serviceWorker: {
+			addEventListener(type, handler) {
+				if (type === "message") messages.push(handler);
+			},
+			removeEventListener() {},
+			getRegistration: async () => undefined,
+			controller: null,
+		},
+	};
+	const booted = bootClient({
+		mode: "mobile",
+		navigator,
+		services,
+		requireImpl: noticeRequire(state),
+		log: { ...console, warn: (...args) => state.warnings.push(args) },
+		configureDocument(doc) {
+			doc.visibilityState = visible ? "visible" : "hidden";
+			doc.body.append = (...nodes) => state.appended.push(...nodes);
+		},
+	});
+	// No audio in the sandbox: soundContext() would otherwise build an instance
+	// of the empty AudioContext stub and playNoticeSound would throw.
+	booted.sandbox.AudioContext = undefined;
+	const send = (data) => {
+		const event = { data, ports: [{ postMessage: (message) => state.acks.push(message) }] };
+		for (const handler of messages) handler(event);
+	};
+	return { ...booted, state, send };
+}
+
+test("a notification hand-off from the current or old worker name renders one banner and acks", () => {
+	for (const type of ["dsh-mobile-maxxing:notify", "rdsh-pwa:notify"]) {
+		const booted = bootWorkerMessages();
+		booted.send({ type, title: "Session A", body: "Turn finished", sessionId: "s1", kind: "turn-end" });
+		assert.deepEqual(booted.state.acks, ["shown"], type + " was not acknowledged exactly once");
+		assert.equal(booted.state.renders.length, 1, type + " did not render exactly one banner");
+		assert.equal(booted.state.renders[0].props.text, "Session A — Turn finished");
+		const host = booted.state.appended.find((node) => node.getAttribute?.("data-rdsh-notice-host") === "");
+		assert.ok(host, "the banner host was not attached to the body");
+		assert.deepEqual(booted.state.warnings, [], "a shown banner warned");
+		booted.disposeAll();
+	}
+});
+
+test("a hidden page takes no hand-off and logs the skip once", () => {
+	for (const type of ["dsh-mobile-maxxing:notify", "rdsh-pwa:notify"]) {
+		const booted = bootWorkerMessages({ visible: false });
+		const message = { type, title: "Session A", body: "", sessionId: "", kind: "notice" };
+		booted.send(message);
+		booted.send(message);
+		assert.deepEqual(booted.state.acks, [], type + " was acknowledged while hidden");
+		assert.equal(booted.state.renders.length, 0, type + " rendered a banner while hidden");
+		assert.equal(booted.state.warnings.length, 1, type + " was skipped silently or logged repeatedly");
+		assert.match(String(booted.state.warnings[0][0]), /page is not visible/);
+		booted.disposeAll();
+	}
+});
+
+test("a banner that cannot render says why once and does not ack", () => {
+	for (const primitives of ["missing", "no-toast"]) {
+		const booted = bootWorkerMessages();
+		booted.state.primitives = primitives;
+		const message = { type: "rdsh-pwa:notify", title: "Session A", body: "", sessionId: "", kind: "notice" };
+		booted.send(message);
+		booted.send(message);
+		assert.deepEqual(booted.state.acks, [], primitives + " was acknowledged without a banner");
+		assert.equal(booted.state.renders.length, 0, primitives + " rendered a banner");
+		assert.equal(booted.state.warnings.length, 1, primitives + " was not explained exactly once");
+		assert.match(
+			String(booted.state.warnings[0][0]),
+			primitives === "missing" ? /primitives are unavailable/ : /no Toast primitive/,
+		);
+		booted.disposeAll();
+	}
+});
+
+test("the current and both previous open-session names still open the session", () => {
+	const opened = [];
+	const booted = bootWorkerMessages({ services: { uiWorkspace: { openSession: (id) => opened.push(id) } } });
+	booted.send({ type: "dsh-notify-push:open-session", sessionId: "push" });
+	booted.send({ type: "rdsh-pwa:open-session", sessionId: "old" });
+	booted.send({ type: "dsh-mobile-maxxing:open-session", sessionId: "new" });
+	assert.deepEqual(opened, ["push", "old", "new"], "a previous worker's tap was ignored");
+	assert.deepEqual(booted.state.acks, [], "a tap was acknowledged as a notification");
+	assert.equal(booted.state.renders.length, 0, "a tap rendered a banner");
 	booted.disposeAll();
 });
 

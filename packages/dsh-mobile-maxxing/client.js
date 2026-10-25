@@ -8438,6 +8438,26 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     let noticeRoot = null;
     let noticeHost = null;
+    /** The last reason a banner was skipped, so a repeating one logs once. */
+    let noticeSkipReason = "";
+
+    /**
+     * Say why an in-app banner was not shown, once per reason.
+     *
+     * A skipped banner is otherwise silent in both directions: this side
+     * returns false, and the worker, seeing no ack, leaves the system
+     * notification to appear. That is the right fallback, but it leaves no
+     * trace when a page should have shown the banner. The reason is logged
+     * once and cleared by the next successful banner, so a shell that never
+     * had the primitives logs one line instead of one per notification.
+     *
+     * @param {string} reason - why the banner could not be rendered.
+     */
+    function warnNoticeSkipped(reason) {
+      if (noticeSkipReason === reason) return;
+      noticeSkipReason = reason;
+      console.warn(`[rdsh-mobile-ux] in-app banner skipped: ${reason}`);
+    }
 
     /**
      * Show one in-app notification banner.
@@ -8456,17 +8476,25 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * @returns {boolean} whether the banner was shown.
      */
     function showInAppNotice({ title, body = "", sessionId = "", kind = "notice" }) {
-      if (!pageVisible()) return false;
+      if (!pageVisible()) {
+        warnNoticeSkipped("the page is not visible");
+        return false;
+      }
       let primitives;
       let createRoot;
       try {
         primitives = require("@deepseek-ai/dsh-client-ui-primitives");
         ({ createRoot } = require("react-dom/client"));
-      } catch {
+      } catch (error) {
         // Without the primitives (an older shell) there is nothing to render.
+        const detail = String((error && error.message) || error);
+        warnNoticeSkipped(`the notification primitives are unavailable (${detail})`);
         return false;
       }
-      if (typeof primitives?.Toast !== "function") return false;
+      if (typeof primitives?.Toast !== "function") {
+        warnNoticeSkipped("the shell has no Toast primitive");
+        return false;
+      }
       if (noticeHost === null) {
         noticeHost = document.createElement("div");
         noticeHost.setAttribute("data-rdsh-notice-host", "");
@@ -8493,6 +8521,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           },
         },
       ));
+      // A banner made it: the next failure is news again.
+      noticeSkipReason = "";
       return true;
     }
 
@@ -8508,7 +8538,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     function notifyUser(notice) {
       // A banner only appears while the page is on screen, so the sound rides
       // with it; a backgrounded page lets the service worker make its own noise.
-      if (!pageVisible()) return false;
+      if (!pageVisible()) {
+        warnNoticeSkipped("the page is not visible");
+        return false;
+      }
       playNoticeSound(notice.kind === "question" ? "pop" : readSoundPreset());
       return showInAppNotice(notice);
     }
@@ -8627,6 +8660,27 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     /**
+     * Worker message names that hand a notification to this page.
+     *
+     * The current name comes first; `rdsh-pwa` is the worker of the package
+     * this one replaced. A message carries exactly one `type`, so a hand-off
+     * can match only one entry and is never handled twice.
+     */
+    const NOTIFY_MESSAGES = ["dsh-mobile-maxxing:notify", "rdsh-pwa:notify"];
+    /**
+     * Worker message names that ask for a session to be opened.
+     *
+     * `dsh-notify-push` and `rdsh-pwa` are the previous packages' names. An
+     * old worker can still be the one controlling a page until its update
+     * lands, and its notification taps must keep working across the hand-over.
+     */
+    const OPEN_SESSION_MESSAGES = [
+      "dsh-mobile-maxxing:open-session",
+      "dsh-notify-push:open-session",
+      "rdsh-pwa:open-session",
+    ];
+
+    /**
      * Route a service-worker message to the right handler.
      *
      * Two shapes arrive here: a notification the worker declined to show
@@ -8637,7 +8691,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     function onWorkerMessage(event) {
       const data = event?.data;
       if (data === null || typeof data !== "object") return;
-      if (data.type === "dsh-mobile-maxxing:notify") {
+      if (NOTIFY_MESSAGES.includes(data.type)) {
         const shown = notifyUser({
           title: typeof data.title === "string" ? data.title : "DSH",
           body: typeof data.body === "string" ? data.body : "",
@@ -8649,9 +8703,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         if (shown) event?.ports?.[0]?.postMessage("shown");
         return;
       }
-      if (data.type === "dsh-mobile-maxxing:open-session" || data.type === "dsh-notify-push:open-session") {
-        // The second name is the previous plugin's; still honoured so a banner
-        // already on screen keeps working after this package takes over.
+      if (OPEN_SESSION_MESSAGES.includes(data.type)) {
         requestSession(typeof data.sessionId === "string" ? data.sessionId : "");
       }
     }

@@ -511,12 +511,23 @@ export class PushStore {
 	 * Drop one subscription.
 	 *
 	 * @param {string} endpoint - the endpoint to forget.
+	 * @param {string} [origin] - the requesting app's origin. When it is known
+	 *   and the stored entry names a different origin, the entry is kept:
+	 *   profiles share this file, and one app's Settings must not be able to
+	 *   retire the other app's notifications. A missing/legacy origin stays
+	 *   removable so an upgrade can clean up (and 404/410 pruning passes no
+	 *   origin at all).
 	 * @returns {boolean} whether anything was removed.
 	 */
-	remove(endpoint) {
+	remove(endpoint, origin = "") {
 		this.reload();
 		const before = this.state.subscriptions.length;
-		this.state.subscriptions = this.state.subscriptions.filter((item) => item.endpoint !== endpoint);
+		this.state.subscriptions = this.state.subscriptions.filter((item) => {
+			if (item.endpoint !== endpoint) return true;
+			const requester = typeof origin === "string" ? origin : "";
+			const owner = typeof item.origin === "string" ? item.origin : "";
+			return requester !== "" && owner !== "" && owner !== requester;
+		});
 		if (this.state.subscriptions.length !== before) this.save();
 		return this.state.subscriptions.length !== before;
 	}
@@ -810,7 +821,13 @@ export function applyNotify(ctx, config) {
 					const body = await readJsonBody(req);
 					noteOrigin(req, body);
 					try {
-						const count = store.add(body.subscription, { label: body.label, origin: body.origin });
+						// A client that predates `body.origin` would otherwise be
+						// stored as a legacy entry. Exact-origin routing (the app
+						// that started the turn) would never select it, so that
+						// app would get no notification at all. The request's
+						// Origin/Referer is the same page origin the newer
+						// clients send explicitly, so use it as the fallback.
+						const count = store.add(body.subscription, { label: body.label, origin: requestOrigin(req, body) });
 						json(res, 200, { ok: true, count, subject: store.subject(copy.subject) });
 					} catch (error) {
 						json(res, 400, { ok: false, error: String(error?.message ?? error) });
@@ -829,7 +846,9 @@ export function applyNotify(ctx, config) {
 					}
 					const body = await readJsonBody(req);
 					const endpoint = typeof body.endpoint === "string" ? body.endpoint : body.subscription?.endpoint;
-					const removed = typeof endpoint === "string" ? store.remove(endpoint) : false;
+					// Scope the delete to the app that asked: the shared store
+					// also holds the other installed origin's subscription.
+					const removed = typeof endpoint === "string" ? store.remove(endpoint, requestOrigin(req, body)) : false;
 					json(res, 200, { ok: true, removed, count: store.subscriptions().length });
 				},
 			},

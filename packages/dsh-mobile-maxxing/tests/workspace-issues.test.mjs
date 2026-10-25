@@ -744,6 +744,28 @@ test("#42 Escape closes the menu and returns focus; outside press closes it", ()
 	assert.equal(run.document.querySelector("[data-rdsh-file-menu]"), null, "an outside press did not close the menu");
 });
 
+test("#42 a press on a menu item is not dismissed before its click", () => {
+	const run = boot();
+	run.reset();
+	const tree = filesTree(run.document);
+	run.tools.decorateWorkspaceFiles();
+	run.tools.installWorkspaceTools();
+	const fileButton = tree.readme.querySelector("button");
+
+	run.document.dispatchEvent(event("pointerdown", fileButton, { pointerType: "touch", clientX: 10, clientY: 10 }));
+	run.runTimers(500);
+	const menu = run.document.querySelector("[data-rdsh-file-menu]");
+	assert.ok(menu, "the long press did not open the menu");
+
+	// The item's own pointerdown is capture-routed through the document first.
+	const item = menu.querySelector("button");
+	run.document.dispatchEvent(event("pointerdown", item, { pointerType: "touch", clientX: 20, clientY: 20 }));
+	assert.ok(run.document.querySelector("[data-rdsh-file-menu]"), "the item press dismissed its own menu");
+
+	item.dispatchEvent(event("click", item));
+	assert.equal(run.document.querySelector("[data-rdsh-file-menu]"), null, "the item action did not close the menu");
+});
+
 test("#42 long press does not let the closing tap activate the row", () => {
 	const run = boot();
 	run.reset();

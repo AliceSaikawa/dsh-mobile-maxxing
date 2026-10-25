@@ -5948,6 +5948,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     function onFilesPointerDown(event) {
       if (!phone() || event.pointerType === "mouse" || event.isPrimary === false) return;
+      // This document capture listener is registered at boot, so it runs before
+      // the menu's own dismiss listener: closing here would remove the item
+      // from under the finger and its click would land on the tree (#42).
+      if (filesMenu !== null && filesMenu.node.contains(event.target)) return;
       // A second finger must not replace or cancel the press already running.
       if (filesPress !== null && !filesSamePointer(event)) return;
       if (filesMenu !== null) closeFilesMenu();

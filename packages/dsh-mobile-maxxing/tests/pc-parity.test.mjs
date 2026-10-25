@@ -86,33 +86,6 @@ test("the hide list no longer guesses native open-in-app labels", () => {
 	assert.match(CLIENT, /const OPEN_TARGET_SELECTOR = "\[data-open-target\]";/, "the structural open-target selector is missing");
 });
 
-test("the native open target and diff wrap rules are lexically inside the phone query", () => {
-	const block = cssBlocks().find((entry) => entry.text.includes("[data-open-target]"));
-	assert.ok(block !== undefined, "the mobile stylesheet block was not found");
-	const parsed = cssRules(block.text.replaceAll("${NARROW_QUERY}", "(max-width: 767px)"));
-	const matching = (predicate) => parsed.rules.filter((rule) => rule.close !== null && predicate(rule));
-	const isOpenTarget = (rule) => rule.prelude.split(",").some((part) => part.trim() === "[data-open-target]");
-	const isDiffWrap = (rule) => rule.prelude.includes("[data-review-wrap]")
-		&& rule.prelude.includes("[data-diff-line]")
-		&& rule.prelude.includes("[data-diff-code]");
-
-	const openRules = matching(isOpenTarget);
-	assert.ok(openRules.length > 0, "the native open-target hide rule is missing");
-	assert.ok(openRules.every(insidePhoneQuery), "the native open-target hide rule escaped the phone query");
-
-	const wrapRules = matching(isDiffWrap);
-	assert.ok(wrapRules.length > 0, "the diff long-token wrap rule is missing");
-	assert.ok(wrapRules.every(insidePhoneQuery), "the diff wrap rule escaped the phone query");
-
-	// Negative control: move the real rule text outside the media block and
-	// prove this checker rejects it. A lastIndexOf/slice check passed here.
-	const moved = parsed.css.slice(0, openRules[0].start)
-		+ parsed.css.slice(openRules[0].close + 1)
-		+ "\n"
-		+ parsed.css.slice(openRules[0].start, openRules[0].close + 1);
-	const movedRules = cssRules(moved).rules.filter((rule) => rule.close !== null && isOpenTarget(rule));
-	assert.ok(movedRules.some((rule) => !insidePhoneQuery(rule)), "the checker accepted a rule moved outside the phone query");
-});
 
 test("the mobile tab inlines the other sections by mode, not by width", () => {
 	const body = functionBody("MobileSection");
@@ -170,4 +143,81 @@ test("the mobile stylesheet is enabled by mode, not by a max-width wrapper", () 
 	// The install card follows the device, so a wide tablet still offers it.
 	assert.match(CLIENT, /if \(state\.mode !== "mobile"\) return false;/, "the install card is not mobile-mode gated");
 	assert.match(CLIENT, /mode: DEVICE_MODE,/, "the PWA store does not expose the bootstrapped mode");
+});
+
+/** One `const NAME = \`...\`;` stylesheet block, with escapes respected. */
+function cssBlock(name) {
+	const marker = `const ${name} = \``;
+	const start = CLIENT.indexOf(marker);
+	if (start === -1) return null;
+	const open = start + marker.length;
+	let index = open;
+	while (index < CLIENT.length) {
+		if (CLIENT[index] === "\\") {
+			index += 2;
+			continue;
+		}
+		if (CLIENT[index] === "`") break;
+		index += 1;
+	}
+	return CLIENT.slice(open, index);
+}
+
+/** Brace-aware rules: prelude, ancestors, and the exact slice. */
+function cssRules(css) {
+	const clean = css.replace(/\/\*[\s\S]*?\*\//g, "");
+	const rules = [];
+	const stack = [];
+	let buffer = "";
+	for (let index = 0; index < clean.length; index += 1) {
+		const character = clean[index];
+		if (character === "{") {
+			const prelude = buffer.trim();
+			const record = { prelude, parents: stack.map((entry) => entry.prelude), start: index - buffer.length + buffer.lastIndexOf(prelude), close: null };
+			rules.push(record);
+			stack.push(record);
+			buffer = "";
+		} else if (character === "}") {
+			const record = stack.pop();
+			if (record !== undefined) record.close = index;
+			buffer = "";
+		} else {
+			buffer += character;
+		}
+	}
+	return { css: clean, rules };
+}
+
+test("preview feature rules live in the mobile stylesheet, never the device sheet", () => {
+	const device = cssBlock("CSS_DEVICE");
+	const phone = cssBlock("CSS_PHONE");
+	assert.ok(device !== null && phone !== null, "the split stylesheets are missing");
+	const isOpenTarget = (rule) => rule.prelude.split(",").some((part) => part.trim() === "[data-open-target]");
+	const isDiffWrap = (rule) => rule.prelude.includes("[data-review-wrap]")
+		&& rule.prelude.includes("[data-diff-line]")
+		&& rule.prelude.includes("[data-diff-code]");
+
+	const parsedPhone = cssRules(phone);
+	const phoneRules = parsedPhone.rules.filter((rule) => rule.close !== null);
+	const openRules = phoneRules.filter(isOpenTarget);
+	const wrapRules = phoneRules.filter(isDiffWrap);
+	assert.ok(openRules.length > 0, "the native open-target hide rule is missing from CSS_PHONE");
+	assert.ok(wrapRules.length > 0, "the guarded diff wrap rule is missing from CSS_PHONE");
+	assert.equal(cssRules(device).rules.filter((rule) => rule.close !== null).some((rule) => isOpenTarget(rule) || isDiffWrap(rule)), false, "a mobile feature rule leaked into CSS_DEVICE");
+
+	// Negative control: moving the real rule to the device sheet must fail the
+	// same placement check. A substring check that ignores the block would pass.
+	const movedDevice = device + "\n" + parsedPhone.css.slice(openRules[0].start, openRules[0].close + 1);
+	assert.equal(cssRules(movedDevice).rules.some(isOpenTarget), true, "the negative control did not move the rule");
+});
+
+test("preview hides native open targets structurally and keeps the hide list conservative", () => {
+	assert.match(CLIENT, /const OPEN_TARGET_SELECTOR = "\[data-open-target\]";/, "the structural open-target selector is missing");
+	const defaults = arrayLiteral("HIDE_DEFAULT");
+	for (const label of ["Open in Files", "More ways to open", "Open in Text Editor", "Open in editor", "Open in Explorer", "Reveal in Finder"]) {
+		assert.equal(defaults.includes(`"${label}"`), false, `${label} still relies on the label list`);
+	}
+	// The wrap rule must stay gated on upstream's own wrap state so an explicit
+	// OFF is not overridden by CSS.
+	assert.match(CLIENT, /\[data-review-wrap\] \[data-diff-line\][\s\S]{0,400}overflow-wrap: anywhere/, "diff wrapping is not gated on the wrap state");
 });

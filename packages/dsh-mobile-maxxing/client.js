@@ -2316,7 +2316,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     /** Auto-fired / opted-out surfaces; pane ids survive a rerender of the root. */
     let reviewWrapAutoFired = new WeakSet();
     let reviewWrapUserOff = new WeakSet();
-    const reviewWrapAutoKeys = new Set();
+    /** root -> surface key marked auto-fired; a new root is a new surface. */
+    let reviewWrapAutoRootKeys = new WeakMap();
     const reviewWrapUserOffKeys = new Set();
 
     /** The stable piece of a review surface: its dockkit pane, else its file. */
@@ -2345,29 +2346,27 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     function reviewWrapAutoDone(root) {
       const key = reviewSurfaceKey(root);
-      // A stable tab key must be the only signal. React can reuse the same
-      // review root element when the pane switches tabs, so a root/pane
-      // marker would suppress the next diff tab too.
-      if (key !== "") return reviewWrapAutoKeys.has(key);
-      if (reviewWrapAutoFired.has(root)) return true;
-      return root.getAttribute("data-rdsh-review-auto") === "1"
-        || root.parentElement?.getAttribute?.("data-rdsh-review-auto") === "1";
+      // The pair, not the tab key alone: React reuses the root when switching
+      // tabs (new key must get its own default), and a remount creates a new
+      // root (a new surface with no user choice gets the default again).
+      if (reviewWrapAutoRootKeys.has(root)) return reviewWrapAutoRootKeys.get(root) === key;
+      if (key === "") {
+        return root.getAttribute("data-rdsh-review-auto") === "1"
+          || root.parentElement?.getAttribute?.("data-rdsh-review-auto") === "1";
+      }
+      return false;
     }
 
     function markReviewWrapAuto(root) {
       const key = reviewSurfaceKey(root);
-      if (key !== "") {
-        // Memory only. The key is what survives a width round trip and the
-        // review root being replaced by React.
-        reviewWrapAutoKeys.add(key);
-        return;
-      }
+      reviewWrapAutoRootKeys.set(root, key);
+      if (key !== "") return;
       // Only keyless surfaces need a DOM marker, and only their own wrapper:
       // there is no tab identity to keep the two apart otherwise.
       reviewWrapAutoFired.add(root);
-      // A desktop click is remembered, but the phone hooks are not painted on
-      // a wide layout (desktop must stay untouched).
-      if (!narrow()) return;
+      // A desktop click is remembered, but the mobile hooks are not painted
+      // in desktop mode (the 390px desktop must stay untouched).
+      if (!phone()) return;
       root.setAttribute("data-rdsh-review-auto", "1");
       root.parentElement?.setAttribute?.("data-rdsh-review-auto", "1");
     }
@@ -2376,7 +2375,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       reviewWrapUserOff.add(root);
       const key = reviewSurfaceKey(root);
       if (key !== "") reviewWrapUserOffKeys.add(key);
-      if (narrow()) root.setAttribute("data-rdsh-review-off", "");
+      if (phone()) root.setAttribute("data-rdsh-review-off", "");
       markReviewWrapAuto(root);
     }
 
@@ -2384,7 +2383,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       reviewWrapUserOff.delete(root);
       const key = reviewSurfaceKey(root);
       if (key !== "") reviewWrapUserOffKeys.delete(key);
-      if (narrow()) root.removeAttribute("data-rdsh-review-off");
+      if (phone()) root.removeAttribute("data-rdsh-review-off");
       markReviewWrapAuto(root);
     }
 
@@ -2403,7 +2402,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * choice stays off for the surface.
      */
     function decorateReviewWrap() {
-      if (!narrow() || REVIEW_WRAP_DEFAULT !== true) return;
+      if (!phone() || REVIEW_WRAP_DEFAULT !== true) return;
       for (const root of document.querySelectorAll("[data-rdsh-rightpanel] [data-changes-review]")) {
         const toggle = root.querySelector('[data-review-tool="wrap"]');
         root.setAttribute("data-rdsh-review", "");
@@ -2707,7 +2706,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     /** Tag headers, refresh moved actions and close a menu that went stale. */
     function decoratePreviewTools() {
-      if (!narrow()) {
+      if (!phone()) {
         clearPreviewTools();
         return;
       }
@@ -2767,7 +2766,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // remounted review should get the default once again. An explicit OFF is
       // different and stays in `reviewWrapUserOff*` until dispose.
       reviewWrapAutoFired = new WeakSet();
-      reviewWrapAutoKeys.clear();
+      reviewWrapAutoRootKeys = new WeakMap();
     }
 
     /** Full teardown: DOM plus the in-memory choices (boot dispose only). */
@@ -2777,7 +2776,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       reviewWrapProbeTimer = 0;
       reviewWrapAutoFired = new WeakSet();
       reviewWrapUserOff = new WeakSet();
-      reviewWrapAutoKeys.clear();
+      reviewWrapAutoRootKeys = new WeakMap();
       reviewWrapUserOffKeys.clear();
     }
 

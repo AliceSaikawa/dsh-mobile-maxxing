@@ -392,8 +392,9 @@ function memoryStorage(initial = {}) {
 }
 
 /** Boot the client half against the fake DOM and return its test surface. */
-function boot({ storage = {}, narrow = true } = {}) {
+function boot({ storage = {}, mode = "mobile", width = 390 } = {}) {
 	let definition;
+	const narrow = width <= 767;
 	const document = new FakeDocument();
 	const window = {
 		addEventListener() {},
@@ -490,6 +491,7 @@ function boot({ storage = {}, narrow = true } = {}) {
 	window.screen = sandbox.screen;
 	window.performance = sandbox.performance;
 	sandbox.globalThis = sandbox;
+	sandbox.__RDSH_DEVICE_MODE__ = mode;
 	vm.createContext(sandbox);
 	vm.runInContext(CLIENT, sandbox, { filename: "client.js" });
 	assert.ok(definition !== undefined, "the module registered itself");
@@ -589,14 +591,18 @@ function makePreview(env, { secondary = ["Reload", "Save"], hidden = true } = {}
 	// button. The fake DOM gives it the same minimal geometry a real docked
 	// panel has, so a phone -> desktop -> phone fixture can be tagged again
 	// instead of staying an inert div.
-	panel.getBoundingClientRect = () => ({ x: 0, y: 0, top: 0, left: 0, right: 390, bottom: 844, width: 390, height: 844 });
+	const screenRect = () => {
+		const width = env.window.innerWidth;
+		return { x: 0, y: 0, top: 0, left: 0, right: width, bottom: 844, width, height: 844 };
+	};
+	panel.getBoundingClientRect = screenRect;
 	const collapse = document.createElement("button");
 	collapse.setAttribute("aria-label", "Collapse right sidebar");
 	collapse.getBoundingClientRect = () => ({ x: 0, y: 0, top: 0, left: 0, right: 30, bottom: 30, width: 30, height: 30 });
 	panel.append(collapse);
 	const boundary = document.createElement("div");
 	boundary.setAttribute("data-sidebar-right-panel", "");
-	boundary.getBoundingClientRect = () => ({ x: 0, y: 0, top: 0, left: 0, right: 390, bottom: 844, width: 390, height: 844 });
+	boundary.getBoundingClientRect = screenRect;
 	boundary.append(panel);
 	document.body.append(boundary);
 	return { panel, header, path, viewer, wrap, openTarget, openButton, actions };
@@ -670,14 +676,15 @@ function switchReviewTab(env, tab) {
 	}
 }
 
-function setViewport(env, narrow) {
+function setWidth(env, width) {
+	const narrow = width <= 767;
 	env.sandbox.matchMedia = (query) => ({
 		matches: query.includes("max-width: 767px") ? narrow : false,
 		addEventListener() {},
 		removeEventListener() {},
 	});
 	env.window.matchMedia = env.sandbox.matchMedia;
-	env.window.innerWidth = narrow ? 390 : 1024;
+	env.window.innerWidth = width;
 }
 
 function keydown(env, key) {
@@ -786,34 +793,43 @@ test("#35 disabled state syncs and a rerender rebuilds without an orphan menu", 
 	env.dispose();
 });
 
-test("#35 widening removes the kebab, menu and hooks; narrowing rebuilds", () => {
-	const env = boot();
-	const preview = makePreview(env);
-	makeReview(env);
-	env.api.decorateNow();
+test("#35 mode keeps the kebab at any width; a narrow desktop never gets it", () => {
+	// Mobile mode first, at a tablet width: the kebab is a device feature and
+	// does not depend on the viewport being <=767px.
+	const mobile = boot({ mode: "mobile", width: 1024 });
+	const preview = makePreview(mobile);
+	makeReview(mobile);
+	mobile.api.decorateNow();
+	assert.notEqual(preview.header.querySelector("[data-rdsh-preview-kebab]"), null, "a wide mobile window lost the kebab");
 	preview.header.querySelector("[data-rdsh-preview-kebab]").click();
-	assert.notEqual(env.document.body.querySelector("[data-rdsh-preview-menu]"), null);
-	env.window.innerWidth = 1024;
-	env.sandbox.matchMedia = (query) => ({ matches: query.includes("max-width: 767px") ? false : false, addEventListener() {}, removeEventListener() {} });
-	env.window.matchMedia = env.sandbox.matchMedia;
-	env.api.decorateNow();
-	assert.equal(env.document.querySelectorAll("[data-rdsh-preview-kebab]").length, 0, "a desktop width kept the kebab");
-	assert.equal(preview.header.hasAttribute("data-rdsh-preview-header"), false, "the header hook survived a desktop width");
-	assert.equal(env.document.body.querySelector("[data-rdsh-preview-menu]"), null, "the menu survived a desktop width");
-	assert.equal(env.document.querySelectorAll("[data-rdsh-preview-secondary]").length, 0, "the moved-action hooks survived a desktop width");
-	// #34 is phone-only too: a review opened at desktop width must not be
-	// clicked behind the user's back.
-	const desktopReview = makeReview(env);
-	env.api.decorateNow();
-	assert.equal(desktopReview.state.clicks, 0, "desktop width auto-enabled review wrap");
+	assert.notEqual(mobile.document.body.querySelector("[data-rdsh-preview-menu]"), null);
+
+	// A geometry-only width change keeps it too.
+	setWidth(mobile, 390);
+	mobile.api.decorateNow();
+	assert.notEqual(preview.header.querySelector("[data-rdsh-preview-kebab]"), null, "a width change removed the mobile kebab");
+	assert.equal(preview.header.hasAttribute("data-rdsh-preview-header"), true, "a width change removed the mobile header hook");
+	assert.notEqual(mobile.document.body.querySelector("[data-rdsh-preview-menu]"), null, "a width change closed the mobile menu");
+	assert.notEqual(mobile.document.querySelectorAll("[data-rdsh-preview-secondary]").length, 0, "a width change removed the moved-action hooks");
+	mobile.dispose();
+
+	// Desktop mode at a narrow 390px window: nothing is painted and the review
+	// is never clicked behind the user's back.
+	const desktop = boot({ mode: "desktop", width: 390 });
+	const desktopPreview = makePreview(desktop);
+	const desktopReview = makeReview(desktop);
+	desktop.api.decorateNow();
+	assert.equal(desktop.document.querySelectorAll("[data-rdsh-preview-kebab]").length, 0, "a desktop got the kebab");
+	assert.equal(desktopPreview.header.hasAttribute("data-rdsh-preview-header"), false, "the header hook reached a desktop");
+	assert.equal(desktop.document.querySelectorAll("[data-rdsh-preview-secondary]").length, 0, "the moved-action hooks reached a desktop");
+	assert.equal(desktopReview.state.clicks, 0, "desktop auto-enabled review wrap");
 	assert.equal(desktopReview.wrap.getAttribute("aria-pressed"), "false");
 
-	env.sandbox.matchMedia = (query) => ({ matches: query.includes("max-width: 767px") ? true : false, addEventListener() {}, removeEventListener() {} });
-	env.window.matchMedia = env.sandbox.matchMedia;
-	env.window.innerWidth = 390;
-	env.api.decorateNow();
-	assert.notEqual(preview.header.querySelector("[data-rdsh-preview-kebab]"), null, "the kebab did not come back at phone width");
-	env.dispose();
+	// Widening a desktop window still does not switch it to mobile.
+	setWidth(desktop, 1024);
+	desktop.api.decorateNow();
+	assert.equal(desktop.document.querySelectorAll("[data-rdsh-preview-kebab]").length, 0, "a width change switched a desktop to mobile");
+	desktop.dispose();
 });
 
 test("#34 a fresh review turns wrap on once through the real button", () => {
@@ -893,8 +909,8 @@ test("#34 wrap default is per diff tab while an explicit OFF stays with its tab"
 	env.dispose();
 });
 
-test("#34 an explicit phone OFF survives a phone -> desktop -> phone round trip", async () => {
-	const env = boot();
+test("#34 an explicit mobile OFF survives a width change and a surface remount", async () => {
+	const env = boot({ mode: "mobile", width: 390 });
 	makePreview(env);
 	const first = makeReview(env, { tab: "tab-a" });
 	env.api.decorateNow();
@@ -906,50 +922,50 @@ test("#34 an explicit phone OFF survives a phone -> desktop -> phone round trip"
 	assert.equal(first.state.clicks, 2);
 	assert.equal(first.root.hasAttribute("data-rdsh-review-off"), true);
 
-	// Width cleanup removes the phone hooks, but it must not forget the choice.
-	setViewport(env, false);
+	// A geometry-only width change keeps the mobile surface and the OFF hook;
+	// nothing is torn down.
+	setWidth(env, 1024);
 	env.api.decorateNow();
-	assert.equal(env.document.querySelectorAll("[data-rdsh-review-off]").length, 0, "desktop kept a phone hook");
+	assert.equal(first.root.hasAttribute("data-rdsh-review-off"), true, "a width change dropped the explicit OFF");
+	assert.equal(env.document.querySelectorAll("[data-rdsh-review-off]").length, 1, "a width change repainted the OFF set");
 
 	// Same pane/tab, new root: the in-memory OFF still wins.
-	setViewport(env, true);
 	const again = makeReview(env, { tab: "tab-a", replace: true, pressed: false });
 	env.api.decorateNow();
-	assert.equal(again.wrap.getAttribute("aria-pressed"), "false", "the round trip lost the user's OFF");
+	assert.equal(again.wrap.getAttribute("aria-pressed"), "false", "a remount lost the user's OFF");
 	assert.equal(again.state.clicks, 0);
-	assert.equal(again.root.hasAttribute("data-rdsh-review-off"), true, "the phone hook was not repainted after the round trip");
+	assert.equal(again.root.hasAttribute("data-rdsh-review-off"), true, "the mobile hook was not repainted after the remount");
 	env.dispose();
 });
 
-test("#34 the default applies again after a width round trip with no user choice", () => {
-	const env = boot();
+test("#34 a surface remount with no user choice gets the default once again", () => {
+	const env = boot({ mode: "mobile", width: 390 });
 	makePreview(env);
 	const first = makeReview(env, { tab: "tab-a" });
 	env.api.decorateNow();
 	assert.equal(first.wrap.getAttribute("aria-pressed"), "true");
 	assert.equal(first.state.clicks, 1);
 
-	setViewport(env, false);
+	// Width is geometry only; the remount itself is the new surface. The user
+	// never chose anything, so the mobile default must be allowed once more.
+	setWidth(env, 1024);
 	env.api.decorateNow();
-	// Remount with upstream's fresh state; the user never chose anything, so
-	// the phone default must be allowed to fire once more.
 	const remounted = makeReview(env, { tab: "tab-a", replace: true, pressed: false });
-	setViewport(env, true);
 	env.api.decorateNow();
-	assert.equal(remounted.wrap.getAttribute("aria-pressed"), "true", "the default did not re-apply after a round trip");
+	assert.equal(remounted.wrap.getAttribute("aria-pressed"), "true", "the default did not apply to the remounted surface");
 	assert.equal(remounted.state.clicks, 1, "the remounted surface was not clicked exactly once");
 	env.dispose();
 });
 
-test("#34 a desktop OFF is remembered without writing phone hooks", async () => {
-	const env = boot({ narrow: false });
+test("#34 desktop mode remembers an OFF without phone hooks; width never switches it", async () => {
+	const env = boot({ mode: "desktop", width: 390 });
 	makePreview(env);
 	const review = makeReview(env, { tab: "tab-a", pressed: true });
 	env.api.decorateNow();
 	assert.equal(review.state.clicks, 0, "desktop auto-enabled review wrap");
 
-	// The user turns wrap off at desktop width. That is a real choice too; only
-	// the memory is recorded, and no phone attribute may appear.
+	// The user turns wrap off at a narrow desktop window. That is a real choice
+	// too; only the memory is recorded, and no mobile attribute may appear.
 	review.wrap.dispatchEvent(fakeEvent("click", { target: review.wrap, isTrusted: true }));
 	assert.equal(review.wrap.getAttribute("aria-pressed"), "false");
 	await new Promise((resolve) => setTimeout(resolve, 10));
@@ -960,12 +976,12 @@ test("#34 a desktop OFF is remembered without writing phone hooks", async () => 
 	assert.equal(env.document.querySelectorAll("[data-rdsh-review-auto]").length, 0, "desktop click painted an auto hook");
 	assert.equal(env.document.querySelectorAll("[data-rdsh-review-wrap]").length, 0, "desktop click painted a wrap hook");
 
-	// Moving to phone width must not override that explicit OFF with the default.
-	setViewport(env, true);
+	// Widening the desktop window must not switch it to mobile either.
+	setWidth(env, 1024);
 	env.api.decorateNow();
-	assert.equal(review.wrap.getAttribute("aria-pressed"), "false", "the phone default overwrote a desktop OFF");
-	assert.equal(review.state.clicks, userClicks, "the phone default clicked a desktop-off surface");
-	assert.equal(review.root.hasAttribute("data-rdsh-review-off"), true);
+	assert.equal(review.wrap.getAttribute("aria-pressed"), "false", "a width change overwrote a desktop OFF");
+	assert.equal(review.state.clicks, userClicks, "a width change clicked a desktop-off surface");
+	assert.equal(env.document.querySelectorAll("[data-rdsh-review]").length, 0, "a width change painted mobile hooks on a desktop");
 	env.dispose();
 });
 

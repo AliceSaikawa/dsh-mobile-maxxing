@@ -110,8 +110,8 @@ What changes:
   layout while wrap is on, so both columns come back when you turn wrap off)
 - Text-preview header actions (reload and file actions) move into a "…" menu
   that calls the original buttons; the path and the viewer picker stay put
-- The native "Open in <app>" split button is not shown, because a phone cannot
-  hand the file to that desktop app
+- The native "Open in <app>" split button is not shown in mobile mode, because
+  the mobile surface cannot hand the file to that desktop app
 - The composer stays above the keyboard
 - Session rows keep their actions hidden until the menu or a long press
 - Right-panel tabs are finger-sized, and the tab strip scrolls sideways

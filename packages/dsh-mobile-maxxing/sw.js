@@ -264,68 +264,14 @@ function pushPayload(event) {
 	return payload;
 }
 
-/**
- * How long a visible page has to acknowledge a banner hand-off.
- *
- * A phone under load can take longer than 400ms to mount the toast (React
- * render + the plugin's notice root), and the old value then fell through to a
- * system notification while the app was on screen (#25). Wait long enough for
- * the page to answer on a slow device.
- */
-const NOTIFY_ACK_TIMEOUT_MS = 1500;
-
-/**
- * Hand one notification to a live page and wait for it to take it.
- *
- * @param {Client} client - the visible window.
- * @param {object} payload - the notification.
- * @returns {Promise<boolean>} whether the page accepted it.
- */
-async function handOff(client, payload) {
-	try {
-		const channel = new MessageChannel();
-		const accepted = new Promise((resolve) => {
-			const timer = setTimeout(() => resolve(false), NOTIFY_ACK_TIMEOUT_MS);
-			channel.port1.onmessage = () => {
-				clearTimeout(timer);
-				resolve(true);
-			};
-		});
-		client.postMessage({
-			type: "dsh-mobile-maxxing:notify",
-			title: payload.title,
-			body: payload.body,
-			sessionId: payload.sessionId,
-			kind: payload.kind,
-		}, [channel.port2]);
-		return await accepted;
-	} catch {
-		return false;
-	}
-}
-
 self.addEventListener("push", (event) => {
 	const payload = pushPayload(event);
 	event.waitUntil((async () => {
-		// A window that is on screen shows its own banner: the page is right
-		// there, and a system notification on top of it is noise. Backgrounded
-		// windows (and none at all) fall through to the system banner below.
-		// The page has to acknowledge the hand-off. A visible client can be one
-		// that never loaded this plugin (an older build, a failed boot, a tab
-		// opened before the deploy), and dropping the message into that void
-		// loses the notification entirely. Wait briefly for an ack and fall back
-		// to the system banner when none arrives.
-		const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-		const visible = windows.find((client) => client.visibilityState === "visible");
-		if (visible !== undefined) {
-			// The app is on screen: it owns the notification. Falling back to a
-			// system banner duplicates it (#25). If the hand-off is not acked we
-			// leave a breadcrumb instead of stacking a second banner on top.
-			if (!(await handOff(visible, payload))) {
-				console.warn("[dsh-mobile-maxxing] push handed to a visible window without an ack");
-			}
-			return;
-		}
+		// Every received Web Push must produce a user-visible notification:
+		// WebKit revokes a subscription after three silent pushes, and
+		// Chromium/Edge substitute a generic banner. A visible page shows its
+		// own local banner instead; the host only skips a push for a notice
+		// that page already acknowledged.
 		await self.registration.showNotification(payload.title, {
 			body: payload.body,
 			icon: new URL("pwa/icon-192.png", SCOPE).href,

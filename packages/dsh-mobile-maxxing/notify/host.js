@@ -740,6 +740,37 @@ export function applyNotify(ctx, config) {
 	/** Enough remembered origins for two apps plus a proxy and a stale tab. */
 	const MAX_OWN_ORIGINS = 8;
 
+	/** Allow a foreground client to render and acknowledge before sending push. */
+	const NOTICE_ACK_GRACE_MS = 1500;
+	/** Only actual, in-flight notices are kept: nothing remains after the grace. */
+	const pendingNotices = new Set();
+
+	/**
+	 * Acknowledge one notice for one subscription, only if that origin is a
+	 * target of a currently pending delivery. An unsolicited/stale ack cannot
+	 * suppress a later event, and another device still receives its push.
+	 *
+	 * The oldest unacknowledged event is consumed first. A payload carries no
+	 * event id and the status hook exposes none, so an ACK names a session and a
+	 * kind, not one event; insertion order is the only rule that leaves a newer,
+	 * still-unacknowledged event its push. An ACK that arrives late can still
+	 * land on the wrong event of the same session and kind — that gap is known
+	 * and accepted, not silently guessed at.
+	 */
+	function acknowledgeNotice({ endpoint, sessionId, kind, origin }) {
+		if (typeof endpoint !== "string" || endpoint === "") return false;
+		if (typeof sessionId !== "string" || sessionId === "") return false;
+		if (kind !== "turn-end" && kind !== "question") return false;
+		for (const pending of pendingNotices) {
+			if (pending.payload.sessionId !== sessionId || pending.payload.kind !== kind) continue;
+			if (!sameOrigin(pending.origin, origin)) continue;
+			if (!pending.endpoints.has(endpoint) || pending.acked.has(endpoint)) continue;
+			pending.acked.add(endpoint);
+			return true;
+		}
+		return false;
+	}
+
 	/** Record one origin as the most recently served. */
 	function learnOrigin(value) {
 		const text = typeof value === "string" ? value.trim() : "";
@@ -851,7 +882,29 @@ export function applyNotify(ctx, config) {
 		}
 		const subject = store.subject(copy.subject);
 		const results = [];
+		let pending = null;
+		if (target.awaitAck === true && typeof payload?.sessionId === "string" && payload.sessionId !== "") {
+			pending = {
+				payload,
+				origin: targetOrigin,
+				endpoints: new Set(subscriptions.map((item) => item.endpoint)),
+				acked: new Set(),
+			};
+			pendingNotices.add(pending);
+			try {
+				await new Promise((resolve) => setTimeout(resolve, NOTICE_ACK_GRACE_MS));
+			} finally {
+				pendingNotices.delete(pending);
+			}
+		}
 		for (const subscription of subscriptions) {
+			// Skip only after this particular notice was rendered and acknowledged.
+			// A suspended page, failed request, or missing UI always gets normal
+			// push instead of losing the notification behind a stale visibility lease.
+			if (pending?.acked.has(subscription.endpoint)) {
+				results.push({ status: 0, ok: true, skipped: "acknowledged" });
+				continue;
+			}
 			try {
 				const result = await sendWebPush(subscription, payload, { keys: store.keys(), subject });
 				results.push({ status: result.status, ok: result.ok });
@@ -863,7 +916,11 @@ export function applyNotify(ctx, config) {
 				results.push({ status: 0, ok: false, error: describePushError(error) });
 			}
 		}
-		return { ok: results.some((item) => item.ok), subject, results, targetOrigin };
+		const everyDelivered = results.every((item) => item.ok);
+		const skipped = results.length > 0 && results.every((item) => item.skipped === "acknowledged")
+			? "acknowledged"
+			: undefined;
+		return { ok: results.length > 0 && everyDelivered, subject, results, targetOrigin, skipped };
 	}
 
 	ctx.inject(["agents"], (agentCtx) => {
@@ -891,7 +948,7 @@ export function applyNotify(ctx, config) {
 				copy,
 				lang: copy.lang,
 				session: sessionNameOf(ctx, session),
-			}), { origin }).catch((error) => {
+			}), { origin, awaitAck: true }).catch((error) => {
 				console.error("[dsh-mobile-maxxing] turn-end push failed", error);
 			});
 		});
@@ -909,7 +966,7 @@ export function applyNotify(ctx, config) {
 					copy,
 					lang: copy.lang,
 					session: asking === undefined ? "" : sessionNameOf(ctx, asking),
-				}), { origin }).catch((error) => {
+				}), { origin, awaitAck: true }).catch((error) => {
 					console.error("[dsh-mobile-maxxing] question push failed", error);
 				});
 			}
@@ -1018,6 +1075,27 @@ export function applyNotify(ctx, config) {
 					// also holds the other installed origin's subscription.
 					const removed = typeof endpoint === "string" ? store.remove(endpoint, requestOrigin(req, body)) : false;
 					json(res, 200, { ok: true, removed, count: store.subscriptions().length });
+				},
+			},
+			{
+				kind: "exact",
+				path: "/api/dsh-mobile-maxxing/push/ack",
+				handler: async (req, res) => {
+					if (!guard(req, res)) return;
+					if (req.method !== "POST") {
+						res.writeHead(405, { allow: "POST" });
+						res.end();
+						return;
+					}
+					const body = await readJsonBody(req);
+					noteOrigin(req, body);
+					const acknowledged = acknowledgeNotice({
+						endpoint: body?.endpoint,
+						sessionId: body?.sessionId,
+						kind: body?.kind,
+						origin: requestOrigin(req, body),
+					});
+					json(res, 200, { ok: true, acknowledged });
 				},
 			},
 			{

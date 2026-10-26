@@ -556,7 +556,8 @@ window.__ModuleLoader__.load({
      * a new worker instead of reusing the bytes it already has (#25). Bump this
      * whenever the worker's push handling changes.
      */
-    const SW_REVISION = "20261026b";
+    // The worker always renders received pushes; host-side event ACKs gate delivery.
+    const SW_REVISION = "20261026e";
     const SW_URL = new URL(`sw.js?v=${SW_REVISION}`, SCOPE).href;
     /** Script URL of the notification plugin's worker (see unifyWorker below). */
     const PUSH_WORKER_PATH = "/push/sw.js";
@@ -6726,6 +6727,47 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     let currentSessionId = null;
 
     /**
+     * Sessions this browser told the host its turn belongs to.
+     *
+     * A local turn-end banner is only right for these: the host's
+     * `onlyMobileTurns` default notifies phone turns alone, so a turn a PC
+     * started in a session this phone merely watches must stay silent. The
+     * memory mirrors the host's own mobile-send window (10 minutes), so a
+     * session reused from a desktop later is not notified either. A reload
+     * forgets it while the host still remembers the send, so that turn falls
+     * back to the host's OS notification instead of the in-app banner: the
+     * local side can lose the banner, never the notice.
+     */
+    const MARKED_SEND_WINDOW_MS = 10 * 60 * 1000;
+    /** A hard cap: a long-lived page cannot grow this without bound. */
+    const MARKED_SEND_MAX = 128;
+    /** sessionId -> the moment its send stops counting, in ms. */
+    const markedSendSessions = new Map();
+
+    /** Remember one send this browser reported to the host. */
+    function rememberMarkedSend(sessionId) {
+      const now = Date.now();
+      markedSendSessions.delete(sessionId);
+      markedSendSessions.set(sessionId, now + MARKED_SEND_WINDOW_MS);
+      while (markedSendSessions.size > MARKED_SEND_MAX) {
+        const oldest = markedSendSessions.keys().next().value;
+        if (oldest === undefined) break;
+        markedSendSessions.delete(oldest);
+      }
+    }
+
+    /** Whether this browser sent in that session recently enough to be routed to. */
+    function markedSendRecent(sessionId) {
+      const until = markedSendSessions.get(sessionId);
+      if (until === undefined) return false;
+      if (until <= Date.now()) {
+        markedSendSessions.delete(sessionId);
+        return false;
+      }
+      return true;
+    }
+
+    /**
      * Tell the push host that the next turn belongs to this device.
      *
      * A phone send is marked automatically. On a desktop that is the #15
@@ -6734,8 +6776,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * the same width-based behaviour #17 removes.
      */
     function markMobileSession(sessionId = currentSessionId) {
-      if (sessionId === null) return;
+      if (typeof sessionId !== "string" || sessionId === "") return;
       if (!phone() && !notifyDeviceTurns()) return;
+      // Recorded here, with the request: this is the same condition the host
+      // applies, so the local banner follows exactly what the host will send.
+      rememberMarkedSend(sessionId);
       void fetch(`${PUSH_API}/mobile-send`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -6779,6 +6824,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const hasSessions = typeof useSessions === "function";
       const statuses = hasHook ? useSessionStatus((value) => value) : null;
       const sessions = hasSessions ? useSessions((value) => value) : null;
+      // The last snapshot this instance diffed. Null until the first effect
+      // run, which is the baseline and never notifies.
+      const previousStatuses = React.useRef(null);
       useEffect(() => {
         const byId = sessions !== null && sessions !== undefined ? sessions.byId : null;
         const mainIds = byId !== null && byId !== undefined && typeof byId === "object"
@@ -6805,6 +6853,19 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         document.documentElement.toggleAttribute("data-rdsh-sessions-hook", hasSessions);
         globalThis.__RDSH_MOBILE_UX_BADGE__ = { total, main, subagents: Math.max(0, total - main), runningSubagents, mainIds: mainIds === null ? null : [...mainIds] };
         scheduleDecorate();
+        // Local banners: the status store already knows a turn ended or a
+        // question arrived, so the page can say so without the worker's push.
+        // The first pass only records the baseline; emitLocalNotices owns its
+        // own try/catch and notifyUser owns the visibility gate.
+        try {
+          const previous = previousStatuses.current;
+          previousStatuses.current = statuses;
+          if (previous !== null && previous !== undefined) {
+            emitLocalNotices(previous, statuses, byId);
+          }
+        } catch (error) {
+          console.error("[rdsh-mobile-ux] local notification diff failed", error);
+        }
       }, [statuses, sessions, hasHook, hasSessions]);
       return null;
     }
@@ -10593,6 +10654,16 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     /**
+     * The host's `onlyMobileTurns`, as its `/config` answer reported it.
+     *
+     * `false` means the host notifies every turn, so a local turn-end banner
+     * is right even for a session this browser never marked. Unknown — before
+     * the answer, or after a failed one — keeps the host default (phone turns
+     * only) and the marked-send gate applies.
+     */
+    let hostNotifiesEveryTurn = false;
+
+    /**
      * Tell the push host which deployed origin this page is.
      *
      * The host delivers each event to one origin only: the app that started
@@ -10607,7 +10678,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     function notePushOrigin() {
       if (pushOriginNoted) return;
       pushOriginNoted = true;
-      void fetch(`${PUSH_API}/config`, { cache: "no-store" }).catch(() => {});
+      void fetch(`${PUSH_API}/config`, { cache: "no-store" }).then(async (response) => {
+        const body = await response.json();
+        if (body?.copy?.onlyMobileTurns === false) hostNotifiesEveryTurn = true;
+      }).catch(() => {
+        // No answer keeps the host default, so the gate stays conservative.
+      });
     }
 
     async function refreshNotificationStatus() {
@@ -10722,6 +10798,38 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     // working; every caller does fetch(`${PUSH_API}/…`).
     const PUSH_API = "api/dsh-mobile-maxxing/push";
 
+    /**
+     * Acknowledge an actually rendered local banner, per push endpoint.
+     *
+     * There is no periodic visibility reporting. If this request does not
+     * reach the host, that particular event falls back to normal Web Push.
+     * The check after the asynchronous subscription lookup prevents a page
+     * that was just backgrounded from suppressing its own OS notification.
+     */
+    async function acknowledgeLocalNotice({ sessionId, kind }) {
+      // `booted` is false once the mobile half is torn down (HMR, page teardown):
+      // the banner is unmounted, so acknowledging would suppress a push for
+      // something nobody can see.
+      if (!booted || !pageVisible() || typeof sessionId !== "string" || sessionId === "") return;
+      if (kind !== "turn-end" && kind !== "question") return;
+      try {
+        const registration = await navigator.serviceWorker?.getRegistration?.();
+        const subscription = await registration?.pushManager?.getSubscription?.();
+        const endpoint = typeof subscription?.endpoint === "string" ? subscription.endpoint : "";
+        // The lookup awaits: the page can be backgrounded or torn down while it
+        // is in flight, and neither may suppress this event's push.
+        if (!booted || endpoint === "" || !pageVisible()) return;
+        await fetch(`${PUSH_API}/ack`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ endpoint, sessionId, kind, origin: location.origin }),
+          keepalive: true,
+        });
+      } catch {
+        // Missing an ack produces an OS notification, never a lost notice.
+      }
+    }
+
     /** Preset notification sounds, synthesised — no audio files to ship. */
     const SOUND_PRESETS = {
       none: { label: t("mux.sound.none"), notes: [[0, 0, 0]] },
@@ -10828,16 +10936,174 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     let noticeRoot = null;
     let noticeHost = null;
+    /**
+     * Identity of the banner currently rendered.
+     *
+     * React reuses the component instance when the same type is rendered at the
+     * same position, and a reused instance does not re-run its mount effect.
+     * Every banner therefore gets its own sequence, used as the element key: a
+     * second banner in a row is a new mount and reports its own commit.
+     */
+    let noticeSequence = 0;
     /** The last reason a banner was skipped, so a repeating one logs once. */
     let noticeSkipReason = "";
+
+    /** How long a local banner suppresses the same push hand-off. */
+    const LOCAL_NOTICE_DEDUP_MS = 4000;
+    /** Recently shown banners: `sessionId|kind` → timestamp. */
+    const recentLocalNotices = new Map();
+    /** The map stays small; expired entries are dropped before the oldest. */
+    const LOCAL_NOTICE_CACHE_MAX = 64;
+
+    /** The dedup key for one banner, or "" when it cannot be one. */
+    function localNoticeKey(sessionId, kind) {
+      if (typeof sessionId !== "string" || sessionId === "") return "";
+      if (typeof kind !== "string" || kind === "") return "";
+      return `${sessionId}|${kind}`;
+    }
+
+    /** Remember that a banner for this session and kind is on screen now. */
+    function markLocalNotice(sessionId, kind) {
+      const key = localNoticeKey(sessionId, kind);
+      if (key === "") return;
+      const now = Date.now();
+      recentLocalNotices.set(key, now);
+      if (recentLocalNotices.size <= LOCAL_NOTICE_CACHE_MAX) return;
+      for (const [existing, at] of recentLocalNotices) {
+        if (now - at >= LOCAL_NOTICE_DEDUP_MS) recentLocalNotices.delete(existing);
+      }
+      while (recentLocalNotices.size > LOCAL_NOTICE_CACHE_MAX) {
+        const oldest = recentLocalNotices.keys().next().value;
+        if (oldest === undefined) break;
+        recentLocalNotices.delete(oldest);
+      }
+    }
+
+    /** Whether this page already showed that banner moments ago. */
+    function localNoticeRecent(sessionId, kind) {
+      const key = localNoticeKey(sessionId, kind);
+      if (key === "") return false;
+      const at = recentLocalNotices.get(key);
+      if (at === undefined) return false;
+      return Date.now() - at < LOCAL_NOTICE_DEDUP_MS;
+    }
+
+    /**
+     * Diff two status snapshots into the banners worth raising locally.
+     *
+     * This is the push-independent path: the status store already changes on
+     * every turn end and every new question, so the page can announce them
+     * without waiting for the worker. Pure and total — a missing map, entry or
+     * field yields no notice instead of throwing — so the diff is testable
+     * without a React shell.
+     *
+     * Root sessions only: a subagent's turn is reported through its parent,
+     * and animating a banner for every child would bury the real ones. The
+     * first render has no previous map, and a re-run with the same map
+     * identity is not a transition; both answer [].
+     *
+     * @param {Map<string, object>|null} previousStatuses - last render's map.
+     * @param {Map<string, object>|null} statuses - this render's map.
+     * @param {object|null} byId - `sessions.byId`, for origin and title.
+     * @param {(key: string) => string} strings - the copy lookup (`t`).
+     * @returns {Array<{title: string, body: string, sessionId: string, kind: string}>}
+     */
+    function localNotices(previousStatuses, statuses, byId, strings) {
+      const notices = [];
+      if (previousStatuses === null || previousStatuses === undefined) return notices;
+      if (statuses === null || statuses === undefined) return notices;
+      if (previousStatuses === statuses) return notices;
+      if (typeof previousStatuses.get !== "function" || typeof statuses.entries !== "function") return notices;
+      const label = (key, fallback) => {
+        try {
+          const value = typeof strings === "function" ? strings(key) : undefined;
+          return typeof value === "string" && value !== "" && value !== key ? value : fallback;
+        } catch {
+          return fallback;
+        }
+      };
+      const sessionTitle = (row) => (row !== null && typeof row === "object" && typeof row.title === "string"
+        ? row.title.trim()
+        : "");
+      let entries;
+      try {
+        entries = [...statuses.entries()];
+      } catch {
+        return notices;
+      }
+      for (const [sessionId, status] of entries) {
+        if (typeof sessionId !== "string" || sessionId === "") continue;
+        let row = null;
+        if (byId !== null && byId !== undefined && typeof byId === "object") {
+          try {
+            row = byId[sessionId];
+          } catch {
+            row = null;
+          }
+        }
+        // Unknown rows are roots: only a known subagent is skipped.
+        if (row !== null && typeof row === "object" && row.origin === "subagent") continue;
+        let previous = null;
+        try {
+          previous = previousStatuses.get(sessionId);
+        } catch {
+          previous = null;
+        }
+        const wasRunning = previous !== null && previous !== undefined && typeof previous === "object" && previous.running === true;
+        const isRunning = status !== null && status !== undefined && typeof status === "object" && status.running === true;
+        const hadInteraction = previous !== null && previous !== undefined && typeof previous === "object"
+          && previous.pendingInteraction !== null && previous.pendingInteraction !== undefined;
+        const hasInteraction = status !== null && status !== undefined && typeof status === "object"
+          && status.pendingInteraction !== null && status.pendingInteraction !== undefined;
+        const title = sessionTitle(row);
+        if (!hadInteraction && hasInteraction) {
+          // A question is the one thing that needs the user, so it wins a
+          // snapshot that also ends a turn (one banner, one sound).
+          const fallback = label("notify.questionHeader", "Confirm");
+          notices.push({
+            sessionId,
+            kind: "question",
+            title: title !== "" ? title : fallback,
+            body: fallback,
+          });
+        } else if (wasRunning && !isRunning) {
+          notices.push({
+            sessionId,
+            kind: "turn-end",
+            title: title !== "" ? title : label("notify.turn.completed", "Work finished"),
+            body: label("notify.turn.detailCompleted", "The work finished."),
+          });
+        }
+      }
+      return notices;
+    }
+
+    /**
+     * Raise the local banners for one status transition.
+     *
+     * The thin half of the watcher: the diff above decides, `notifyUser` gates
+     * on visibility, plays the sound and renders the banner. Wrapped whole so
+     * a broken store entry can never take the overlay down.
+     */
+    function emitLocalNotices(previousStatuses, statuses, byId) {
+      try {
+        for (const notice of localNotices(previousStatuses, statuses, byId, t)) {
+          // A turn-end is notified only when the host will route it here: this
+          // browser's own send, or a host that turned `onlyMobileTurns` off.
+          // Questions always need the user, wherever the turn came from.
+          if (notice.kind === "turn-end" && !hostNotifiesEveryTurn && !markedSendRecent(notice.sessionId)) continue;
+          notifyUser({ ...notice, onShown: () => acknowledgeLocalNotice(notice) });
+        }
+      } catch (error) {
+        console.error("[rdsh-mobile-ux] local notification failed", error);
+      }
+    }
 
     /**
      * Say why an in-app banner was not shown, once per reason.
      *
-     * A skipped banner is otherwise silent in both directions: this side
-     * returns false, and the worker, seeing no ack, leaves the system
-     * notification to appear. That is the right fallback, but it leaves no
-     * trace when a page should have shown the banner. The reason is logged
+     * A skipped banner cannot acknowledge the pending server event, so the
+     * host sends ordinary push after its grace period. The reason is logged
      * once and cleared by the next successful banner, so a shell that never
      * had the primitives logs one line instead of one per notification.
      *
@@ -10847,6 +11113,30 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (noticeSkipReason === reason) return;
       noticeSkipReason = reason;
       console.warn(`[rdsh-mobile-ux] in-app banner skipped: ${reason}`);
+    }
+
+    /**
+     * Render one Toast and report its commit.
+     *
+     * The toast has to exist before anything claims it was delivered: the
+     * effect runs after React commits, so a render that is replaced before it
+     * commits never reports, and nothing acknowledges a banner nobody saw.
+     * StrictMode runs the effect twice; the ref keeps it to one report.
+     *
+     * @param {object} props - `{ seq, toast, toastProps, onCommit }`.
+     * @returns {*} the Toast element.
+     */
+    function CommittedNotice({ seq, toast, toastProps, onCommit }) {
+      // The sequence this instance last reported. A new key remounts with a
+      // fresh ref; a reused instance still reports its new sequence once, and
+      // a duplicated effect for the same sequence reports nothing.
+      const reported = React.useRef(null);
+      useEffect(() => {
+        if (reported.current === seq) return;
+        reported.current = seq;
+        onCommit();
+      }, [seq]);
+      return h(toast, toastProps);
     }
 
     /**
@@ -10863,9 +11153,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * @param {string} [options.body] - one line of detail.
      * @param {string} [options.sessionId] - session the banner is about.
      * @param {string} [options.kind] - turn-end | question | test | notice.
-     * @returns {boolean} whether the banner was shown.
+     * @param {() => void} [options.onShown] - called once the banner commits.
+     * @returns {boolean} whether the banner was rendered.
      */
-    function showInAppNotice({ title, body = "", sessionId = "", kind = "notice" }) {
+    function showInAppNotice({ title, body = "", sessionId = "", kind = "notice", onShown }) {
       if (!pageVisible()) {
         warnNoticeSkipped("the page is not visible");
         return false;
@@ -10896,21 +11187,41 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         // A banner that was acted on should not linger.
         noticeRoot?.render(null);
       };
-      noticeRoot.render(h(
-        primitives.Toast,
-        {
-          // The session name is the headline; the detail is what happened.
-          text: body === "" ? title : `${title} — ${body}`,
-          holdMs: kind === "question" ? 6000 : 4200,
-          actions: sessionId === ""
-            ? undefined
-            : [{ label: t("notify.open"), prefix: " ", onClick: openSession }],
-          // The component owns its lifetime; this clears the tree afterwards.
-          onDone: () => {
-            noticeRoot?.render(null);
-          },
+      const toastProps = {
+        // The session name is the headline; the detail is what happened.
+        text: body === "" ? title : `${title} — ${body}`,
+        holdMs: kind === "question" ? 6000 : 4200,
+        actions: sessionId === ""
+          ? undefined
+          : [{ label: t("notify.open"), prefix: " ", onClick: openSession }],
+        // The component owns its lifetime; this clears the tree afterwards.
+        onDone: () => {
+          noticeRoot?.render(null);
         },
-      ));
+      };
+      // `render()` only schedules the work; the banner exists once its effect
+      // has run. Everything that claims the notice was delivered hangs off that
+      // commit: an ACK for a banner that never appeared makes the host drop the
+      // push for an event nobody saw.
+      let committed = false;
+      const onCommit = () => {
+        if (committed) return;
+        committed = true;
+        // Remember it so the worker's hand-off for the same event does not
+        // stack a second banner on top of this one.
+        markLocalNotice(sessionId, kind);
+        if (typeof onShown !== "function") return;
+        try {
+          onShown();
+        } catch (error) {
+          console.error("[rdsh-mobile-ux] notice commit callback failed", error);
+        }
+      };
+      // The key makes this banner a new mount, so its own effect runs even
+      // while the previous banner is still on screen.
+      noticeSequence += 1;
+      const seq = noticeSequence;
+      noticeRoot.render(h(CommittedNotice, { key: seq, seq, toast: primitives.Toast, toastProps, onCommit }));
       // A banner made it: the next failure is news again.
       noticeSkipReason = "";
       return true;
@@ -11082,15 +11393,25 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const data = event?.data;
       if (data === null || typeof data !== "object") return;
       if (NOTIFY_MESSAGES.includes(data.type)) {
-        const shown = notifyUser({
+        const sessionId = typeof data.sessionId === "string" ? data.sessionId : "";
+        const kind = typeof data.kind === "string" ? data.kind : "notice";
+        // The local watcher may have announced this exact event a moment ago.
+        // The hand-off still gets its acknowledgement (a banner for it was
+        // rendered), but it must not stack a second one on top.
+        if (localNoticeRecent(sessionId, kind)) {
+          event?.ports?.[0]?.postMessage("shown");
+          return;
+        }
+        // The old worker shows its own banner unless this page answers, so the
+        // answer waits for this page's banner to commit — the same rule as the
+        // host ACK, and for the same reason: answering early loses the notice.
+        notifyUser({
           title: typeof data.title === "string" ? data.title : "DSH",
           body: typeof data.body === "string" ? data.body : "",
-          sessionId: typeof data.sessionId === "string" ? data.sessionId : "",
-          kind: typeof data.kind === "string" ? data.kind : "notice",
+          sessionId,
+          kind,
+          onShown: () => event?.ports?.[0]?.postMessage("shown"),
         });
-        // The worker shows a system banner unless we take the notification, so
-        // acknowledge only when a banner was actually rendered.
-        if (shown) event?.ports?.[0]?.postMessage("shown");
         return;
       }
       if (OPEN_SESSION_MESSAGES.includes(data.type)) {
@@ -13520,6 +13841,9 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             // the cleanup below.
             live = false;
             scheduled = false;
+            // A teardown forgets which sends this page reported; the next mount
+            // has to learn them from its own sends again.
+            markedSendSessions.clear();
             // One teardown path: every owned attribute/node/listener/style,
             // the original viewport and the upstream palette. It runs even if
             // the window is still narrow, so a live reload starts clean.
@@ -13569,6 +13893,20 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         disposeWorkspaceTools,
         filesMenu: () => filesMenu,
         filesSearch: () => filesSearch,
+      };
+    }
+
+    // Test seam for the push-independent notifications. The diff is a plain
+    // function, but rendering the banner needs React and a DOM; a harness that
+    // sets this flag before load gets the same closures production uses.
+    // Nothing reads it in a normal page.
+    const noticeTestHook = globalThis.__RDSH_NOTICE_TEST__;
+    if (noticeTestHook !== null && typeof noticeTestHook === "object") {
+      noticeTestHook.notice = {
+        localNotices,
+        emitLocalNotices,
+        onWorkerMessage,
+        localNoticeRecent,
       };
     }
 

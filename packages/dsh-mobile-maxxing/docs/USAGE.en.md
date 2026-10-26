@@ -225,14 +225,27 @@ by it.
 
 | App state | How you are told |
 | --- | --- |
-| Visible (foreground) | In-app banner. No system notification |
+| Visible (foreground) | In-app banner; no system push if the host receives its acknowledgement |
 | Background, another app, closed | Web Push system notification |
 | Tap the notification | That session opens (banner "open" while in the app) |
 
-The service worker decides: `clients.matchAll()` finds a window with
-`visibilityState === "visible"` and hands the payload to the page, waiting up to 1.5s for the
-banner to acknowledge it. A visible window owns the notification: if no acknowledgement
-arrives, the miss is logged and no system notification is stacked on top of the app.
+The host waits up to 1.5s per notification event for an acknowledgement. A visible
+page renders the local banner from session state and acknowledges that event for its
+own push endpoint only after React has committed the banner, so a banner that was
+replaced before it appeared acknowledges nothing. Only acknowledged endpoints skip
+push. A hidden, disconnected, or failed page sends no acknowledgement, so ordinary Web
+Push is the fallback; there is no visibility heartbeat or expiring lease. Every push
+that reaches the service worker calls `showNotification`, as WebKit requires.
+
+The turn-end banner follows the host's own rule. While `onlyMobileTurns` is on (the
+default) only a session this browser sent in raises one, because that is the only turn
+the host notifies. Questions are always announced in the app, whichever device started
+the work.
+
+An acknowledgement that arrives too late still leaves the system notification beside
+the in-app banner, and a push already sent cannot be taken back, so that duplicate is
+accepted. A commit proves the banner was mounted, not that the user read it: another
+notice can replace it immediately.
 
 ### Sounds
 

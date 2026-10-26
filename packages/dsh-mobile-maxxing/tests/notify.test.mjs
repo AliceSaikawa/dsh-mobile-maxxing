@@ -268,7 +268,7 @@ test("a phone send marks the next turn; a desktop send does not", async () => {
 			await routes.get(path).handler(req, { writeHead(code) { status = code; }, end() {} });
 			return status;
 		};
-		const wait = () => new Promise((resolve) => setTimeout(resolve, 20));
+		const wait = () => new Promise((resolve) => setTimeout(resolve, 1550));
 
 		assert.equal(await post("/api/dsh-mobile-maxxing/push/mobile-send", { sessionId: "s1" }), 200);
 		listeners.get("session/event")({ id: "s1" }, { type: "turn/start" });
@@ -309,7 +309,7 @@ test("notification fan-out targets the app that started the turn or request, nev
 		calls.push(String(url));
 		return { status: 201, ok: true };
 	};
-	const wait = () => new Promise((resolve) => setTimeout(resolve, 20));
+	const wait = () => new Promise((resolve) => setTimeout(resolve, 1550));
 	const harness = (getOrigin) => {
 		const listeners = new Map();
 		const routes = new Map();
@@ -518,6 +518,168 @@ test("a broken push store does not stop the PWA routes", async () => {
 	}
 	assert.ok(routes.has("/dsh-mobile-maxxing.webmanifest"), "the PWA routes still mounted");
 	assert.ok(routes.has("/sw.js"));
+});
+
+/**
+ * Boot applyNotify for the event acknowledgement tests: a temp DSH_HOME with
+ * endpoints subscribed to one origin, a fetch stub that records every send,
+ * and the registered routes.
+ */
+function acknowledgementHarness(endpoints) {
+	const home = mkdtempSync(join(tmpdir(), "rdsh-ack-"));
+	mkdirSync(join(home, "dsh-mobile-maxxing"), { recursive: true });
+	const store = new PushStore(join(home, "dsh-mobile-maxxing", "push.json"));
+	const add = (endpoint) => {
+		const ecdh = createECDH("prime256v1");
+		ecdh.generateKeys();
+		store.add(
+			{ endpoint, keys: { p256dh: toBase64Url(ecdh.getPublicKey()), auth: toBase64Url(randomBytes(16)) } },
+			{ origin: "https://app.example:8446" },
+		);
+	};
+	for (const endpoint of endpoints) add(endpoint);
+	const previousHome = process.env.DSH_HOME;
+	const previousFetch = globalThis.fetch;
+	process.env.DSH_HOME = home;
+	const calls = [];
+	globalThis.fetch = async (url) => {
+		calls.push(String(url));
+		return { status: 201, ok: true };
+	};
+	const listeners = new Map();
+	const routes = new Map();
+	const agent = { id: "s1" };
+	const agents = { get: (id) => (id === "s1" ? agent : undefined), roots: () => [agent] };
+	const services = {
+		agents,
+		connection: { requestRejection: () => undefined },
+		webServer: {
+			register(route) { routes.set(route.path, route); return () => routes.delete(route.path); },
+			tapIndex() { return () => {}; },
+			getOrigin: () => "https://app.example:8446",
+		},
+	};
+	const scope = {
+		...services,
+		get: (name) => services[name],
+		on(event, handler) { listeners.set(event, handler); return () => listeners.delete(event); },
+		effect(fn) { const dispose = fn(); return typeof dispose === "function" ? dispose : () => {}; },
+	};
+	const ctx = {
+		inject(deps, callback) { return callback(scope); },
+		get: (name) => services[name],
+		on(event, handler) { listeners.set(event, handler); return () => {}; },
+		effect(fn) { return scope.effect(fn); },
+	};
+	// The host half already returns its seams; keep them so a test can drive one
+	// event and read its own result instead of counting pushes.
+	const api = applyNotify(ctx, { onlyMobileTurns: false });
+	const post = async (path, body) => {
+		const text = body === undefined ? "" : JSON.stringify(body);
+		const req = Readable.from(text === "" ? [] : [Buffer.from(text)]);
+		req.method = "POST";
+		req.url = path;
+		req.headers = { origin: "https://app.example:8446" };
+		let status = 0;
+		let responseText = "";
+		await routes.get(path).handler(req, {
+			writeHead(code) { status = code; },
+			end(chunk) { if (typeof chunk === "string") responseText += chunk; },
+		});
+		return { status, body: responseText === "" ? null : JSON.parse(responseText) };
+	};
+	return {
+		store,
+		add,
+		routes,
+		listeners,
+		calls,
+		post,
+		fanOut: api.fanOut,
+		turnEnded() {
+			listeners.get("session/event")(agent, { type: "turn/end", data: { reason: { kind: "completed" } } });
+		},
+		restore() {
+			globalThis.fetch = previousFetch;
+			if (previousHome === undefined) delete process.env.DSH_HOME;
+			else process.env.DSH_HOME = previousHome;
+		},
+	};
+}
+
+const ACK = "/api/dsh-mobile-maxxing/push/ack";
+const TEST_PUSH = "/api/dsh-mobile-maxxing/push/test";
+const TEST_ORIGIN = "https://app.example:8446";
+
+test("only the endpoint that acknowledged this notice skips push", async () => {
+	const visibleEndpoint = "https://web.push.apple.com/visible";
+	const otherEndpoint = "https://web.push.apple.com/other";
+	const harness = acknowledgementHarness([visibleEndpoint, otherEndpoint]);
+	try {
+		// No pending event means no ACK can silence future push.
+		const early = await harness.post(ACK, { endpoint: visibleEndpoint, sessionId: "s1", kind: "turn-end", origin: TEST_ORIGIN });
+		assert.equal(early.body.acknowledged, false);
+		harness.turnEnded();
+		const received = await harness.post(ACK, { endpoint: visibleEndpoint, sessionId: "s1", kind: "turn-end", origin: TEST_ORIGIN });
+		assert.equal(received.status, 200);
+		assert.equal(received.body.acknowledged, true);
+		assert.equal((await harness.post(ACK, { endpoint: visibleEndpoint, sessionId: "s1", kind: "turn-end", origin: TEST_ORIGIN })).body.acknowledged, false);
+		await new Promise((resolve) => setTimeout(resolve, 1550));
+		assert.deepEqual(harness.calls, [otherEndpoint], "the unacknowledged device still receives push");
+		// Tests explicitly exercise the real push path even while foregrounded.
+		await harness.post(TEST_PUSH, { sessionId: "s1", origin: TEST_ORIGIN });
+		assert.equal(harness.calls.length, 3, "the test endpoint must not be suppressed by an earlier ACK");
+	} finally {
+		harness.restore();
+	}
+});
+
+test("lost, mismatched, or stale acknowledgements never suppress push", async () => {
+	const endpoint = "https://web.push.apple.com/gated";
+	const harness = acknowledgementHarness([endpoint]);
+	try {
+		harness.turnEnded();
+		for (const body of [
+			{ endpoint, sessionId: "s1", kind: "question", origin: TEST_ORIGIN },
+			{ endpoint, sessionId: "not-s1", kind: "turn-end", origin: TEST_ORIGIN },
+			{ endpoint: "https://web.push.apple.com/foreign", sessionId: "s1", kind: "turn-end", origin: TEST_ORIGIN },
+			{ endpoint, sessionId: "s1", kind: "turn-end", origin: "https://foreign.example" },
+			{ endpoint: 7, sessionId: "s1", kind: "turn-end", origin: TEST_ORIGIN },
+		]) {
+			assert.equal((await harness.post(ACK, body)).body.acknowledged, false);
+		}
+		await new Promise((resolve) => setTimeout(resolve, 1550));
+		assert.deepEqual(harness.calls, [endpoint], "the unacknowledged event was lost");
+		const stale = await harness.post(ACK, { endpoint, sessionId: "s1", kind: "turn-end", origin: TEST_ORIGIN });
+		assert.equal(stale.body.acknowledged, false, "a late ACK must not silence the next event");
+	} finally {
+		harness.restore();
+	}
+});
+
+test("a late ACK consumes the oldest unacknowledged event, not a newer one", async () => {
+	const endpoint = "https://web.push.apple.com/stacked";
+	const harness = acknowledgementHarness([endpoint]);
+	const payload = (title, body) => ({ title, body, sessionId: "s1", kind: "turn-end", url: "/?session=s1" });
+	try {
+		// Two events of the same session and kind are in flight. There is no
+		// event id in the payload or the status hook, so an ACK cannot name its
+		// event: the host consumes the oldest unacknowledged one and leaves the
+		// newer event its push.
+		const older = harness.fanOut(payload("Older", "first"), { origin: TEST_ORIGIN, awaitAck: true });
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		const newer = harness.fanOut(payload("Newer", "second"), { origin: TEST_ORIGIN, awaitAck: true });
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		const acked = await harness.post(ACK, { endpoint, sessionId: "s1", kind: "turn-end", origin: TEST_ORIGIN });
+		assert.equal(acked.body.acknowledged, true);
+		const olderResult = await older;
+		const newerResult = await newer;
+		assert.equal(olderResult.results[0]?.skipped, "acknowledged", "the delayed ACK did not consume the oldest unacknowledged event");
+		assert.equal(newerResult.results[0]?.skipped, undefined, "the newer event was suppressed by an ACK for the older one");
+		assert.equal(newerResult.results[0]?.status, 201, "the newer event never reached the push service");
+	} finally {
+		harness.restore();
+	}
 });
 
 test("payload shape is what the service worker reads", () => {

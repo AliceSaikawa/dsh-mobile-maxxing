@@ -22,7 +22,9 @@
     "locale/translation-status.json",
     "locale/namespaces/en/*.json",
     "locale/namespaces/ja/*.json",
-    "README.md"
+    "README.md",
+    "LICENSE",
+    "NOTICE"
   ],
   "scripts": {
     "test": "node --test test/*.test.mjs"

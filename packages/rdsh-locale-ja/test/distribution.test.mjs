@@ -25,6 +25,7 @@ const repo = path.resolve(packageDir, '..', '..');
 const manifest = JSON.parse(fs.readFileSync(path.join(packageDir, 'package.json'), 'utf8'));
 const meta = JSON.parse(fs.readFileSync(path.join(packageDir, 'locale', 'package-meta.json'), 'utf8'));
 const upstream = JSON.parse(fs.readFileSync(path.join(packageDir, 'locale', 'upstream.json'), 'utf8'));
+const rootLicense = fs.readFileSync(path.join(repo, 'LICENSE'), 'utf8');
 
 function temporaryDirectory(t) {
 	const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'rdsh-locale-ja-dist-'));
@@ -63,6 +64,8 @@ test('the package is a separate, private web client with its own exports', () =>
 	assert.doesNotMatch(JSON.stringify(manifest.dependencies ?? {}), /dsh-mobile-maxxing/,
 		'the locale pack must not depend on or install the mobile package');
 	assert.equal(manifest.files.some((entry) => entry === 'work' || entry.startsWith('work/')), false);
+	assert.ok(manifest.files.includes('LICENSE'), 'the manifest must ship the package MIT license');
+	assert.ok(manifest.files.includes('NOTICE'), 'the manifest must ship the upstream notice');
 
 	// The mobile package is the optional consumer's neighbour, not its owner:
 	// nothing silently installs or enables the locale pack.
@@ -120,6 +123,44 @@ test('npm pack is a standalone install: no work directory and every export resol
 	assert.deepEqual(client.inject, ['locale']);
 	assert.equal(Object.keys(client.dictionaries).length, upstream.totals.namespaces);
 	assert.equal(typeof client.apply, 'function');
+});
+
+test('npm pack carries the MIT terms and accurate upstream attribution', (t) => {
+	const { file } = pack(t);
+	const entries = tarballEntries(file);
+	for (const required of ['package/LICENSE', 'package/NOTICE']) {
+		assert.ok(entries.includes(required), 'the tarball is missing ' + required);
+	}
+
+	const extracted = temporaryDirectory(t);
+	execFileSync('tar', ['-xzf', file, '-C', extracted, '--strip-components=1'], { stdio: 'pipe' });
+	const installedManifest = JSON.parse(fs.readFileSync(path.join(extracted, 'package.json'), 'utf8'));
+	assert.equal(installedManifest.license, 'MIT');
+
+	// The shipped license is the repository MIT text plus the upstream snapshot's
+	// copyright line: the permission notice and disclaimer stay byte-identical.
+	const expectedLicense = rootLicense.replace(
+		'Copyright (c) 2026 kuraneko1\n',
+		'Copyright (c) 2026 kuraneko1\nCopyright (c) 2026 DeepSeek\n',
+	);
+	const license = fs.readFileSync(path.join(extracted, 'LICENSE'), 'utf8');
+	assert.equal(license, expectedLicense, 'the packed LICENSE is not the repository MIT text plus the upstream copyright');
+
+	const notice = fs.readFileSync(path.join(extracted, 'NOTICE'), 'utf8');
+	assert.match(notice, /Copyright \(c\) 2026 DeepSeek/u, 'the upstream copyright holder is not named');
+	for (const line of notice.split('\n').filter((entry) => entry.includes('Copyright'))) {
+		assert.match(line, /Copyright \(c\) 2026 (?:kuraneko1|DeepSeek)/u, 'the notice invents or misattributes a copyright holder: ' + line);
+	}
+	// Every package recorded as an owner of the English snapshot is DeepSeek's,
+	// which is what the notice claims; no third author is invented.
+	for (const namespace of Object.values(upstream.namespaces)) {
+		for (const owner of namespace.owners) assert.match(owner, /^@deepseek-ai\//u, 'the English snapshot has a non-DeepSeek owner: ' + owner);
+	}
+	assert.match(notice, /@deepseek-ai\/dsh-client-locale/u, 'the upstream locale package is not named');
+	assert.ok(notice.includes(upstream.dsh.version), 'the notice does not name the snapshot version ' + upstream.dsh.version);
+	assert.match(notice, /locale\/namespaces\/en\/\*\.json/u, 'the notice does not say which files are the English snapshot');
+	assert.match(notice, /derivative translations/u, 'the notice does not mark the ja values as translations');
+	assert.match(notice, /MIT License/u);
 });
 
 test('the installed client is the single ja owner and coexists/disposes cleanly', async (t) => {

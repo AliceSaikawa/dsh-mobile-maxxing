@@ -543,6 +543,8 @@ export function renderManifest(meta, upstream) {
 		'locale/namespaces/en/*.json',
 		'locale/namespaces/ja/*.json',
 		'README.md',
+		'LICENSE',
+		'NOTICE',
 	];
 	const manifest = {
 		name: meta.name,

@@ -2498,33 +2498,86 @@ test("a saved terminal-dark choice never wakes the desktop half (#79)", () => {
 		"the desktop rewrote the saved choice");
 });
 
-/** A locale service with the public language-pack API and a recording catalog. */
+/**
+ * A locale service with the public language-pack API and a recording catalog.
+ *
+ * `addLanguage` and its disposer mirror `LocaleRuntime.publishCatalog`:
+ * they re-resolve the stored preference and notify the LocaleFace listeners,
+ * but `locale/change` stays reserved for an active-locale switch (the test
+ * drives that explicitly when it is about a Host change). `register` mirrors
+ * the runtime republishing `this.snapshot.active`, which a device-local
+ * projection can have replaced.
+ *
+ * `hostSelect` is a Host switch that publishes (setLocale); `silentHostSelect`
+ * is the durable preference change `LocaleRuntime.adopt` makes without a
+ * publish when the resolved active already equals `snapshot.active` (the
+ * device projection), so no locale/change is emitted at all. `resolveActive`
+ * mirrors the runtime's pure durable-preference resolver; `withResolver:
+ * false` models an older runtime that does not expose it.
+ */
 function localeService({ locales = [
 	{ id: "zh", label: "中文", fallback: "en" },
 	{ id: "en", label: "English" },
-], active = "zh" } = {}) {
+], active = "zh", withResolver = true } = {}) {
 	const registered = [];
 	const removed = [];
 	const listeners = new Set();
+	let revision = 2;
+	let catalog = [...locales];
+	/** The Host's own selection; catalog changes re-resolve to this value. */
+	let hostActive = active;
+	const publish = (localeActive) => {
+		revision += 1;
+		service.snapshot = Object.freeze({
+			active: localeActive,
+			revision,
+			locales: Object.freeze([...catalog]),
+		});
+		for (const listener of [...listeners]) listener();
+	};
 	const service = {
-		snapshot: { active, revision: 2, locales },
+		snapshot: Object.freeze({ active, revision, locales: Object.freeze([...locales]) }),
 		listeners,
 		getSnapshot() { return this.snapshot; },
+		subscribe(listener) {
+			listeners.add(listener);
+			return () => listeners.delete(listener);
+		},
+		/** LocaleRuntime.resolveActive: durable preference, else provisional. */
+		resolveActive() {
+			if (catalog.some((entry) => entry.id === hostActive)) return hostActive;
+			return catalog.some((entry) => entry.id === "en") ? "en" : (catalog[0]?.id ?? "");
+		},
 		addLanguage(input) {
 			registered.push({ kind: "language", input: { ...input } });
-			this.snapshot = {
-				...this.snapshot,
-				revision: this.snapshot.revision + 1,
-				locales: [...this.snapshot.locales, input],
+			catalog = [...catalog, input];
+			publish(hostActive);
+			return () => {
+				removed.push("language");
+				catalog = catalog.filter((entry) => entry.id !== input.id);
+				publish(hostActive);
 			};
-			return () => { removed.push("language"); };
+		},
+		/** Test-only Host selection that publishes: the caller emits locale/change. */
+		hostSelect(id) {
+			hostActive = id;
+			publish(id);
+		},
+		/** Test-only silent durable Host switch (`adopt` early return, no event). */
+		silentHostSelect(id) {
+			hostActive = id;
 		},
 		register(namespace, lang, dictionary) {
 			registered.push({ kind: "dictionary", namespace, lang, keys: Object.keys(dictionary).length });
-			return () => { removed.push(`${namespace}:${lang}`); };
+			publish(service.snapshot.active);
+			return () => {
+				removed.push(`${namespace}:${lang}`);
+				publish(service.snapshot.active);
+			};
 		},
 		setLocale() { throw new Error("the shared locale writer was called"); },
 	};
+	if (!withResolver) delete service.resolveActive;
 	return { service, registered, removed };
 }
 
@@ -2573,6 +2626,372 @@ test("a separately installed ja owner appears in the picker and survives mobile 
 	assert.equal(service.snapshot.active, "zh", "dispose did not restore the Host language");
 	assert.deepEqual(service.snapshot.locales, hostLocales, "mobile dispose removed the separate owner's ja");
 	assert.deepEqual(removed, [], "mobile disposed a definition owned by the separate package");
+});
+
+/** Drain the projection microtasks the locale listeners queue. */
+async function settleLocale() {
+	for (let index = 0; index < 4; index += 1) await Promise.resolve();
+}
+
+test("#80 an owner that activates after the mobile attach reaches the picker and keeps the stored ja", async () => {
+	const ja = { id: "ja", label: "日本語", fallback: "en" };
+	const { service, registered, removed } = localeService();
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		locale: service,
+		storage: { "rdsh-mobile-ux:local-display": JSON.stringify({ language: "ja" }) },
+	});
+	const api = booted.sandbox.__RDSH_MOBILE_UX__;
+	assert.deepEqual(api.state.localDisplay.languages.map((entry) => entry.id), ["zh", "en"]);
+	assert.equal(api.state.localDisplay.language, "", "ja cannot be selected before its owner exists");
+
+	// rdsh-locale-ja activates late: addLanguage publishes the catalog through
+	// the LocaleFace listeners only, because the active locale stays zh.
+	const releaseJa = service.addLanguage(ja);
+	await settleLocale();
+
+	assert.deepEqual(api.state.localDisplay.languages.map((entry) => entry.id), ["zh", "en", "ja"],
+		"a catalog-only publish never reached the picker");
+	assert.equal(api.state.localDisplay.language, "ja",
+		"the stored choice was not restored when its owner arrived");
+	assert.equal(service.snapshot.active, "ja", "the late catalog was not projected");
+	assert.equal(service.snapshot.revision, 3, "the projection inflated the Host revision");
+	assert.deepEqual(registered, [{ kind: "language", input: { ...ja } }],
+		"the mobile package registered a language of its own");
+
+	// The picker can move between the late language and System afterwards.
+	api.setLanguage("");
+	await settleLocale();
+	assert.equal(api.state.localDisplay.language, "", "System was not selectable after the late arrival");
+	assert.equal(service.snapshot.active, "zh");
+	api.setLanguage("ja");
+	await settleLocale();
+	assert.equal(api.state.localDisplay.language, "ja", "the late language was not selectable");
+	assert.equal(service.snapshot.active, "ja");
+
+	booted.disposeAll();
+	assert.equal(service.snapshot.active, "zh", "dispose did not restore the Host active locale");
+	assert.deepEqual(service.snapshot.locales.map((entry) => entry.id), ["zh", "en", "ja"],
+		"dispose dropped the externally owned ja from the restored snapshot");
+	assert.equal(service.snapshot.revision, 3, "dispose changed the Host revision");
+	assert.deepEqual(removed, [], "the mobile package withdrew a definition it does not own");
+});
+
+test("#80 a withdrawn ja is unprojected without forgetting the device choice, and re-adding restores it", async () => {
+	const ja = { id: "ja", label: "日本語", fallback: "en" };
+	const { service } = localeService();
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		locale: service,
+		storage: { "rdsh-mobile-ux:local-display": JSON.stringify({ language: "ja" }) },
+	});
+	const api = booted.sandbox.__RDSH_MOBILE_UX__;
+	const releaseJa = service.addLanguage(ja);
+	await settleLocale();
+	assert.equal(api.state.localDisplay.language, "ja");
+	assert.equal(service.snapshot.active, "ja", "the test did not start from a projection");
+
+	releaseJa();
+	await settleLocale();
+	assert.deepEqual(api.state.localDisplay.languages.map((entry) => entry.id), ["zh", "en"],
+		"the picker kept a language the catalog withdrew");
+	assert.equal(api.state.localDisplay.language, "", "a withdrawn language stayed selected");
+	assert.equal(service.snapshot.active, "zh", "the withdrawn language was not unprojected");
+	assert.equal(service.snapshot.locales.some((entry) => entry.id === "ja"), false);
+	assert.equal(
+		JSON.parse(booted.sandbox.localStorage.getItem("rdsh-mobile-ux:local-display")).language,
+		"ja",
+		"the stored device choice was discarded with the definition",
+	);
+
+	const reAdd = service.addLanguage(ja);
+	await settleLocale();
+	assert.equal(api.state.localDisplay.language, "ja", "the stored choice did not come back with the definition");
+	assert.equal(service.snapshot.active, "ja");
+
+	booted.disposeAll();
+	assert.deepEqual(service.snapshot.locales.map((entry) => entry.id), ["zh", "en", "ja"],
+		"dispose dropped the external definition");
+	assert.equal(service.snapshot.active, "zh");
+	reAdd();
+});
+
+test("#80 disposing after the external owner withdrew ja never resurrects it", async () => {
+	const ja = { id: "ja", label: "日本語", fallback: "en" };
+	const { service } = localeService();
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		locale: service,
+		storage: { "rdsh-mobile-ux:local-display": JSON.stringify({ language: "ja" }) },
+	});
+	const releaseJa = service.addLanguage(ja);
+	await settleLocale();
+	assert.equal(service.snapshot.active, "ja");
+	releaseJa();
+	await settleLocale();
+	assert.equal(service.snapshot.active, "zh");
+
+	booted.disposeAll();
+	assert.equal(service.snapshot.locales.some((entry) => entry.id === "ja"), false,
+		"dispose wrote a withdrawn ja back into the Host snapshot");
+	assert.equal(service.snapshot.active, "zh", "dispose restored a stale active locale");
+	assert.equal(service.snapshot.revision, 4, "dispose changed the Host revision");
+});
+
+test("#80 a later Host locale change keeps the device language and disposes to the newest Host view", async () => {
+	const ja = { id: "ja", label: "日本語", fallback: "en" };
+	const { service } = localeService({
+		locales: [
+			{ id: "zh", label: "中文", fallback: "en" },
+			{ id: "en", label: "English" },
+			ja,
+		],
+	});
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		locale: service,
+		storage: {
+			"rdsh-mobile-ux:local-display": JSON.stringify({
+				fonts: { text: 18, code: 13, terminal: 15 },
+				language: "ja",
+			}),
+		},
+		configureDocument(doc) { doc.documentElement.lang = "zh-CN"; },
+	});
+	const api = booted.sandbox.__RDSH_MOBILE_UX__;
+	assert.equal(service.snapshot.active, "ja");
+
+	// The Host switches to en on its own: a normal locale/change with a newer
+	// revision. The device keeps ja and its font projection.
+	service.hostSelect("en");
+	const next = service.snapshot;
+	booted.emit("locale/change", next);
+	await settleLocale();
+	assert.equal(api.state.localDisplay.language, "ja", "the Host change won over the device choice");
+	assert.equal(service.snapshot.active, "ja", "the Host change dropped the device projection");
+	assert.equal(service.snapshot.revision, 3, "the projection did not keep the new Host revision");
+	assert.deepEqual(service.snapshot.locales.map((entry) => entry.id), ["zh", "en", "ja"]);
+
+	// "System" restores the newest Host view and forgets the remembered choice.
+	api.setLanguage("");
+	await settleLocale();
+	assert.equal(api.state.localDisplay.language, "", "System did not clear the device choice");
+	assert.equal(service.snapshot, next, "System did not restore the Host snapshot");
+
+	// A catalog publish after the explicit System choice must not bring ja back.
+	service.addLanguage({ id: "ko", label: "한국어", fallback: "en" });
+	await settleLocale();
+	assert.equal(api.state.localDisplay.language, "", "a catalog change revived a cleared choice");
+
+	booted.disposeAll();
+	assert.equal(service.snapshot.active, "en", "dispose restored an older Host active locale");
+	assert.deepEqual(service.snapshot.locales.map((entry) => entry.id), ["zh", "en", "ja", "ko"]);
+});
+
+test("#80 a dictionary republish while a device language is projected is not a Host active change", async () => {
+	const ja = { id: "ja", label: "日本語", fallback: "en" };
+	const { service } = localeService({
+		locales: [
+			{ id: "zh", label: "中文", fallback: "en" },
+			{ id: "en", label: "English" },
+			ja,
+		],
+	});
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		locale: service,
+		storage: { "rdsh-mobile-ux:local-display": JSON.stringify({ language: "ja" }) },
+	});
+	const api = booted.sandbox.__RDSH_MOBILE_UX__;
+	assert.equal(service.snapshot.active, "ja");
+
+	// LocaleRuntime.register republishes this.snapshot.active, which is the
+	// device projection here; adopting it as the Host active would both lose
+	// the shared locale and restore the device choice on dispose.
+	service.register("late", "ja", { hello: "こんにちは" });
+	await settleLocale();
+	assert.equal(api.state.localDisplay.language, "ja", "the device choice was dropped");
+	assert.equal(service.snapshot.active, "ja", "the projection was lost");
+
+	booted.disposeAll();
+	assert.equal(service.snapshot.active, "zh", "the device choice was restored as the Host active locale");
+	assert.deepEqual(service.snapshot.locales.map((entry) => entry.id), ["zh", "en", "ja"]);
+});
+
+test("#80 a silent Host switch to the projected language survives System and dispose", async () => {
+	const ja = { id: "ja", label: "日本語", fallback: "en" };
+	const { service } = localeService({
+		locales: [
+			{ id: "zh", label: "中文", fallback: "en" },
+			{ id: "en", label: "English" },
+			ja,
+		],
+	});
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		locale: service,
+		storage: { "rdsh-mobile-ux:local-display": JSON.stringify({ language: "ja" }) },
+	});
+	const api = booted.sandbox.__RDSH_MOBILE_UX__;
+	assert.equal(service.snapshot.active, "ja", "the test did not start from a projection");
+
+	// LocaleRuntime.adopt returns early because the resolved Host active (ja)
+	// already equals the projected snapshot.active: no publish, no revision
+	// bump and no locale/change. Only the runtime's durable-preference
+	// resolver can see this Host switch.
+	service.silentHostSelect("ja");
+	await settleLocale();
+	assert.equal(api.state.localDisplay.language, "ja");
+	assert.equal(service.snapshot.revision, 2, "a silent Host switch bumped the Host revision");
+
+	// System restores the Host's ja, not the previous zh baseline.
+	api.setLanguage("");
+	await settleLocale();
+	assert.equal(api.state.localDisplay.language, "", "System did not clear the device choice");
+	assert.equal(service.snapshot.active, "ja", "System restored a stale Host active locale");
+	assert.equal(service.snapshot.revision, 2, "System changed the Host revision");
+
+	// Re-selecting ja and disposing keeps the silent Host switch as baseline.
+	api.setLanguage("ja");
+	await settleLocale();
+	booted.disposeAll();
+	assert.equal(service.snapshot.active, "ja", "dispose reverted the silent Host switch");
+	assert.equal(service.snapshot.revision, 2, "dispose changed the Host revision");
+	assert.deepEqual(service.snapshot.locales.map((entry) => entry.id), ["zh", "en", "ja"]);
+});
+
+test("#80 an authoritative locale/change naming the projected language is not normalised", async () => {
+	const ja = { id: "ja", label: "日本語", fallback: "en" };
+	// No resolver: the store heuristic is the only source, so the event
+	// boundary is what keeps this authoritative switch.
+	const { service } = localeService({
+		locales: [
+			{ id: "zh", label: "中文", fallback: "en" },
+			{ id: "en", label: "English" },
+			ja,
+		],
+		withResolver: false,
+	});
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		locale: service,
+		storage: { "rdsh-mobile-ux:local-display": JSON.stringify({ language: "ja" }) },
+	});
+	const api = booted.sandbox.__RDSH_MOBILE_UX__;
+	assert.equal(service.snapshot.active, "ja");
+
+	// The Host switches to ja: the store notification republishes the
+	// projection's active, then publish(..., true) emits the authoritative
+	// locale/change with the same active and catalog.
+	service.hostSelect("ja");
+	const next = service.snapshot;
+	booted.emit("locale/change", next);
+	await settleLocale();
+	assert.equal(api.state.localDisplay.language, "ja");
+	assert.equal(service.snapshot.active, "ja");
+	assert.equal(service.snapshot.revision, 3, "the projection inflated the Host revision");
+
+	api.setLanguage("");
+	await settleLocale();
+	assert.equal(service.snapshot.active, "ja", "System restored a stale Host active locale");
+	assert.equal(service.snapshot.revision, 3);
+
+	booted.disposeAll();
+	assert.equal(service.snapshot.active, "ja", "dispose reverted the authoritative Host switch");
+	assert.deepEqual(service.snapshot.locales.map((entry) => entry.id), ["zh", "en", "ja"]);
+});
+
+test("#80 without the Host-active resolver a silent switch falls back to the published baseline", async () => {
+	const ja = { id: "ja", label: "日本語", fallback: "en" };
+	const { service } = localeService({
+		locales: [
+			{ id: "zh", label: "中文", fallback: "en" },
+			{ id: "en", label: "English" },
+			ja,
+		],
+		withResolver: false,
+	});
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		locale: service,
+		storage: { "rdsh-mobile-ux:local-display": JSON.stringify({ language: "ja" }) },
+	});
+	const api = booted.sandbox.__RDSH_MOBILE_UX__;
+	assert.equal(service.snapshot.active, "ja");
+
+	// Documented limitation: without resolveActive the module cannot see a
+	// durable preference change that emitted no locale/change, so it restores
+	// the last published Host baseline (zh) rather than the silent ja.
+	service.silentHostSelect("ja");
+	await settleLocale();
+	api.setLanguage("");
+	await settleLocale();
+	assert.equal(service.snapshot.active, "zh", "the published-baseline fallback changed its contract");
+	booted.disposeAll();
+	assert.equal(service.snapshot.active, "zh");
+});
+
+test("#80 a catalog publish leaves the device font projection untouched", async () => {
+	const ja = { id: "ja", label: "日本語", fallback: "en" };
+	const hostTheme = {
+		preference: "system",
+		revision: 4,
+		fontSizes: { text: 14, code: 11, terminal: 13 },
+		fontFamilies: { text: "", code: "", terminal: "" },
+		active: { id: "light", colorScheme: "light", tokens: {} },
+		themes: [],
+	};
+	const theme = {
+		snapshot: hostTheme,
+		getTheme() { return this.snapshot; },
+	};
+	const { service } = localeService();
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		theme,
+		locale: service,
+		storage: {
+			"rdsh-mobile-ux:local-display": JSON.stringify({
+				fonts: { text: 18, code: 13, terminal: 15 },
+				language: "",
+			}),
+		},
+	});
+	const api = booted.sandbox.__RDSH_MOBILE_UX__;
+	const docEl = booted.sandbox.document.documentElement;
+	assert.equal(theme.snapshot.fontSizes.text, 18);
+	assert.equal(api.state.localDisplay.fontsLocal, true);
+	api.writeTerminalDark(true);
+	assert.equal(docEl.hasAttribute("data-rdsh-terminal-dark"), true);
+
+	service.addLanguage(ja);
+	await settleLocale();
+	assert.equal(theme.snapshot.fontSizes.text, 18, "the catalog publish reverted the device font");
+	assert.equal(theme.snapshot.revision, hostTheme.revision, "the catalog publish inflated the theme revision");
+	assert.deepEqual(api.state.localDisplay.languages.map((entry) => entry.id), ["zh", "en", "ja"]);
+	assert.equal(api.state.localDisplay.language, "", "an untouched device stayed on System");
+	assert.equal(docEl.hasAttribute("data-rdsh-terminal-dark"), true,
+		"the catalog publish dropped the terminal-only palette");
+
+	// A font step while the language owner is inactive keeps the stored choice.
+	api.setFont("text", 1);
+	assert.equal(
+		JSON.parse(booted.sandbox.localStorage.getItem("rdsh-mobile-ux:local-display")).language,
+		"",
+		"a font step invented a language choice",
+	);
+	api.writeTerminalDark(false);
+	booted.disposeAll();
+	assert.equal(theme.snapshot, hostTheme);
 });
 
 test("a desktop never touches the locale catalog (#44/#80)", () => {

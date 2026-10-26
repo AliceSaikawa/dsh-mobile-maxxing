@@ -87,6 +87,23 @@ test("font sizes use the published theme variables and exact roles", () => {
 	assert.doesNotMatch(body, /\.setFontSize\(|\.setLocale\(/, "a shared writer is called");
 });
 
+test("catalog publishes ride the public LocaleFace subscription, not locale/change alone (#80)", () => {
+	const body = block("function attachLocalDisplay(ctx) {", "function localeOptions(");
+	// LocaleRuntime.publish emits locale/change only for an active switch;
+	// addLanguage/removeLanguage reach public subscribers only.
+	assert.match(body, /localeService\.subscribe\(/, "the language catalog is not subscribed");
+	assert.match(body, /LOCAL_DISPLAY_PROJECTION/, "the device projection carries no identity marker");
+	assert.match(body, /applyingLocale/, "the local notify can re-enter applyLocale");
+	assert.match(body, /localDisplayStoredLanguage/, "the stored device choice is not remembered separately");
+	assert.doesNotMatch(body, /removeLanguage\(/, "the mobile package unregisters an external language");
+	// A Host switch to the projected language emits no locale/change (`adopt`
+	// returns early), so the runtime's durable resolver is read instead. It is
+	// read-only and has an explicit fallback for runtimes without it.
+	assert.match(body, /typeof localeService\.resolveActive !== "function"/, "the resolver has no shape guard");
+	assert.match(body, /localeService\.resolveActive\(\)/, "the Host active is never re-read from the runtime");
+	assert.match(body, /refreshHostActive/, "a silent Host switch is not folded into the baseline");
+});
+
 test("the mobile package no longer owns a ja language pack (#80)", () => {
 	assert.doesNotMatch(COPY, /LOCALE_PACKS/, "the mobile copy module still exports a locale pack");
 	assert.doesNotMatch(CLIENT, /addLanguage\(|JA_LOCALE_PACK|__RDSH_PWA_LOCALES__/,

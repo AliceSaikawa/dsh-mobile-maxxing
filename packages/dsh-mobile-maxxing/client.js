@@ -38,6 +38,14 @@ window.__ModuleLoader__.load({
      * mobile half; the copy lookup above must see it before the host global.
      */
     let localDisplayLanguage = "";
+    /**
+     * The language this browser has chosen, independent of whether a language
+     * pack currently publishes it. A owner that activates late (or withdraws
+     * and re-adds) must not silently discard the stored choice: the picker
+     * shows "System" while the definition is missing and this value restores
+     * the choice when the catalog offers it again (#80).
+     */
+    let localDisplayStoredLanguage = "";
     /** The shared DSH locale, tracked so "System" copy follows the shell. */
     let localDisplayHostLanguage = "";
 
@@ -2493,7 +2501,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       };
       if (next[role] === current[role]) return;
       const display = { ...state.localDisplay, fonts: next, fontsLocal: true };
-      writeLocalDisplaySettings(display);
+      // Persist the remembered language, not the temporarily unprojected one:
+      // a font step must not forget a stored ja while its owner is inactive.
+      writeLocalDisplaySettings({
+        ...display,
+        language: localDisplayStoredLanguage !== "" ? localDisplayStoredLanguage : display.language,
+      });
       emit({ localDisplay: display });
       localDisplayRuntime?.applyTheme();
     }
@@ -2507,6 +2520,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (!supported) return;
       const updated = { ...display, language: next };
       localDisplayLanguage = next;
+      // "" is an explicit "System" choice; it must outlive a later catalog
+      // change, unlike the temporary "" this module shows when a stored
+      // language's owner is not registered right now.
+      localDisplayStoredLanguage = next;
       writeLocalDisplaySettings(updated);
       emit({ localDisplay: updated });
       localDisplayRuntime?.applyLocale();
@@ -2579,8 +2596,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         ? "locale-missing"
         : (!localeShape ? "locale-shape" : (options.length === 0 ? "no-locales" : ""));
       const stored = readLocalDisplaySettings();
-      const language = localeUsable && stored.language !== "" && options.some((entry) => entry.id === stored.language)
-        ? stored.language
+      // Remember the stored choice even while the catalog cannot offer it (no
+      // owner yet, or no locale service at all): a later catalog update or a
+      // font step must not turn a stored ja into "System" (#80).
+      const storedLanguage = typeof stored.language === "string" ? stored.language : "";
+      const language = localeUsable && storedLanguage !== "" && options.some((entry) => entry.id === storedLanguage)
+        ? storedLanguage
         : "";
       const fonts = stored.fonts ?? (themeUsable ? hostFonts : {
         text: 14,
@@ -2596,6 +2617,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         reason: { fonts: themeReason, language: localeReason },
       };
       localDisplayLanguage = language;
+      localDisplayStoredLanguage = storedLanguage;
       localDisplayHostLanguage = typeof hostLocale?.active === "string" ? hostLocale.active : "";
       localDisplayRuntime = {
         applyTheme: () => {},
@@ -2603,6 +2625,14 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       };
 
       let projectingTheme = false;
+      // Set while this module installs/normalises its own locale view. The
+      // LocaleFace listener below is notified by this module's own
+      // notifyLocale(), so without the guard a reset ("System", which leaves
+      // the snapshot unprojected) would re-enter applyLocale forever.
+      let applyingLocale = false;
+      let localeApplyQueued = false;
+      // The snapshot currently installed as the device-local projection.
+      let projectedLocale = null;
       let disposed = false;
       const baseDocumentLang = document.documentElement.lang;
 
@@ -2646,23 +2676,176 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         emitTheme(themeService.snapshot);
       };
 
-      const applyLocale = () => {
-        if (state.localDisplay.available.language !== true || localeService === null || hostLocale === null) return;
-        const chosen = state.localDisplay.language;
-        if (chosen === "" || !state.localDisplay.languages.some((entry) => entry.id === chosen)) {
-          if (localeService.snapshot !== hostLocale) localeService.snapshot = hostLocale;
-          if (document.documentElement.lang !== baseDocumentLang) document.documentElement.lang = baseDocumentLang;
-          notifyLocale();
-          return;
+      /** The runtime's current snapshot, or null when the fiber is going away. */
+      const readLocaleSnapshot = () => {
+        try {
+          const snapshot = localeService?.getSnapshot?.();
+          return snapshot !== null && snapshot !== undefined && typeof snapshot === "object" ? snapshot : null;
+        } catch (error) {
+          return null;
         }
-        // Same Host revision as the theme projection, for the same row-store
-        // reason; notifyLocale() carries the new identity to local readers.
-        localeService.snapshot = Object.freeze({
-          ...hostLocale,
-          active: chosen,
+      };
+
+      /** True for a snapshot this module installed for this one device. */
+      const isLocalLocaleProjection = (snapshot) => snapshot !== null && snapshot !== undefined
+        && snapshot[LOCAL_DISPLAY_PROJECTION] === true;
+
+      const sameLocales = (left, right) => Array.isArray(left?.locales) && Array.isArray(right?.locales)
+        && left.locales.length === right.locales.length
+        && left.locales.every((entry, index) => entry?.id === right.locales[index]?.id);
+
+      /**
+       * The Host's current active locale, from the runtime's durable
+       * preference/provisional resolution.
+       *
+       * `LocaleRuntime.adopt` returns early when the resolved Host active
+       * already equals `snapshot.active`, and the device-local projection
+       * installs its own active there: a Host that switches to the language
+       * this device already shows publishes no `locale/change` at all
+       * (verified with @deepseek-ai/dsh-client-locale 0.2.1-rc.2). The
+       * projected snapshot cannot distinguish that from a store republish, so
+       * read the runtime's pure resolver instead. `resolveActive()` is a
+       * TypeScript-private (runtime-callable) rc.2 method over the durable
+       * preference and the browser provisional value; it never reads the
+       * projected snapshot. Runtimes without it fall back to the last
+       * published baseline, which cannot see a silent switch.
+       */
+      const hostActiveNow = () => {
+        const published = typeof hostLocale?.active === "string" ? hostLocale.active : "";
+        if (localeService === null || typeof localeService.resolveActive !== "function") return published;
+        let resolved;
+        try {
+          resolved = localeService.resolveActive();
+        } catch (error) {
+          return published;
+        }
+        if (typeof resolved !== "string" || resolved === "") return published;
+        const locales = hostLocale?.locales;
+        if (Array.isArray(locales) && !locales.some((entry) => entry?.id === resolved)) return published;
+        return resolved;
+      };
+
+      /**
+       * Fold a silent Host active change into the baseline. Only the identity
+       * changes: the Host revision is kept and the projection marker is never
+       * part of a Host baseline.
+       */
+      const refreshHostActive = () => {
+        if (hostLocale === null) return false;
+        const active = hostActiveNow();
+        if (active === "" || active === hostLocale.active) return false;
+        if (Array.isArray(hostLocale.locales) && !hostLocale.locales.some((entry) => entry?.id === active)) return false;
+        hostLocale = Object.freeze({ ...hostLocale, active });
+        localDisplayHostLanguage = active;
+        return true;
+      };
+
+      /**
+       * The Host view behind a snapshot read from the public store.
+       *
+       * `LocaleRuntime.register` republishes `this.snapshot.active` instead of
+       * re-resolving the stored preference. While the device-local projection
+       * is installed that value is the local choice, so a republish with an
+       * unchanged catalog is not a Host active change: adopting it would move
+       * the shared active onto this device's choice and restore it on dispose.
+       * Catalog changes (`addLanguage`/`removeLanguage`) re-resolve the
+       * preference, so their active stays authoritative.
+       *
+       * This applies to store reads (the LocaleFace listener and the snapshot
+       * reread) only. A `locale/change` payload is the authoritative active
+       * switch and is adopted as-is, even when it names the language this
+       * device already projects.
+       */
+      const hostView = (snapshot) => {
+        if (snapshot === null) return null;
+        if (isLocalLocaleProjection(snapshot)) return null;
+        if (projectedLocale === null) return snapshot;
+        if (snapshot.active !== projectedLocale.active || !sameLocales(snapshot, projectedLocale)) return snapshot;
+        const active = hostActiveNow();
+        if (active === "" || active === snapshot.active) return snapshot;
+        return Object.freeze({ ...snapshot, active });
+      };
+
+      /** The remembered device choice while the catalog offers it, else "" (System). */
+      const selectedLanguage = (nextOptions) => {
+        const offered = (id) => id !== "" && nextOptions.some((entry) => entry.id === id);
+        if (offered(localDisplayStoredLanguage)) return localDisplayStoredLanguage;
+        if (offered(state.localDisplay.language)) return state.localDisplay.language;
+        return "";
+      };
+
+      /**
+       * Adopt one Host snapshot as the projection baseline and refresh the
+       * picker. Returns false for the known baseline and for this module's own
+       * projections, so one publish notified twice stays cheap.
+       */
+      const adoptHostLocale = (snapshot) => {
+        if (disposed || snapshot === null || snapshot === undefined) return false;
+        if (isLocalLocaleProjection(snapshot)) return false;
+        if (snapshot === hostLocale) return false;
+        hostLocale = snapshot;
+        localDisplayHostLanguage = typeof snapshot.active === "string" ? snapshot.active : "";
+        const nextOptions = localeOptionsFrom(snapshot);
+        const nextLanguage = selectedLanguage(nextOptions);
+        const optionsChanged = nextOptions.length !== state.localDisplay.languages.length
+          || nextOptions.some((entry, index) => entry.id !== state.localDisplay.languages[index]?.id);
+        if (optionsChanged || nextLanguage !== state.localDisplay.language) {
+          emit({ localDisplay: { ...state.localDisplay, languages: nextOptions, language: nextLanguage } });
+        }
+        localDisplayLanguage = nextLanguage;
+        return true;
+      };
+
+      const applyLocale = () => {
+        if (applyingLocale) return;
+        applyingLocale = true;
+        try {
+          if (state.localDisplay.available.language !== true || localeService === null) return;
+          // Never project a catalog read before the last owner registered (or
+          // withdrew) its definition: that stale baseline is what dropped an
+          // externally owned ja from the picker and from the restored snapshot
+          // (#80).
+          const latest = hostView(readLocaleSnapshot());
+          if (latest !== null && latest !== hostLocale) adoptHostLocale(latest);
+          if (hostLocale === null) return;
+          // A Host switch to the projected language leaves no event behind;
+          // re-read the durable preference before projecting or restoring.
+          refreshHostActive();
+          const chosen = state.localDisplay.language;
+          if (chosen === "" || !state.localDisplay.languages.some((entry) => entry.id === chosen)) {
+            projectedLocale = null;
+            if (localeService.snapshot !== hostLocale) {
+              localeService.snapshot = hostLocale;
+              if (document.documentElement.lang !== baseDocumentLang) document.documentElement.lang = baseDocumentLang;
+              notifyLocale();
+            }
+            return;
+          }
+          // Same Host revision as the theme projection, for the same row-store
+          // reason; notifyLocale() carries the new identity to local readers.
+          const projected = {
+            ...hostLocale,
+            active: chosen,
+          };
+          // Anyone reading the service back (this module's catalog listener
+          // included) must see a device-local view, never a Host baseline.
+          Object.defineProperty(projected, LOCAL_DISPLAY_PROJECTION, { value: true });
+          projectedLocale = Object.freeze(projected);
+          localeService.snapshot = projectedLocale;
+          document.documentElement.lang = chosen === "zh" ? "zh-CN" : chosen;
+          notifyLocale();
+        } finally {
+          applyingLocale = false;
+        }
+      };
+
+      const queueApplyLocale = () => {
+        if (disposed || localeApplyQueued) return;
+        localeApplyQueued = true;
+        queueMicrotask(() => {
+          localeApplyQueued = false;
+          if (!disposed) applyLocale();
         });
-        document.documentElement.lang = chosen === "zh" ? "zh-CN" : chosen;
-        notifyLocale();
       };
 
       localDisplayRuntime = { applyTheme, applyLocale };
@@ -2690,25 +2873,38 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           });
         });
         const offLocale = ctx.on("locale/change", (snapshot) => {
-          if (disposed || snapshot === null || snapshot === undefined) return;
+          if (applyingLocale || disposed || snapshot === null || snapshot === undefined) return;
           if (state.localDisplay.available.language !== true) return;
-          hostLocale = snapshot;
-          localDisplayHostLanguage = typeof snapshot.active === "string" ? snapshot.active : "";
-          const nextOptions = localeOptionsFrom(snapshot);
-          const chosen = state.localDisplay.language;
-          const valid = chosen === "" || nextOptions.some((entry) => entry.id === chosen);
-          if (nextOptions.length !== state.localDisplay.languages.length
-            || nextOptions.some((entry, index) => entry.id !== state.localDisplay.languages[index]?.id)) {
-            emit({ localDisplay: { ...state.localDisplay, languages: nextOptions, language: valid ? chosen : "" } });
-          }
-          if (!valid) {
-            localDisplayLanguage = "";
-            writeLocalDisplaySettings({ ...state.localDisplay, language: "" });
-          }
-          queueMicrotask(() => {
-            if (!disposed) applyLocale();
-          });
+          if (isLocalLocaleProjection(snapshot)) return;
+          // An active switch is the authoritative Host fact (only publish(...,
+          // true) emits it), so it is adopted as-is and never normalised back
+          // to an older baseline: a Host that follows this device's language
+          // must survive System/reset and dispose.
+          adoptHostLocale(snapshot);
+          queueApplyLocale();
         });
+        // Language packs publish catalog additions and removals through the
+        // LocaleFace listeners only; `locale/change` is reserved for active
+        // switches (LocaleRuntime.publish). Without this listener an owner
+        // that activates after this attach never reaches the picker, and a
+        // stale catalog is later restored over a withdrawn definition (#80).
+        // Dictionary registrations republish the same catalog and are
+        // adopted as a baseline refresh, not as a language change.
+        let offCatalog = null;
+        if (localeService !== null && typeof localeService.subscribe === "function") {
+          try {
+            const off = localeService.subscribe(() => {
+              if (applyingLocale || disposed) return;
+              if (state.localDisplay.available.language !== true) return;
+              const latest = hostView(readLocaleSnapshot());
+              if (latest === null) return;
+              if (adoptHostLocale(latest)) queueApplyLocale();
+            });
+            if (typeof off === "function") offCatalog = off;
+          } catch (error) {
+            offCatalog = null;
+          }
+        }
         try {
           applyTheme();
           applyLocale();
@@ -2719,6 +2915,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           disposed = true;
           offTheme?.();
           offLocale?.();
+          offCatalog?.();
           try {
             if (state.localDisplay.available.fonts === true && themeService !== null && hostTheme !== null) {
               themeService.snapshot = hostTheme;
@@ -2729,6 +2926,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           }
           try {
             if (state.localDisplay.available.language === true && localeService !== null && hostLocale !== null) {
+              // A silent Host switch to the projected language emitted no
+              // locale/change; restore the durable Host active, not the one
+              // this device was showing.
+              refreshHostActive();
               localeService.snapshot = hostLocale;
               notifyLocale();
             }
@@ -2737,7 +2938,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
             /* the locale fiber may already be gone */
           }
           localDisplayLanguage = "";
+          localDisplayStoredLanguage = "";
           localDisplayHostLanguage = "";
+          projectedLocale = null;
           localDisplayRuntime = null;
         };
       }, "rdsh-mobile-ux: local display");
@@ -13140,6 +13343,10 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           readTerminalDark,
           writeTerminalDark,
           applyTerminalDark,
+          // The same entries the device-local display rows use: "System" ("")
+          // clears the remembered language, a language id stores it.
+          setLanguage: setLocalDisplayLanguage,
+          setFont: setLocalDisplayFont,
           build: BUILD,
           lang: currentLang(),
           autoSettings: true,

@@ -23,7 +23,7 @@ dsh plugin --profile web add https://github.com/kuraneko1/dsh-mobile-maxxing
 ```json
 {
   "dependencies": {
-    "dsh-mobile-maxxing": "https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.6.0/dsh-mobile-maxxing-0.6.0.tgz"
+    "dsh-mobile-maxxing": "https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.6.1/dsh-mobile-maxxing-0.6.1.tgz"
   },
   "dsh": {
     "profile": {
@@ -98,7 +98,7 @@ dsh plugin --profile web add https://github.com/kuraneko1/dsh-mobile-maxxing
 ```json
 {
   "dependencies": {
-    "dsh-mobile-maxxing": "https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.6.0/dsh-mobile-maxxing-0.6.0.tgz"
+    "dsh-mobile-maxxing": "https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.6.1/dsh-mobile-maxxing-0.6.1.tgz"
   },
   "dsh": {
     "profile": {

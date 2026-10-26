@@ -6079,6 +6079,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       clearFilesHighlight();
       for (const row of rows) row.removeAttribute("data-rdsh-files-hidden");
       state.query = query;
+      syncFilesSearchClear();
       if (query === "") {
         state.empty.hidden = true;
         return;
@@ -6120,6 +6121,34 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       runFilesSearch(filesSearch?.input.value ?? "");
     }
 
+    /** Keep the explicit clear button in step with the field. */
+    function syncFilesSearchClear() {
+      if (filesSearch === null) return;
+      filesSearch.clear.hidden = filesSearch.input.value === "";
+    }
+
+    /** Clear the field, the filter and the highlight, then return focus. */
+    function onFilesSearchClear() {
+      const state = filesSearch;
+      if (state === null) return;
+      state.input.value = "";
+      runFilesSearch("");
+      syncFilesSearchClear();
+      state.input.focus({ preventScroll: true });
+    }
+
+    /**
+     * The native search field can clear itself (WebKit's cancel affordance).
+     * Only an empty value acts: a non-empty input just reveals the explicit
+     * clear button, so typing still never filters (#83).
+     */
+    function onFilesSearchInput() {
+      const state = filesSearch;
+      if (state === null) return;
+      syncFilesSearchClear();
+      if (state.input.value === "") runFilesSearch("");
+    }
+
     function onFilesSearchKeyDown(event) {
       const state = filesSearch;
       if (state === null) return;
@@ -6154,7 +6183,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (filesSearch !== null && filesSearch.root === root && filesSearch.search.isConnected !== false) return filesSearch;
       if (filesSearch !== null) {
         filesSearch.input.removeEventListener("keydown", onFilesSearchKeyDown);
+        filesSearch.input.removeEventListener("input", onFilesSearchInput);
         filesSearch.button.removeEventListener("click", onFilesSearchSubmit);
+        filesSearch.clear.removeEventListener("click", onFilesSearchClear);
         filesSearch.search.remove();
         filesSearch = null;
       }
@@ -6177,19 +6208,28 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       button.setAttribute("aria-label", t("files.search.submit"));
       button.title = t("files.search.submit");
       button.setAttribute("data-rdsh-files-search-button", "");
+      const clear = document.createElement("button");
+      clear.type = "button";
+      clear.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 6 12 12M18 6 6 18"/></svg>';
+      clear.setAttribute("aria-label", t("files.search.clear"));
+      clear.title = t("files.search.clear");
+      clear.setAttribute("data-rdsh-files-search-clear", "");
+      clear.hidden = true;
       const empty = document.createElement("div");
       empty.className = "rdsh-mux-files-empty";
       empty.setAttribute("data-rdsh-files-empty", "");
       empty.textContent = t("files.search.noMatches");
       empty.hidden = true;
-      row.append(input, button);
+      row.append(input, button, clear);
       search.append(row, empty);
       input.addEventListener("keydown", onFilesSearchKeyDown);
+      input.addEventListener("input", onFilesSearchInput);
       button.addEventListener("click", onFilesSearchSubmit);
+      clear.addEventListener("click", onFilesSearchClear);
       const body = root.querySelector("[data-files-body]");
       if (body === null) root.append(search);
       else root.insertBefore(search, body);
-      filesSearch = { root, search, input, button, empty, query: "" };
+      filesSearch = { root, search, input, button, clear, empty, query: "" };
       return filesSearch;
     }
 
@@ -6552,7 +6592,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       restoreFilesRootTrigger();
       if (filesSearch !== null) {
         filesSearch.input.removeEventListener("keydown", onFilesSearchKeyDown);
+        filesSearch.input.removeEventListener("input", onFilesSearchInput);
         filesSearch.button.removeEventListener("click", onFilesSearchSubmit);
+        filesSearch.clear.removeEventListener("click", onFilesSearchClear);
         filesSearch.search.remove();
         filesSearch = null;
       }

@@ -1,7 +1,7 @@
 # dsh-mobile-maxxing
 
 DeepSeek Harness（DSH）の Web UI をスマホで最大限に使い倒すための統合プラグインです。
-PWA・通知・モバイルUX・セッションIDのコピーを1パッケージにまとめています。
+PWA・通知・モバイルUXを1パッケージにまとめています。
 CJK表示の修正は、PC 側の描画を変えない方針のため別パッケージ `rdsh-markdown-cjk` に分離しています。
 **素の DSH にそのまま入ります** — コア機能に他の `rdsh-*` プラグインや外部 npm パッケージは不要です。
 
@@ -47,7 +47,6 @@ dsh plugin --profile web add ./dist/dsh-locale-ja-0.1.0.tgz
 | モバイル操作の細部 | ターミナルだけダーク、上端スクロールで過去ログを自動読み込み、Trajectory タブの非表示、右パネルの見出し、ファイル検索のクリア、モデルメニューのセーフエリア、左端スワイプで戻る |
 | CJK 表示の修正（任意） | 別パッケージ `rdsh-markdown-cjk` を入れた場合のみ。このパッケージ本体は PC 側を変えないため、Markdown レンダラを書き換えません |
 | 日本語 UI（任意） | 別パッケージ `dsh-locale-ja` をローカルの tarball から入れた場合のみ。モバイル本体には含まれず、自動で有効になりません |
-| セッションIDのコピー | セッションメニューに1行追加 |
 
 ## もっと詳しく
 
@@ -59,7 +58,7 @@ dsh plugin --profile web add ./dist/dsh-locale-ja-0.1.0.tgz
 ## 開発
 
 ```sh
-npm test                    # Node.js のテスト + 任意の Chrome CSS fixture 3件
+npm test                    # Node.js のテスト + 任意の Chrome CSS fixture 7件
 node scripts/pack-all.mjs   # dist/ に tarball を作る
 ```
 
@@ -93,7 +92,7 @@ README の URL は `node scripts/pack-all.mjs` が `package.json` の版に合�
 # English
 
 One integrated plugin that makes the DSH (DeepSeek Harness) Web UI pleasant on phones and tablets:
-installable PWA, notifications, a phone/tablet layout chosen by device mode and a session-id copy row.
+installable PWA, notifications and a phone/tablet layout chosen by device mode.
 The CJK autolink fix stays a separate package (`rdsh-markdown-cjk`) because this package deliberately
 leaves the PC renderer untouched. **It installs on a stock DSH** — the core needs no other `rdsh-*`
 plugin and no external npm package.
@@ -138,7 +137,6 @@ While it is incomplete, `pack-all` prints `REFUSED` and produces no locale tarba
 | Mobile polish | Terminal-only dark, older history on scroll-to-top, hidden Trajectory tab, right-panel heading, file-search clear, model-menu safe area, left-edge swipe back |
 | CJK rendering (optional) | Only with the separate `rdsh-markdown-cjk` package; this package leaves the Markdown renderer stock to avoid changing the PC |
 | Japanese UI (optional) | Only with the separate `dsh-locale-ja` package installed from its local tarball; it is not in the mobile tarball and is never enabled automatically |
-| Session id copy | One row in the session row menu |
 
 ## More detail
 
@@ -148,7 +146,7 @@ While it is incomplete, `pack-all` prints `REFUSED` and produces no locale tarba
 ## Development
 
 ```sh
-npm test                    # Node.js tests + optional Chrome CSS fixture tests (3)
+npm test                    # Node.js tests + optional Chrome CSS fixture tests (7)
 node scripts/pack-all.mjs   # build the tarballs into dist/
 ```
 

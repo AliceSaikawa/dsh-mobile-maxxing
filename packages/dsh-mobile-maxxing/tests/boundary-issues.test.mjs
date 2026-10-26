@@ -744,6 +744,8 @@ function ipadPanel(booted, { viewportWidth, dockWidth, open = true, label = "Ful
 	const panel = new FakeNode("div");
 	panel.className = "_panel";
 	const collapse = new FakeNode("button");
+	// #97: upstream's stable panel-toggle attribute; the label is localised.
+	collapse.setAttribute("data-sidebar-right-toggle", "");
 	collapse.setAttribute("aria-label", "Collapse right sidebar");
 	const fullscreen = new FakeNode("button");
 	fullscreen.setAttribute("aria-label", label);

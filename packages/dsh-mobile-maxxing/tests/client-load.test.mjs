@@ -1367,6 +1367,11 @@ test("a folder menu is claimed by portal structure once and leaves other menus a
 	assert.equal(other.menu.getAttribute("id"), null, "another menu received the ownership id");
 	const hostCount = () => folder.viewport.children.filter((child) => child.hasAttribute("data-rdsh-folder-frame-item")).length;
 	assert.equal(hostCount(), 1, "the frame row host was not appended to the folder menu");
+	assert.equal(
+		folder.viewport.children.find((child) => child.hasAttribute("data-rdsh-folder-frame-item"))?.style.display,
+		"contents",
+		"the host adds a layout box around the native menu row",
+	);
 	api.decorate();
 	api.decorate();
 	assert.equal(hostCount(), 1, "a re-decorate appended a second frame row");

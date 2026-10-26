@@ -445,6 +445,7 @@ test("folder frames reuse the native menu cell and claim only the folder portal"
 	const attach = functionHead("attachFolderMenu", 2600);
 	assert.match(attach, /menu\.setAttribute\(FOLDER_MENU_ATTR/, "the claimed portal is not marked");
 	assert.match(attach, /button\.setAttribute\("aria-controls", id\)/, "the anchor does not own the portal by aria-controls");
+	assert.doesNotMatch(attach, /aria-haspopup/, "the folder anchor claims a picker/model popup");
 	assert.match(attach, /MenuItemButton/, "the folder row is not the native menu cell");
 	const decorateAt = CLIENT.indexOf("function decorateFolderMenu(");
 	const decorate = CLIENT.slice(decorateAt, CLIENT.indexOf("\n    function showFramePalette", decorateAt));
@@ -456,6 +457,16 @@ test("folder frames reuse the native menu cell and claim only the folder portal"
 	assert.match(arm, /workspaceKeyOf\(row\) === ""/, "the Ungrouped bucket can arm a folder claim");
 	const escape = functionHead("onKeyDown", 400);
 	assert.match(escape, /closeFramePalette\(\)/, "Escape does not close the frame palette");
+
+	// #97 moved the session row actions into decorateRowActions. The folder
+	// pass is per row pass, not per session row, and must stay outside it.
+	const rowsAt = CLIENT.indexOf("function decorateSessionRows(");
+	const rowActionsAt = CLIENT.indexOf("function decorateRowActions(");
+	const rows = CLIENT.slice(rowsAt, rowActionsAt);
+	assert.match(rows, /for \(const row of document\.querySelectorAll\('\[data-row-key\^="workspace:"\]'\)\)/, "folder rows are not visited once per pass");
+	assert.match(rows, /decorateFolderMenu\(\)/, "the folder menu is not decorated once per pass");
+	const actions = CLIENT.slice(rowActionsAt, CLIENT.indexOf("let rowHooksActive", rowActionsAt));
+	assert.doesNotMatch(actions, /applyFolderFrame|decorateFolderMenu/, "the folder pass moved back inside decorateRowActions");
 });
 
 test("the live-speed poller only runs in mobile mode", () => {

@@ -3446,6 +3446,15 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         const actions = children.find((child) => classToken(child, /_rowActions$/));
         if (actions) decorateRowActions(actions);
       }
+      // Real Workspace headers carry the same colour frame. The key is the
+      // stable Workspace id, so rename, expand/collapse and reorder keep it;
+      // the Ungrouped bucket ("workspace:") is not a folder and is skipped.
+      for (const row of document.querySelectorAll('[data-row-key^="workspace:"]')) {
+        // The key is empty for the Ungrouped bucket: applyFolderFrame clears
+        // any stale hook there instead of treating it as a folder.
+        applyFolderFrame(row);
+      }
+      decorateFolderMenu();
     }
 
     /**
@@ -3467,15 +3476,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         if (button === menu) button.removeAttribute("data-rdsh-row-minor");
         else button.setAttribute("data-rdsh-row-minor", "");
       }
-      // Real Workspace headers carry the same colour frame. The key is the
-      // stable Workspace id, so rename, expand/collapse and reorder keep it;
-      // the Ungrouped bucket ("workspace:") is not a folder and is skipped.
-      for (const row of document.querySelectorAll('[data-row-key^="workspace:"]')) {
-        // The key is empty for the Ungrouped bucket: applyFolderFrame clears
-        // any stale hook there instead of treating it as a folder.
-        applyFolderFrame(row);
-      }
-      decorateFolderMenu();
     }
 
     /** Whether the last pass wrote session-row hooks (so a wide pass is cheap). */
@@ -10524,6 +10524,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const id = `rdsh-folder-menu-${++folderMenuSeq}`;
       const host = document.createElement("div");
       host.setAttribute("data-rdsh-folder-frame-item", "");
+      // display:contents leaves the native itemWrap as a direct flex child of
+      // the menu viewport, so the React host cannot shift the row geometry.
+      host.style.display = "contents";
       menu.id = id;
       menu.setAttribute(FOLDER_MENU_ATTR, "");
       button.setAttribute("aria-controls", id);

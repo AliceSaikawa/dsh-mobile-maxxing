@@ -1340,6 +1340,62 @@ test("#82/#93 the heading names the child session and leaves the terminal alone"
 	env.dispose();
 });
 
+/** Mount another tab's body next to the selected one, as dockkit may. */
+function mountSidebarBody(env, fixture, type) {
+	const kind = PANEL_KINDS[type];
+	const wrapper = env.document.createElement("div");
+	wrapper.setAttribute("data-sidebar-right-tab", kind.tabId);
+	const node = env.document.createElement(kind.tag);
+	node.setAttribute(kind.attribute, "");
+	wrapper.append(node);
+	fixture.pane.append(wrapper);
+	return wrapper;
+}
+
+test("#93 a mounted chat body does not lend the terminal its heading", () => {
+	const env = boot();
+	const fixture = makeSidebarPanel(env, { type: "terminal" });
+	// dockkit can keep another tab's section mounted; only the selected chip
+	// decides which kind is on screen.
+	mountSidebarBody(env, fixture, "subagent");
+
+	env.api.decorateNow();
+	assert.equal(panelHeading(env), null, "the mounted chat body gave the terminal a heading");
+	assert.equal(fixture.pane.children[0], fixture.strip, "a heading was inserted above the terminal tabs");
+
+	// Selecting the chat chip puts the heading back while the terminal body
+	// stays mounted beside it.
+	fixture.chips.get("terminal").setAttribute("aria-selected", "false");
+	fixture.chips.get("subagent").setAttribute("aria-selected", "true");
+	env.api.decorateNow();
+	const heading = panelHeading(env);
+	assert.notEqual(heading, null, "the selected chat tab got no heading");
+	assert.equal(heading.textContent, "Subagent");
+	assert.equal(heading.parentElement, fixture.pane);
+
+	// Back to the terminal with both bodies still mounted: it goes away again.
+	fixture.chips.get("terminal").setAttribute("aria-selected", "true");
+	fixture.chips.get("subagent").setAttribute("aria-selected", "false");
+	env.api.decorateNow();
+	assert.equal(panelHeading(env), null, "the chat heading stayed above the terminal");
+	env.dispose();
+});
+
+test("#93 the fallback still names a chat body without a tab wrapper", () => {
+	const env = boot();
+	const fixture = makeSidebarPanel(env, { type: "terminal" });
+	// A build that puts no wrapper on the bodies: the selected chip cannot pick
+	// one, so the visible named body answers as it did before #93.
+	fixture.body.removeAttribute("data-sidebar-right-tab");
+	mountSidebarBody(env, fixture, "subagent");
+	env.api.decorateNow();
+	const heading = panelHeading(env);
+	assert.notEqual(heading, null, "the fallback lost the child-session heading");
+	assert.equal(heading.textContent, "Subagent");
+	assert.equal(heading.parentElement, fixture.pane);
+	env.dispose();
+});
+
 test("#82 a remounted panel gets exactly one fresh heading", () => {
 	const env = boot();
 	const first = makeSidebarPanel(env, { type: "subagent" });

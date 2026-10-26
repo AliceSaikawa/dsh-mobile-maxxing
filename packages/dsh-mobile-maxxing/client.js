@@ -4464,16 +4464,28 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const selected = selectedTab === null || selectedTab === undefined
         ? null
         : selectedTab.getAttribute("data-dockkit-tab");
-      let fallback = "";
-      for (const [attribute, key] of Object.entries(RIGHT_PANEL_HEADING_KEYS)) {
-        for (const body of scope.querySelectorAll(`[${attribute}]`)) {
-          if (body.closest("[hidden]") !== null) continue;
-          const tab = body.closest("[data-sidebar-right-tab]");
-          if (selected !== null && tab !== null && tab.getAttribute("data-sidebar-right-tab") === selected) return key;
-          if (fallback === "") fallback = key;
+      // The selected chip decides through its own body (#93). Without this, a
+      // chat body that dockkit keeps mounted for another tab would answer as
+      // the fallback and put "Subagent" above the terminal. A selected tab of
+      // an unnamed kind (terminal, preview, file) answers "" and gets no
+      // heading at all.
+      if (selected !== null) {
+        const selectedBody = scope.querySelector(`[data-sidebar-right-tab="${selected}"]`);
+        if (selectedBody !== null) {
+          for (const [attribute, key] of Object.entries(RIGHT_PANEL_HEADING_KEYS)) {
+            if (selectedBody.hasAttribute(attribute) || selectedBody.querySelector(`[${attribute}]`) !== null) return key;
+          }
+          return "";
         }
       }
-      return fallback;
+      // A build that puts no wrapper on the selected tab: name the first
+      // visible body of a named kind, as before.
+      for (const [attribute, key] of Object.entries(RIGHT_PANEL_HEADING_KEYS)) {
+        for (const body of scope.querySelectorAll(`[${attribute}]`)) {
+          if (body.closest("[hidden]") === null) return key;
+        }
+      }
+      return "";
     }
 
     /**

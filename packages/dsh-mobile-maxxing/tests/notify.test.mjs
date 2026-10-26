@@ -268,7 +268,7 @@ test("a phone send marks the next turn; a desktop send does not", async () => {
 			await routes.get(path).handler(req, { writeHead(code) { status = code; }, end() {} });
 			return status;
 		};
-		const wait = () => new Promise((resolve) => setTimeout(resolve, 20));
+		const wait = () => new Promise((resolve) => setTimeout(resolve, 1550));
 
 		assert.equal(await post("/api/dsh-mobile-maxxing/push/mobile-send", { sessionId: "s1" }), 200);
 		listeners.get("session/event")({ id: "s1" }, { type: "turn/start" });
@@ -309,7 +309,7 @@ test("notification fan-out targets the app that started the turn or request, nev
 		calls.push(String(url));
 		return { status: 201, ok: true };
 	};
-	const wait = () => new Promise((resolve) => setTimeout(resolve, 20));
+	const wait = () => new Promise((resolve) => setTimeout(resolve, 1550));
 	const harness = (getOrigin) => {
 		const listeners = new Map();
 		const routes = new Map();
@@ -521,12 +521,12 @@ test("a broken push store does not stop the PWA routes", async () => {
 });
 
 /**
- * Boot applyNotify for the visibility tests: a temp DSH_HOME with the given
+ * Boot applyNotify for the event acknowledgement tests: a temp DSH_HOME with
  * endpoints subscribed to one origin, a fetch stub that records every send,
  * and the registered routes.
  */
-function visibilityHarness(endpoints) {
-	const home = mkdtempSync(join(tmpdir(), "rdsh-visibility-"));
+function acknowledgementHarness(endpoints) {
+	const home = mkdtempSync(join(tmpdir(), "rdsh-ack-"));
 	mkdirSync(join(home, "dsh-mobile-maxxing"), { recursive: true });
 	const store = new PushStore(join(home, "dsh-mobile-maxxing", "push.json"));
 	const add = (endpoint) => {
@@ -593,6 +593,9 @@ function visibilityHarness(endpoints) {
 		listeners,
 		calls,
 		post,
+		turnEnded() {
+			listeners.get("session/event")(agent, { type: "turn/end", data: { reason: { kind: "completed" } } });
+		},
 		restore() {
 			globalThis.fetch = previousFetch;
 			if (previousHome === undefined) delete process.env.DSH_HOME;
@@ -601,68 +604,52 @@ function visibilityHarness(endpoints) {
 	};
 }
 
-const VISIBILITY = "/api/dsh-mobile-maxxing/push/visibility";
+const ACK = "/api/dsh-mobile-maxxing/push/ack";
 const TEST_PUSH = "/api/dsh-mobile-maxxing/push/test";
 const TEST_ORIGIN = "https://app.example:8446";
 
-test("a visible lease records a skip and sends nothing to that endpoint", async () => {
+test("only the endpoint that acknowledged this notice skips push", async () => {
 	const visibleEndpoint = "https://web.push.apple.com/visible";
 	const otherEndpoint = "https://web.push.apple.com/other";
-	const harness = visibilityHarness([visibleEndpoint]);
+	const harness = acknowledgementHarness([visibleEndpoint, otherEndpoint]);
 	try {
-		assert.equal((await harness.post(VISIBILITY, { visible: true, endpoint: visibleEndpoint })).status, 200);
-		const only = await harness.post(TEST_PUSH, { sessionId: "s1", origin: TEST_ORIGIN });
-		assert.equal(only.status, 200);
-		assert.equal(only.body.ok, true, "a gated test push reports success for the Settings button");
-		assert.equal(only.body.skipped, "visible");
-		assert.deepEqual(only.body.results, [{ status: 0, ok: true, skipped: "visible" }]);
-		assert.deepEqual(harness.calls, [], "the visible endpoint must not be pushed to");
-
-		// visible:false clears the lease: the same endpoint is sent again.
-		assert.equal((await harness.post(VISIBILITY, { visible: false, endpoint: visibleEndpoint })).status, 200);
-		const cleared = await harness.post(TEST_PUSH, { sessionId: "s1", origin: TEST_ORIGIN });
-		assert.equal(cleared.body.ok, true);
-		assert.deepEqual(harness.calls, [visibleEndpoint]);
-
-		// A different endpoint is not silenced by another device's lease.
-		harness.add(otherEndpoint);
-		harness.calls.length = 0;
-		await harness.post(VISIBILITY, { visible: true, endpoint: visibleEndpoint });
-		const mixed = await harness.post(TEST_PUSH, { sessionId: "s1", origin: TEST_ORIGIN });
-		assert.equal(mixed.body.ok, true, "sending to the other device still succeeds");
-		assert.deepEqual(harness.calls, [otherEndpoint], "only the endpoint without a lease was pushed");
-		assert.equal(mixed.body.skipped, undefined, "a partially gated fan-out is not wholly skipped");
+		// No pending event means no ACK can silence future push.
+		const early = await harness.post(ACK, { endpoint: visibleEndpoint, sessionId: "s1", kind: "turn-end", origin: TEST_ORIGIN });
+		assert.equal(early.body.acknowledged, false);
+		harness.turnEnded();
+		const received = await harness.post(ACK, { endpoint: visibleEndpoint, sessionId: "s1", kind: "turn-end", origin: TEST_ORIGIN });
+		assert.equal(received.status, 200);
+		assert.equal(received.body.acknowledged, true);
+		assert.equal((await harness.post(ACK, { endpoint: visibleEndpoint, sessionId: "s1", kind: "turn-end", origin: TEST_ORIGIN })).body.acknowledged, false);
+		await new Promise((resolve) => setTimeout(resolve, 1550));
+		assert.deepEqual(harness.calls, [otherEndpoint], "the unacknowledged device still receives push");
+		// Tests explicitly exercise the real push path even while foregrounded.
+		await harness.post(TEST_PUSH, { sessionId: "s1", origin: TEST_ORIGIN });
+		assert.equal(harness.calls.length, 3, "the test endpoint must not be suppressed by an earlier ACK");
 	} finally {
 		harness.restore();
 	}
 });
 
-test("an expired lease still sends and an invalid endpoint is refused", async () => {
-	const gated = "https://web.push.apple.com/gated";
-	const harness = visibilityHarness([gated]);
-	const realNow = Date.now;
+test("lost, mismatched, or stale acknowledgements never suppress push", async () => {
+	const endpoint = "https://web.push.apple.com/gated";
+	const harness = acknowledgementHarness([endpoint]);
 	try {
-		let now = realNow();
-		Date.now = () => now;
-		assert.equal((await harness.post(VISIBILITY, { visible: true, endpoint: gated })).status, 200);
-		// Inside the lease the device is skipped...
-		assert.deepEqual((await harness.post(TEST_PUSH, { sessionId: "s1", origin: TEST_ORIGIN })).body.results, [
-			{ status: 0, ok: true, skipped: "visible" },
-		]);
-		assert.deepEqual(harness.calls, []);
-		// ...and once it expires the stale entry is pruned and the push sends.
-		now += 45_001;
-		const expired = await harness.post(TEST_PUSH, { sessionId: "s1", origin: TEST_ORIGIN });
-		assert.equal(expired.body.ok, true);
-		assert.deepEqual(expired.body.results, [{ status: 201, ok: true }]);
-		assert.deepEqual(harness.calls, [gated], "an expired lease must not keep the device silent");
-
-		// An empty or non-string endpoint is a client bug, not a lease.
-		assert.equal((await harness.post(VISIBILITY, { visible: true })).status, 400);
-		assert.equal((await harness.post(VISIBILITY, { visible: true, endpoint: 7 })).status, 400);
-		assert.equal((await harness.post(VISIBILITY, { visible: true, endpoint: "   " })).status, 400);
+		harness.turnEnded();
+		for (const body of [
+			{ endpoint, sessionId: "s1", kind: "question", origin: TEST_ORIGIN },
+			{ endpoint, sessionId: "not-s1", kind: "turn-end", origin: TEST_ORIGIN },
+			{ endpoint: "https://web.push.apple.com/foreign", sessionId: "s1", kind: "turn-end", origin: TEST_ORIGIN },
+			{ endpoint, sessionId: "s1", kind: "turn-end", origin: "https://foreign.example" },
+			{ endpoint: 7, sessionId: "s1", kind: "turn-end", origin: TEST_ORIGIN },
+		]) {
+			assert.equal((await harness.post(ACK, body)).body.acknowledged, false);
+		}
+		await new Promise((resolve) => setTimeout(resolve, 1550));
+		assert.deepEqual(harness.calls, [endpoint], "the unacknowledged event was lost");
+		const stale = await harness.post(ACK, { endpoint, sessionId: "s1", kind: "turn-end", origin: TEST_ORIGIN });
+		assert.equal(stale.body.acknowledged, false, "a late ACK must not silence the next event");
 	} finally {
-		Date.now = realNow;
 		harness.restore();
 	}
 });

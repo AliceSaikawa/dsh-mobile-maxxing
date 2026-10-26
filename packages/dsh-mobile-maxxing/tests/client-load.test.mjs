@@ -1936,9 +1936,21 @@ test("font and language availability are independent and fail soft", () => {
  * table is a tiny React: `createElement` keeps the props so the fake root can
  * write the banner text into the real notice host.
  */
-function localNoticeHarness() {
+function localNoticeHarness({ endpoint = "", initialVisibility = "visible", subscriptionGate = null } = {}) {
 	const rendered = [];
 	const roots = [];
+	const ackPosts = [];
+	const registration = {
+		update: async () => {},
+		addEventListener() {},
+		removeEventListener() {},
+		pushManager: {
+			getSubscription: async () => {
+				if (subscriptionGate !== null) await subscriptionGate;
+				return endpoint === "" ? null : { endpoint };
+			},
+		},
+	};
 	const react = {
 		createElement: (type, props) => ({ type, props }),
 		useState: (initial) => [initial, () => {}],
@@ -1950,7 +1962,25 @@ function localNoticeHarness() {
 		narrow: true,
 		lang: "en",
 		copy: COPY,
-		globals: { __RDSH_NOTICE_TEST__: {} },
+		navigator: {
+			onLine: true,
+			serviceWorker: {
+				ready: Promise.resolve(registration),
+				getRegistration: async () => registration,
+				register: async () => registration,
+				addEventListener() {},
+				removeEventListener() {},
+			},
+		},
+		globals: {
+			__RDSH_NOTICE_TEST__: {},
+			location: { origin: "https://app.example:8446", href: "https://app.example:8446/" },
+		},
+		fetchImpl: async (url, options) => {
+			if (String(url).endsWith("/push/ack")) ackPosts.push({ url: String(url), options });
+			return { status: 200, ok: true, json: async () => ({ ok: true }) };
+		},
+		configureDocument(doc) { doc.visibilityState = initialVisibility; },
 		requireImpl(name) {
 			if (name === "react") return react;
 			if (name === "react-dom/client") {
@@ -1974,7 +2004,7 @@ function localNoticeHarness() {
 	});
 	const notice = booted.sandbox.__RDSH_NOTICE_TEST__?.notice;
 	assert.ok(notice, "the local notice test seam was not installed");
-	return { booted, notice, rendered, roots };
+	return { booted, notice, rendered, roots, ackPosts };
 }
 
 test("a finished root turn raises one local banner and push does not stack", () => {
@@ -2023,146 +2053,58 @@ test("a subagent turn end and a first render raise no local banner", () => {
 
 
 
-/**
- * Boot the mobile client with a real-enough push registration so the
- * visibility reporter can be observed: every fetch is recorded, and the
- * heartbeat's setInterval/clearInterval are captured instead of dropped by the
- * default stub.
- */
-function bootVisibilityClient({ endpoint = "", initialVisibility = "visible" } = {}) {
-	const calls = [];
-	const intervals = [];
-	const cleared = [];
-	const listeners = new Set();
-	const registration = {
-		active: null,
-		waiting: null,
-		installing: null,
-		update: async () => {},
-		addEventListener() {},
-		removeEventListener() {},
-		pushManager: { getSubscription: async () => (endpoint === "" ? null : { endpoint }) },
-	};
-	let timer = 0;
-	const navigator = {
-		onLine: true,
-		userAgent: "test",
-		platform: "test",
-		maxTouchPoints: 0,
-		standalone: false,
-		serviceWorker: {
-			ready: Promise.resolve(registration),
-			controller: null,
-			getRegistration: async () => registration,
-			register: async () => registration,
-			addEventListener() {},
-			removeEventListener() {},
-		},
-	};
-	const booted = bootClient({
-		mode: "mobile",
-		navigator,
-		globals: {
-			location: { origin: "https://app.example:8446", href: "https://app.example:8446/" },
-			setInterval(callback, ms) {
-				timer += 1;
-				intervals.push({ id: timer, ms, callback });
-				return timer;
-			},
-			clearInterval(id) {
-				cleared.push(id);
-			},
-		},
-		fetchImpl: async (url, options) => {
-			calls.push({ url: String(url), options });
-			return { status: 200, ok: true, json: async () => ({ ok: true }) };
-		},
-		configureDocument(doc) {
-			doc.visibilityState = initialVisibility;
-			doc.addEventListener = (type, handler) => {
-				if (type === "visibilitychange") listeners.add(handler);
-			};
-			doc.removeEventListener = (type, handler) => {
-				if (type === "visibilitychange") listeners.delete(handler);
-			};
-		},
-	});
+test("a rendered local banner acknowledges its event without visibility polling", async () => {
+	const endpoint = "https://web.push.apple.com/device";
+	const { booted, notice, rendered, ackPosts } = localNoticeHarness({ endpoint });
 	const settle = async () => {
 		for (let index = 0; index < 6; index += 1) await new Promise((resolve) => setImmediate(resolve));
 	};
-	const fireVisibility = () => {
-		for (const handler of [...listeners]) handler();
-	};
-	const visibilityPosts = () => calls.filter((call) => call.url.endsWith("/push/visibility"));
-	// The PWA shell also polls for updates with setInterval; only the 20s one
-	// is the visibility heartbeat.
-	const heartbeats = () => intervals.filter((entry) => entry.ms === 20_000);
-	return { ...booted, calls, intervals, cleared, heartbeats, visibilityPosts, settle, fireVisibility };
-}
-
-test("the visibility reporter runs on boot, change and heartbeat only with an endpoint", async () => {
-	const endpoint = "https://web.push.apple.com/device";
-	const booted = bootVisibilityClient({ endpoint });
-	await booted.settle();
-	const bootPosts = booted.visibilityPosts();
-	assert.equal(bootPosts.length, 1, "boot must report visibility exactly once");
-	assert.equal(bootPosts[0].url, "api/dsh-mobile-maxxing/push/visibility");
-	assert.equal(bootPosts[0].options.method, "POST");
-	assert.equal(bootPosts[0].options.keepalive, true);
-	assert.deepEqual(JSON.parse(bootPosts[0].options.body), {
-		visible: true,
-		endpoint,
-		origin: "https://app.example:8446",
+	await settle();
+	assert.equal(ackPosts.length, 0, "boot must not report visibility or send ACKs");
+	const byId = { "root-ack": { title: "Main" } };
+	const running = new Map([["root-ack", { running: true }]]);
+	const idle = new Map([["root-ack", { running: false }]]);
+	notice.emitLocalNotices(running, idle, byId);
+	await settle();
+	assert.equal(rendered.length, 1);
+	assert.equal(ackPosts.length, 1, "the rendered banner did not acknowledge the host event");
+	assert.equal(ackPosts[0].url, "api/dsh-mobile-maxxing/push/ack");
+	assert.equal(ackPosts[0].options.keepalive, true);
+	assert.deepEqual(JSON.parse(ackPosts[0].options.body), {
+		endpoint, sessionId: "root-ack", kind: "turn-end", origin: "https://app.example:8446",
 	});
-	assert.deepEqual(booted.heartbeats().map((entry) => entry.ms), [20_000], "a visible page starts one heartbeat");
-
-	// The heartbeat re-sends the lease while the page stays visible.
-	booted.heartbeats()[0].callback();
-	await booted.settle();
-	assert.equal(booted.visibilityPosts().length, 2, "the heartbeat did not refresh the lease");
-	assert.equal(JSON.parse(booted.visibilityPosts()[1].options.body).visible, true);
-
-	// Hidden: report false and stop the heartbeat.
-	booted.sandbox.document.visibilityState = "hidden";
-	booted.fireVisibility();
-	await booted.settle();
-	assert.equal(JSON.parse(booted.visibilityPosts()[2].options.body).visible, false, "hiding must release the lease");
-	assert.deepEqual(booted.cleared, [booted.heartbeats()[0].id], "the heartbeat kept running while hidden");
-	assert.equal(booted.heartbeats().length, 1, "a hidden page must not start another heartbeat");
-
-	// Visible again: report true and restart the heartbeat.
-	booted.sandbox.document.visibilityState = "visible";
-	booted.fireVisibility();
-	await booted.settle();
-	assert.equal(JSON.parse(booted.visibilityPosts()[3].options.body).visible, true);
-	assert.equal(booted.heartbeats().length, 2, "returning to the page did not restart the heartbeat");
+	notice.emitLocalNotices(idle, idle, byId);
+	await settle();
+	assert.equal(ackPosts.length, 1, "an unchanged snapshot sent another ACK");
 	assert.deepEqual(booted.disposeAll(), []);
 });
 
-test("no push endpoint means no visibility request at all", async () => {
-	const booted = bootVisibilityClient({ endpoint: "" });
-	await booted.settle();
-	assert.equal(booted.visibilityPosts().length, 0, "a page without a subscription has nothing to gate");
-	booted.sandbox.document.visibilityState = "hidden";
-	booted.fireVisibility();
-	booted.sandbox.document.visibilityState = "visible";
-	booted.fireVisibility();
-	await booted.settle();
-	assert.equal(booted.visibilityPosts().length, 0, "visibility changes must stay silent without an endpoint");
-	assert.equal(booted.heartbeats().length, 2, "the heartbeat still runs (and restarts), but it sends nothing");
-	assert.deepEqual(booted.cleared, [booted.heartbeats()[0].id], "hiding did not stop the endpoint-less heartbeat");
-	// The helper on the diagnostics seam is silent too.
-	await assert.doesNotReject(booted.sandbox.__RDSH_MOBILE_UX__.reportVisibility(true));
-	assert.deepEqual(booted.disposeAll(), []);
-});
+test("hidden, unsubscribed, and just-backgrounded pages cannot suppress push", async () => {
+	const endpoint = "https://web.push.apple.com/device";
+	const byId = { "root-ack": { title: "Main" } };
+	const running = new Map([["root-ack", { running: true }]]);
+	const idle = new Map([["root-ack", { running: false }]]);
+	const hidden = localNoticeHarness({ endpoint, initialVisibility: "hidden" });
+	hidden.notice.emitLocalNotices(running, idle, byId);
+	await new Promise((resolve) => setImmediate(resolve));
+	assert.deepEqual(hidden.ackPosts, [], "a hidden page acknowledged an invisible banner");
+	hidden.booted.disposeAll();
 
-test("a hidden boot releases the lease without starting a heartbeat", async () => {
-	const booted = bootVisibilityClient({ endpoint: "https://web.push.apple.com/device", initialVisibility: "hidden" });
-	await booted.settle();
-	assert.equal(booted.visibilityPosts().length, 1);
-	assert.equal(JSON.parse(booted.visibilityPosts()[0].options.body).visible, false, "a hidden boot must not hold a lease");
-	assert.equal(booted.heartbeats().length, 0, "a hidden boot started a heartbeat");
-	booted.disposeAll();
+	const unregistered = localNoticeHarness();
+	unregistered.notice.emitLocalNotices(running, idle, byId);
+	await new Promise((resolve) => setImmediate(resolve));
+	assert.deepEqual(unregistered.ackPosts, [], "a device without push subscription sent an ACK");
+	unregistered.booted.disposeAll();
+
+	let releaseSubscription;
+	const gate = new Promise((resolve) => { releaseSubscription = resolve; });
+	const transitioning = localNoticeHarness({ endpoint, subscriptionGate: gate });
+	transitioning.notice.emitLocalNotices(running, idle, byId);
+	transitioning.booted.sandbox.document.visibilityState = "hidden";
+	releaseSubscription();
+	await new Promise((resolve) => setImmediate(resolve));
+	assert.deepEqual(transitioning.ackPosts, [], "the page acknowledged after being backgrounded");
+	transitioning.booted.disposeAll();
 });
 
 test("a new pending interaction raises a question banner once", () => {

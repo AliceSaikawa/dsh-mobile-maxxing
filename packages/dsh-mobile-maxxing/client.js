@@ -291,8 +291,8 @@ window.__ModuleLoader__.load({
      * a new worker instead of reusing the bytes it already has (#25). Bump this
      * whenever the worker's push handling changes.
      */
-    // Experiment: ack-less hand-off.
-    const SW_REVISION = "20261026c";
+    // The worker always renders received pushes; host-side event ACKs gate delivery.
+    const SW_REVISION = "20261026d";
     const SW_URL = new URL(`sw.js?v=${SW_REVISION}`, SCOPE).href;
     /** Script URL of the notification plugin's worker (see unifyWorker below). */
     const PUSH_WORKER_PATH = "/push/sw.js";
@@ -8842,83 +8842,31 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     // working; every caller does fetch(`${PUSH_API}/…`).
     const PUSH_API = "api/dsh-mobile-maxxing/push";
 
-    /** How long one visibility report keeps the host from pushing. */
-    const VISIBILITY_HEARTBEAT_MS = 20_000;
-
-    /** The 20s heartbeat timer id, or null while it is not running. */
-    let visibilityHeartbeat = null;
-    /** Whether this page already owns the visibility listener. */
-    let visibilityReporting = false;
-
     /**
-     * Tell the host whether this device's app is on screen.
+     * Acknowledge an actually rendered local banner, per push endpoint.
      *
-     * iOS renders an incoming web push as an OS notification even while the
-     * PWA is in the foreground, so a visible device must be skipped at the
-     * source. The lease is keyed by endpoint: another device that shares the
-     * same origin still gets its push. Silent on failure — losing a lease
-     * only means the next push is delivered the old way.
-     *
-     * @param {boolean} visible - whether the page is visible now.
-     * @returns {Promise<void>}
+     * There is no periodic visibility reporting. If this request does not
+     * reach the host, that particular event falls back to normal Web Push.
+     * The check after the asynchronous subscription lookup prevents a page
+     * that was just backgrounded from suppressing its own OS notification.
      */
-    async function reportVisibility(visible) {
+    async function acknowledgeLocalNotice({ sessionId, kind }) {
+      if (!pageVisible() || typeof sessionId !== "string" || sessionId === "") return;
+      if (kind !== "turn-end" && kind !== "question") return;
       try {
-        const registration = await navigator.serviceWorker.getRegistration();
-        const subscription = registration === null || registration === undefined
-          ? null
-          : await registration.pushManager.getSubscription();
+        const registration = await navigator.serviceWorker?.getRegistration?.();
+        const subscription = await registration?.pushManager?.getSubscription?.();
         const endpoint = typeof subscription?.endpoint === "string" ? subscription.endpoint : "";
-        // No endpoint means no push to suppress: nothing to gate.
-        if (endpoint === "") return;
-        await fetch(`${PUSH_API}/visibility`, {
+        if (endpoint === "" || !pageVisible()) return;
+        await fetch(`${PUSH_API}/ack`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ visible: visible === true, endpoint, origin: location.origin }),
+          body: JSON.stringify({ endpoint, sessionId, kind, origin: location.origin }),
           keepalive: true,
         });
       } catch {
-        /* a visibility lease is an optimisation; never break the page for it */
+        // Missing an ack produces an OS notification, never a lost notice.
       }
-    }
-
-    /**
-     * Report now, on every visibility change, and every 20s while visible.
-     *
-     * The first report waits for the service-worker registration because the
-     * endpoint belongs to it; `ready` resolves once a worker controls the
-     * scope, and getRegistration() can still answer null during boot.
-     *
-     * @returns {() => void} stop listening and clear the heartbeat.
-     */
-    function startVisibilityReporting() {
-      if (visibilityReporting) return () => {};
-      visibilityReporting = true;
-      const sync = () => {
-        const visible = document.visibilityState === "visible";
-        void reportVisibility(visible);
-        if (visible) {
-          if (visibilityHeartbeat === null) {
-            visibilityHeartbeat = setInterval(() => void reportVisibility(true), VISIBILITY_HEARTBEAT_MS);
-          }
-        } else if (visibilityHeartbeat !== null) {
-          clearInterval(visibilityHeartbeat);
-          visibilityHeartbeat = null;
-        }
-      };
-      const worker = navigator.serviceWorker;
-      if (worker !== null && worker !== undefined && typeof worker.ready?.then === "function") {
-        worker.ready.then(sync).catch(() => {});
-      }
-      document.addEventListener("visibilitychange", sync);
-      return () => {
-        visibilityReporting = false;
-        document.removeEventListener("visibilitychange", sync);
-        if (visibilityHeartbeat !== null) {
-          clearInterval(visibilityHeartbeat);
-          visibilityHeartbeat = null;
-        }
-      };
     }
 
     /** Preset notification sounds, synthesised — no audio files to ship. */
@@ -9169,7 +9117,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      */
     function emitLocalNotices(previousStatuses, statuses, byId) {
       try {
-        for (const notice of localNotices(previousStatuses, statuses, byId, t)) notifyUser(notice);
+        for (const notice of localNotices(previousStatuses, statuses, byId, t)) {
+          if (notifyUser(notice)) void acknowledgeLocalNotice(notice);
+        }
       } catch (error) {
         console.error("[rdsh-mobile-ux] local notification failed", error);
       }
@@ -9178,10 +9128,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     /**
      * Say why an in-app banner was not shown, once per reason.
      *
-     * A skipped banner is otherwise silent in both directions: this side
-     * returns false, and the worker, seeing no ack, leaves the system
-     * notification to appear. That is the right fallback, but it leaves no
-     * trace when a page should have shown the banner. The reason is logged
+     * A skipped banner cannot acknowledge the pending server event, so the
+     * host sends ordinary push after its grace period. The reason is logged
      * once and cleared by the next successful banner, so a shell that never
      * had the primitives logs one line instead of one per notification.
      *
@@ -11433,7 +11381,6 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
 
         scheduleDecorate();
         void refreshNotificationStatus();
-        const stopVisibilityReporting = startVisibilityReporting();
 
         globalThis.__RDSH_MOBILE_UX__ = {
           get state() { return { ...state }; },
@@ -11463,7 +11410,6 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           openDrawer: toggleDrawer,
           enableNotifications,
           sendTestNotification,
-          reportVisibility,
         };
 
         return () => {
@@ -11504,7 +11450,6 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             document.removeEventListener("pointermove", onPointerMove, true);
             document.removeEventListener("focusout", onModelFocusOut, true);
             media.removeEventListener("change", onMedia);
-            stopVisibilityReporting();
             // Invalidate any decorate frame queued before this teardown. The
             // frame checks `live` before touching the DOM, so it cannot undo
             // the cleanup below.

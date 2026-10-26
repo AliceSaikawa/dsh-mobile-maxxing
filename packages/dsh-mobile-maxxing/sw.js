@@ -267,17 +267,9 @@ function pushPayload(event) {
 self.addEventListener("push", (event) => {
 	const payload = pushPayload(event);
 	event.waitUntil((async () => {
-		// Archived behaviour (DSH-PWA a8edeb7): a visible app owns the notice,
-		// so post it and return without waiting. iOS renders a push as an OS
-		// notification while the app is hidden; when the app is on screen a
-		// missing ack must not silence the notice.
-		const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-		const visible = windows.find((client) => client.visibilityState === "visible");
-		if (visible !== undefined) {
-			visible.postMessage({ type: "dsh-mobile-maxxing:notify", title: payload.title, body: payload.body, sessionId: payload.sessionId, kind: payload.kind });
-			console.info("[dsh-mobile-maxxing] notice handed to a visible window", payload.kind);
-			return;
-		}
+		// Every received Web Push must produce a user-visible notification on
+		// WebKit. Foreground pages acknowledge their local banner to the host
+		// before it sends push; anything that reaches this worker is a fallback.
 		await self.registration.showNotification(payload.title, {
 			body: payload.body,
 			icon: new URL("pwa/icon-192.png", SCOPE).href,

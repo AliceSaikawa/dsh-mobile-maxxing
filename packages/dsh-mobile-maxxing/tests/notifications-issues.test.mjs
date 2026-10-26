@@ -33,7 +33,7 @@ import { applyNotify, PushStore, toBase64Url } from "../notify/host.js";
 const NEW_ORIGIN = "https://app.example:8446";
 const OLD_ORIGIN = "https://app.example:8444";
 const INTERNAL_ORIGIN = "http://127.0.0.1:3207";
-const WAIT_MS = 40;
+const WAIT_MS = 1550;
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -1082,7 +1082,7 @@ test("an offline launch falls back to the cached shell, not the network error", 
 // #25: a visible app owns the notification
 // ---------------------------------------------------------------------------
 
-test("#25 a visible window receives the hand-off and no system notification is shown", async () => {
+test("a received push always shows a system notification, even with a visible window", async () => {
 	const origin = "https://app.test";
 	const storage = new FakeCacheStorage(origin);
 	const payload = { title: "Session A", body: "Turn finished", sessionId: "s1", kind: "turn-end" };
@@ -1096,12 +1096,10 @@ test("#25 a visible window receives the hand-off and no system notification is s
 		timers: { setTimeout: (...args) => { timers.push(args); return setTimeout(...args); } },
 	});
 	await fire(listeners, "push", payload);
-	assert.equal(posted.length, 1, "the visible window did not receive the hand-off");
-	const [message, transfer] = posted[0];
-	assert.deepEqual({ ...message }, { type: "dsh-mobile-maxxing:notify", ...payload });
-	assert.equal(transfer, undefined, "the hand-off transferred an ack port");
-	assert.deepEqual(timers, [], "the hand-off waited for an ack timer instead of returning");
-	assert.equal(shown.length, 0, "a system notification was shown while the app is visible");
+	assert.equal(posted.length, 0, "a received push was silently handed to the page");
+	assert.deepEqual(timers, [], "the worker waited for an unnecessary ack timer");
+	assert.equal(shown.length, 1, "WebKit requires a visible notification for every received push");
+	assert.equal(shown[0][0], payload.title);
 });
 
 test("#25 with no visible window the push falls back to the system notification", async () => {

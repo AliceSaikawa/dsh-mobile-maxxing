@@ -676,6 +676,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           scope: SCOPE.pathname,
           updateViaCache: "none",
         });
+        // Ask for a fresh worker on every boot: a standalone iOS app may keep
+        // its old worker for days otherwise, and the old one decides whether a
+        // visible page gets a banner or a system notification (#25).
+        void registration.update().catch(() => {});
         emit({ sw: navigator.serviceWorker.controller !== null ? "active" : "pending" });
         watchRegistration(registration);
         navigateWhenControllerChanges();

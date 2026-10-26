@@ -188,6 +188,11 @@ async function handleStatic(request) {
 
 self.addEventListener("install", (event) => {
 	event.waitUntil((async () => {
+		// Take over as soon as the new worker is installed. Without this an
+		// already-open app kept the previous worker (and its push handling)
+		// until every tab was closed — on iOS standalone that can be never, so
+		// the old worker kept showing system notifications (#25).
+		self.skipWaiting();
 		const cache = await caches.open(CACHE_NAME);
 		// Shell first: an offline launch must find the document even if an icon
 		// is missing from a deployment.

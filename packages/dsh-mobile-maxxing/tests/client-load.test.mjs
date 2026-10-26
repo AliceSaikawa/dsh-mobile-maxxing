@@ -1262,9 +1262,10 @@ test("a route heading is tagged for the FAB inset only on a phone route", () => 
  *
  * The stub records the nodes the client creates, so the back button is the
  * element whose class is `rdsh-mux-route-back` and its click runs the handler
- * the plugin registered (the plain stub swallows listeners).
+ * the plugin registered (the plain stub swallows listeners). `crumb` is the
+ * upstream plugin breadcrumb, found in the detail the same way the client does.
  */
-function detailBoot({ mode = "mobile", narrow = true, container = null, page = null } = {}) {
+function detailBoot({ mode = "mobile", narrow = true, container = null, page = null, crumb = null } = {}) {
 	const frames = [];
 	const created = [];
 	const booted = bootClient({
@@ -1281,8 +1282,11 @@ function detailBoot({ mode = "mobile", narrow = true, container = null, page = n
 				return node;
 			};
 			doc.querySelector = (selector) => (selector === '[data-testid="task-manager-page"]' ? page : null);
+			if (container !== null) {
+				container.querySelectorAll = (selector) => (selector === 'button[class*="_crumb"]' && crumb !== null ? [crumb] : []);
+			}
 			doc.querySelectorAll = (selector) => {
-				if (selector === "[data-plugin-detail], [data-plugin-item-detail]") return container === null ? [] : [container];
+				if (selector === "[data-plugin-detail], [data-plugin-item-detail], [data-plugin-row-detail]") return container === null ? [] : [container];
 				if (selector === "[data-rdsh-route-detail]") {
 					const marked = [container, page].filter((node) => node !== null && node.hasAttribute("data-rdsh-route-detail"));
 					return marked;
@@ -1302,7 +1306,11 @@ const laidOutRect = (x, y, width, height) => () => ({ x, y, top: y, left: x, wid
 test("a plugin detail retires the drawer button and leaves its breadcrumb free", () => {
 	const container = element();
 	container.getBoundingClientRect = laidOutRect(24, 0, 342, 667);
-	const { booted, back } = detailBoot({ container });
+	const crumb = element();
+	crumb.setAttribute("class", "X_2TxG_crumb");
+	crumb.setAttribute("aria-label", "Back to plugins");
+	crumb.getBoundingClientRect = laidOutRect(24, 28, 82, 20);
+	const { booted, back } = detailBoot({ container, crumb });
 	assert.equal(container.getAttribute("data-rdsh-route-detail"), "detail", "the plugin detail was not marked");
 	assert.equal(back?.hasAttribute("data-visible"), false, "a plugin detail got the task detail's back button");
 	booted.disposeAll();

@@ -1159,3 +1159,155 @@ test("the terminal fit never synthesises a wheel or other terminal event", () =>
 	assert.doesNotMatch(block, /\.scrollTo(?:Top|Bottom|Line|Page)?\(/, "the follow scrolls a DOM node");
 	assert.doesNotMatch(CLIENT, /deltaY = 1e7/, "the huge wheel fallback is back");
 });
+
+/* ---------------------------------------------------------------------- */
+/* #61 / #62: a route detail owns the left-edge swipe                     */
+/* ---------------------------------------------------------------------- */
+
+/** One full-screen plugin detail with its upstream breadcrumb button. */
+function routeDetailNode({ attribute = "data-plugin-detail", value = "demo", onBack = () => {} } = {}) {
+	const detail = new FakeElement("div");
+	detail.setAttribute(attribute, value);
+	detail._rect = () => ({ x: 0, y: 0, top: 0, left: 0, right: 390, bottom: 800, width: 390, height: 800 });
+	const crumb = new FakeElement("button");
+	crumb.setAttribute("class", "X_2TxG_crumb");
+	crumb.setAttribute("aria-label", "Back to plugins");
+	crumb._rect = () => ({ x: 24, y: 28, top: 28, left: 24, right: 130, bottom: 48, width: 106, height: 20 });
+	crumb.click = () => {
+		crumb.clicks += 1;
+		onBack();
+	};
+	detail._querySelectorAll = (selector) => (selector === 'button[class*="_crumb"]' ? [crumb] : []);
+	return { detail, crumb };
+}
+
+/** The three document lookups routeDetailOf and the drawer use. */
+function wireRouteDetail(doc, current, open = null) {
+	doc.querySelectorAll = (selector) => {
+		if (selector === "[data-plugin-detail], [data-plugin-item-detail], [data-plugin-row-detail]") {
+			const detail = current();
+			return detail === null ? [] : [detail];
+		}
+		return [];
+	};
+	doc.querySelector = (selector) => {
+		if (selector === '[data-testid="task-manager-page"]') return null;
+		if (open !== null && selector.includes("Open sidebar")) return open;
+		return null;
+	};
+}
+
+function edgeSwipeHandlers(booted) {
+	const start = booted.handler("touchstart", "onEdgeSwipeStart");
+	const move = booted.handler("touchmove", "onEdgeSwipeMove");
+	assert.equal(typeof start, "function", "the edge swipe start is registered");
+	assert.equal(typeof move, "function", "the edge swipe move is registered");
+	return { start, move };
+}
+
+const swipeTouch = (x, y = 300) => ({
+	cancelable: true,
+	prevented: 0,
+	preventDefault() {
+		this.prevented += 1;
+	},
+	touches: [{ clientX: x, clientY: y }],
+});
+
+const swipeStart = (start, x, target) => start({ touches: [{ clientX: x, clientY: 300 }], target });
+
+test("a left-edge swipe on a plugin detail presses the breadcrumb instead of opening the drawer", () => {
+	const booted = bootGestures({ narrow: true });
+	const open = new FakeElement("button");
+	let drawerPresses = 0;
+	open.click = () => {
+		drawerPresses += 1;
+	};
+	const { detail, crumb } = routeDetailNode();
+	wireRouteDetail(booted.doc, () => detail, open);
+	booted.doc.documentElement.setAttribute("data-rdsh-drawer", "closed");
+	booted.doc.documentElement.removeAttribute("data-rdsh-rightpanel-open");
+	const { start, move } = edgeSwipeHandlers(booted);
+
+	swipeStart(start, 8, new FakeElement("div"));
+	const event = swipeTouch(120);
+	move(event);
+	assert.equal(crumb.clicks, 1, "the plugin breadcrumb was not pressed");
+	assert.equal(drawerPresses, 0, "the detail opened the session drawer instead of going back");
+	assert.ok(event.prevented > 0, "the detail did not claim the horizontal swipe");
+	assert.equal(booted.doc.documentElement.getAttribute("data-rdsh-drawer"), "closed", "the detail left the drawer open");
+	booted.disposeAll();
+});
+
+test("nested plugin details go back one breadcrumb per swipe", () => {
+	const booted = bootGestures({ narrow: true });
+	const row = routeDetailNode({ attribute: "data-plugin-row-detail", value: "demo:row" });
+	const pkg = routeDetailNode({ attribute: "data-plugin-detail", value: "demo" });
+	const state = { detail: row.detail, pressed: [] };
+	row.crumb.click = () => {
+		row.crumb.clicks += 1;
+		state.pressed.push("row");
+		state.detail = pkg.detail;
+	};
+	pkg.crumb.click = () => {
+		pkg.crumb.clicks += 1;
+		state.pressed.push("package");
+		state.detail = null;
+	};
+	wireRouteDetail(booted.doc, () => state.detail);
+	booted.doc.documentElement.setAttribute("data-rdsh-drawer", "closed");
+	booted.doc.documentElement.removeAttribute("data-rdsh-rightpanel-open");
+	const { start, move } = edgeSwipeHandlers(booted);
+
+	// The component page goes back to its package page first.
+	swipeStart(start, 8, new FakeElement("div"));
+	move(swipeTouch(120));
+	assert.deepEqual(state.pressed, ["row"], "the swipe skipped the component level");
+	assert.equal(booted.doc.documentElement.getAttribute("data-rdsh-drawer"), "closed", "a nested detail opened the drawer");
+
+	// The package page then goes back to the list, never two levels at once.
+	swipeStart(start, 8, new FakeElement("div"));
+	move(swipeTouch(120));
+	assert.deepEqual(state.pressed, ["row", "package"], "the package crumb was not pressed exactly once more");
+	assert.equal(booted.doc.documentElement.getAttribute("data-rdsh-drawer"), "closed", "the second level opened the drawer");
+	booted.disposeAll();
+});
+
+test("a left-edge swipe on an ordinary list still opens the drawer", () => {
+	const booted = bootGestures({ narrow: true });
+	const open = new FakeElement("button");
+	let drawerPresses = 0;
+	open.click = () => {
+		drawerPresses += 1;
+	};
+	wireRouteDetail(booted.doc, () => null, open);
+	booted.doc.documentElement.setAttribute("data-rdsh-drawer", "closed");
+	booted.doc.documentElement.removeAttribute("data-rdsh-rightpanel-open");
+	const { start, move } = edgeSwipeHandlers(booted);
+
+	swipeStart(start, 8, new FakeElement("div"));
+	move(swipeTouch(120));
+	assert.equal(drawerPresses, 1, "the ordinary list lost its drawer swipe");
+	booted.disposeAll();
+});
+
+test("a desktop boot installs neither the route swipe nor the mobile drawer", () => {
+	const booted = bootGestures({ narrow: false, mode: "desktop", width: 1024 });
+	const open = new FakeElement("button");
+	let drawerPresses = 0;
+	open.click = () => {
+		drawerPresses += 1;
+	};
+	const { detail, crumb } = routeDetailNode();
+	wireRouteDetail(booted.doc, () => detail, open);
+	booted.doc.documentElement.setAttribute("data-rdsh-drawer", "closed");
+	booted.doc.documentElement.removeAttribute("data-rdsh-rightpanel-open");
+
+	// Desktop returns before building the mobile half, so there is no handler
+	// to claim a swipe and no route back control to press.
+	assert.equal(booted.handler("touchstart", "onEdgeSwipeStart"), undefined, "a desktop installed the route swipe");
+	assert.equal(booted.sandbox.__RDSH_MOBILE_UX__, undefined, "a desktop built the mobile half");
+	assert.equal(crumb.clicks, 0, "a desktop route detail was sent back");
+	assert.equal(drawerPresses, 0, "a desktop route detail opened a drawer");
+	booted.disposeAll();
+});

@@ -4099,11 +4099,30 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     /**
+     * Upstream's own way back from a plugin detail: the breadcrumb button.
+     *
+     * The page keeps no other close control, so this button is the source both
+     * the tap and the left-edge swipe press (#61). Locate it structurally:
+     * every level of the nested detail draws one `button` whose CSS-module
+     * class still carries the `_crumb` suffix, and its aria-label changes with
+     * the level (`Back to plugins` / `Back to {name}`).
+     *
+     * @param {Element} container
+     * @returns {Element|null}
+     */
+    function routeCrumbOf(container) {
+      return [...container.querySelectorAll('button[class*="_crumb"]')]
+        .find((button) => routeLaidOut(button)) ?? null;
+    }
+
+    /**
      * The upstream screen that replaced the chat with a route's detail view.
      *
      * Plugins render the detail itself: a bundle page marks it
-     * `data-plugin-detail`, a built-in plugin `data-plugin-item-detail`, and
-     * the breadcrumb at its top is the way back.
+     * `data-plugin-detail`, a built-in plugin `data-plugin-item-detail`, a
+     * component page `data-plugin-row-detail`, and the breadcrumb at its top
+     * is the way back. Each level keeps its own crumb, so pressing it once
+     * climbs exactly one level.
      *
      * Automation tasks keep the list and the detail side by side; upstream
      * hides the list below 760px, which leaves the detail's own close button
@@ -4113,8 +4132,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * @returns {{container: Element, source: Element|null, back: boolean}|null}
      */
     function routeDetailOf() {
-      for (const container of document.querySelectorAll("[data-plugin-detail], [data-plugin-item-detail]")) {
-        if (routeLaidOut(container)) return { container, source: null, back: false };
+      for (const container of document.querySelectorAll("[data-plugin-detail], [data-plugin-item-detail], [data-plugin-row-detail]")) {
+        if (routeLaidOut(container)) return { container, source: routeCrumbOf(container), back: false };
       }
       const page = document.querySelector('[data-testid="task-manager-page"]');
       if (page === null || !routeLaidOut(page)) return null;
@@ -4131,6 +4150,20 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       return listGone ? { container: page, source: close, back: true } : null;
     }
 
+    /**
+     * Press the detail's own way back: the plugin breadcrumb or the task
+     * detail's close control. Re-read the screen so a route that changed
+     * during a gesture is never sent two levels back.
+     *
+     * @returns {boolean} whether there was something to press.
+     */
+    function pressRouteBack() {
+      const detail = routeDetailOf();
+      if (detail === null || detail.source === null) return false;
+      detail.source.click();
+      return true;
+    }
+
     /** The phone's own way out of a route detail, built once on boot. */
     let routeBack = null;
 
@@ -4143,8 +4176,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       routeBack.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>';
       routeBack.addEventListener("click", () => {
         // Re-read the screen: the route may have changed since the last frame.
-        const detail = routeDetailOf();
-        if (detail !== null && detail.source !== null) detail.source.click();
+        pressRouteBack();
       });
       document.body.append(routeBack);
     }
@@ -7234,6 +7266,14 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         if (target.closest("input, textarea, [contenteditable=true]") !== null) return;
         if (touch.clientX > 36 && target.closest("button, a, [role=button]") !== null) return;
       }
+      // A full-screen route detail replaces the chat, so the left-edge swipe
+      // there is the screen's own back gesture, not the drawer's (#61, #62).
+      // It presses the same upstream control the screen already offers and
+      // leaves the drawer/panel rules above and right-edge gestures untouched.
+      if (!fromRight && routeDetailOf() !== null) {
+        edgeSwipe = { x: touch.clientX, y: touch.clientY, fromRight: false, routeBack: true };
+        return;
+      }
       edgeSwipe = { x: touch.clientX, y: touch.clientY, fromRight };
     }
     function onEdgeSwipeMove(event) {
@@ -7256,6 +7296,13 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         return;
       }
       if (Math.abs(dx) > 4 && event.cancelable) event.preventDefault();
+      if (edgeSwipe.routeBack === true) {
+        if (dx < 64) return;
+        edgeSwipe = null;
+        if (event.cancelable) event.preventDefault();
+        pressRouteBack();
+        return;
+      }
       if (edgeSwipe.closesDrawer === true) {
         if (dx > -64) return;
         edgeSwipe = null;

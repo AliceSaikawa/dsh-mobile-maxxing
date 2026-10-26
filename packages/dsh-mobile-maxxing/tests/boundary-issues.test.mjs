@@ -535,6 +535,8 @@ const PHONE_SAMPLE = {
 	"[data-rdsh-rightpanel]": "div",
 	"[data-rdsh-session]": "div",
 	"[data-rdsh-session-frame]": "div",
+	"[data-rdsh-folder-frame]": "div",
+	"[data-rdsh-folder-menu]": "div",
 	"[data-rdsh-question-card]": "div",
 	"[data-rdsh-todo-item]": "li",
 	"[data-rdsh-transcript]": "div",

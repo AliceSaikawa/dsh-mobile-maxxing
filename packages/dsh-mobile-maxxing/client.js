@@ -3349,6 +3349,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     const SESSION_FRAME_KEY = "rdsh-mobile-ux:session-frames";
+    // Folder frames are a separate namespace: a Workspace id and a Session id
+    // can be the same string, and the old key must keep working untouched.
+    const FOLDER_FRAME_KEY = "dsh-mobile-maxxing:folder-frames";
     const FRAME_COLORS = [
       { id: "blue", label: t("frame.color.blue"), value: "#7aaaff" },
       { id: "green", label: t("frame.color.green"), value: "#5bd6a5" },
@@ -3357,36 +3360,52 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       { id: "purple", label: t("frame.color.purple"), value: "#b48cff" },
       { id: "pink", label: t("frame.color.pink"), value: "#ff8fc7" },
     ];
-    function readSessionFrames() {
+    function readFrameMap(key) {
       try {
-        const value = JSON.parse(localStorage.getItem(SESSION_FRAME_KEY) || "{}");
+        const value = JSON.parse(localStorage.getItem(key) || "{}");
         return value !== null && typeof value === "object" && !Array.isArray(value) ? value : {};
       } catch {
         return {};
       }
     }
-    let sessionFrames = readSessionFrames();
-    function sessionFrameOf(row) {
+    let sessionFrames = readFrameMap(SESSION_FRAME_KEY);
+    let folderFrames = readFrameMap(FOLDER_FRAME_KEY);
+    function frameColorOf(frames, row, prefix) {
       const key = row.getAttribute("data-row-key") || "";
-      const id = key.startsWith("session:") ? key.slice("session:".length) : "";
-      const value = id === "" ? undefined : sessionFrames[id];
+      const id = key.startsWith(prefix) ? key.slice(prefix.length) : "";
+      const value = id === "" ? undefined : frames[id];
       return typeof value === "string" && value !== "" ? value : null;
     }
-    function applySessionFrame(row) {
-      const color = sessionFrameOf(row);
+    function workspaceKeyOf(row) {
+      const key = row.getAttribute("data-row-key") || "";
+      return key.startsWith("workspace:") ? key.slice("workspace:".length) : "";
+    }
+    function applyRowFrame(row, color, attribute, property) {
       if (color === null) {
-        row.removeAttribute("data-rdsh-session-frame");
-        row.style.removeProperty("--rdsh-session-frame");
+        row.removeAttribute(attribute);
+        row.style.removeProperty(property);
       } else {
-        row.setAttribute("data-rdsh-session-frame", "");
-        row.style.setProperty("--rdsh-session-frame", color);
+        row.setAttribute(attribute, "");
+        row.style.setProperty(property, color);
       }
     }
-    function saveSessionFrame(sessionId, color) {
-      if (color === null) delete sessionFrames[sessionId];
-      else sessionFrames[sessionId] = color;
-      try { localStorage.setItem(SESSION_FRAME_KEY, JSON.stringify(sessionFrames)); } catch { /* private mode */ }
+    function applySessionFrame(row) {
+      applyRowFrame(row, frameColorOf(sessionFrames, row, "session:"), "data-rdsh-session-frame", "--rdsh-session-frame");
+    }
+    function applyFolderFrame(row) {
+      applyRowFrame(row, frameColorOf(folderFrames, row, "workspace:"), "data-rdsh-folder-frame", "--rdsh-folder-frame");
+    }
+    function saveFrameMap(key, frames, id, color) {
+      if (color === null) delete frames[id];
+      else frames[id] = color;
+      try { localStorage.setItem(key, JSON.stringify(frames)); } catch { /* private mode */ }
       scheduleDecorate();
+    }
+    function saveSessionFrame(sessionId, color) {
+      saveFrameMap(SESSION_FRAME_KEY, sessionFrames, sessionId, color);
+    }
+    function saveFolderFrame(workspaceId, color) {
+      saveFrameMap(FOLDER_FRAME_KEY, folderFrames, workspaceId, color);
     }
 
     function decorateSessionRows() {
@@ -3431,6 +3450,15 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           }
         }
       }
+      // Real Workspace headers carry the same colour frame. The key is the
+      // stable Workspace id, so rename, expand/collapse and reorder keep it;
+      // the Ungrouped bucket ("workspace:") is not a folder and is skipped.
+      for (const row of document.querySelectorAll('[data-row-key^="workspace:"]')) {
+        // The key is empty for the Ungrouped bucket: applyFolderFrame clears
+        // any stale hook there instead of treating it as a folder.
+        applyFolderFrame(row);
+      }
+      decorateFolderMenu();
     }
 
     /** Whether the last pass wrote session-row hooks (so a wide pass is cheap). */
@@ -3441,6 +3469,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       "data-rdsh-ring-row",
       "data-rdsh-open-row",
       "data-rdsh-session-frame",
+      "data-rdsh-folder-frame",
       "data-rdsh-row-minor",
       "data-rdsh-row-menu",
       "data-rdsh-dragging",
@@ -3471,6 +3500,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         element.removeAttribute("data-rdsh-ringed");
       }
       for (const row of document.querySelectorAll("[data-row-key^='session:']")) row.style.removeProperty("--rdsh-session-frame");
+      for (const row of document.querySelectorAll("[data-row-key^='workspace:']")) row.style.removeProperty("--rdsh-folder-frame");
+      clearFolderMenu();
     }
 
     /**
@@ -3549,6 +3580,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       "data-rdsh-queue-text",
       "data-rdsh-workspace-menu",
       "data-rdsh-workspace-viewport",
+      "data-rdsh-folder-menu",
       "data-rdsh-workspace-hidden",
       "data-rdsh-workspace-search",
       "data-rdsh-workspace-empty",
@@ -10032,6 +10064,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         // The same control closes an open menu; only the opening click starts
         // the observer. aria-expanded still carries the pre-click state here.
         if (trigger !== null && trigger.getAttribute("aria-expanded") !== "true") beginWorkspacePicker();
+        // A folder's "..." menu has no slot in this shell; remember the click
+        // so the decoration pass can claim exactly the portal it opens.
+        armFolderMenu(target);
       }
       // Queued message: tap toggles the full-text preview. The native row still
       // owns its edit/remove/steer buttons; this branch only wraps the preview.
@@ -10252,6 +10287,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (event.key === "Escape") {
         document.querySelector(".rdsh-mux-titlepop")?.remove();
         closeDetailPopover();
+        closeFramePalette();
         return;
       }
       if (!phone() || (event.key !== "Enter" && event.key !== " ")) return;
@@ -10290,13 +10326,146 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       document.querySelector(".rdsh-frame-backdrop")?.remove();
     }
 
-    function showFramePalette(sessionId, anchor) {
+    // ---------------------------------------------------------------------
+    // Folder colour frame: this shell has no workspace-menu slot, so the one
+    // portal opened by a folder's "..." button is claimed structurally
+    // (aria-controls <-> id) and decorated once. Never by menu labels.
+    // ---------------------------------------------------------------------
+    const FOLDER_MENU_ATTR = "data-rdsh-folder-menu";
+    let folderMenu = null;
+    let folderMenuSeq = 0;
+    let folderMenuPending = null;
+
+    function folderRowMenuButton(row) {
+      const actions = [...row.children].find((child) => classToken(child, /_rowActions$/));
+      return actions === undefined ? null : actions.querySelector("button");
+    }
+
+    function armFolderMenu(target) {
+      if (target === null || target === undefined || target.closest === undefined) return;
+      // A claim belongs to the click that made it. Any later click retires it,
+      // so a menu opened from another row can never inherit this frame row.
+      folderMenuPending = null;
+      const button = target.closest("button");
+      if (button === null) return;
+      const row = button.closest('[data-row-key^="workspace:"]');
+      if (row === null || workspaceKeyOf(row) === "") return;
+      // The row's own first action (the Menu anchor), never a session row
+      // nested under the group and never the "+" beside it.
+      if (folderRowMenuButton(row) !== button) return;
+      // One decoration pass after the click: React has committed the portal
+      // by then, so anything that appears later is a different menu.
+      folderMenuPending = {
+        button,
+        key: workspaceKeyOf(row),
+        known: new Set(document.querySelectorAll('[role="menu"]')),
+      };
+    }
+
+    function folderMenuViewport(menu) {
+      for (const child of [...menu.children]) {
+        if (child.getAttribute("role") !== "presentation") continue;
+        if (child.querySelector('button[role="menuitem"]') !== null) return child;
+      }
+      return null;
+    }
+
+    function clearFolderMenu() {
+      folderMenuPending = null;
+      const state = folderMenu;
+      if (state === null) return;
+      folderMenu = null;
+      // Deferred: an item's onSelect is still inside this React root's event.
+      setTimeout(() => {
+        try { state.root?.unmount(); } catch { /* the root is already gone */ }
+      }, 0);
+      state.host.remove();
+      // Strip even from a detached node: React can reuse the portal element.
+      if (state.button.getAttribute("aria-controls") === state.id) state.button.removeAttribute("aria-controls");
+      state.button.removeAttribute("aria-expanded");
+      if (state.menu.id === state.id) state.menu.removeAttribute("id");
+      state.menu.removeAttribute(FOLDER_MENU_ATTR);
+    }
+
+    function attachFolderMenu(menu, button, key) {
+      if (folderMenu !== null || menu.hasAttribute(FOLDER_MENU_ATTR)) return false;
+      let React;
+      let createRoot;
+      let MenuItemButton;
+      try {
+        React = require("react");
+        ({ createRoot } = require("react-dom/client"));
+        ({ MenuItemButton } = require("@deepseek-ai/dsh-client-ui-primitives"));
+      } catch (error) {
+        return false;
+      }
+      if (typeof createRoot !== "function" || typeof MenuItemButton !== "function") return false;
+      const viewport = folderMenuViewport(menu);
+      if (viewport === null) return false;
+      const id = `rdsh-folder-menu-${++folderMenuSeq}`;
+      const host = document.createElement("div");
+      host.setAttribute("data-rdsh-folder-frame-item", "");
+      menu.id = id;
+      menu.setAttribute(FOLDER_MENU_ATTR, "");
+      button.setAttribute("aria-controls", id);
+      // The native Menu does not mark its anchor; ours lasts only as long as
+      // the claimed portal.
+      button.setAttribute("aria-expanded", "true");
+      viewport.append(host);
+      const root = createRoot(host);
+      const state = { menu, button, key, host, root, id };
+      folderMenu = state;
+      const onSelect = (event) => {
+        const anchorRect = event?.currentTarget?.getBoundingClientRect?.() ?? button.getBoundingClientRect();
+        clearFolderMenu();
+        // The native Menu closes on the document Escape it already listens for.
+        try {
+          menu.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+        } catch { /* no KeyboardEvent in this shell */ }
+        setTimeout(() => showFramePalette(key, anchorRect, folderFrames, saveFolderFrame), 0);
+      };
+      try {
+        root.render(React.createElement(MenuItemButton, { icon: frameIcon(), onSelect }, t("frame.menu")));
+      } catch (error) {
+        clearFolderMenu();
+        return false;
+      }
+      return true;
+    }
+
+    function decorateFolderMenu() {
+      const state = folderMenu;
+      if (state !== null) {
+        if (state.menu.isConnected) {
+          // React may reconcile the native list and drop an unknown child.
+          if (!state.host.isConnected) {
+            const viewport = folderMenuViewport(state.menu);
+            if (viewport !== null) viewport.append(state.host);
+          }
+          return;
+        }
+        // The previous portal closed and another folder's click may already be
+        // queued. Keep that claim while retiring the old portal.
+        const next = folderMenuPending;
+        clearFolderMenu();
+        folderMenuPending = next;
+      }
+      const pending = folderMenuPending;
+      if (pending === null) return;
+      const menu = [...document.querySelectorAll('[role="menu"]')]
+        .find((node) => !pending.known.has(node) && !node.hasAttribute(FOLDER_MENU_ATTR));
+      folderMenuPending = null;
+      if (menu === undefined) return;
+      attachFolderMenu(menu, pending.button, pending.key);
+    }
+
+    function showFramePalette(targetId, anchor, frames = sessionFrames, save = saveSessionFrame) {
       closeFramePalette();
       const pop = document.createElement("div");
       pop.className = "rdsh-frame-pop";
       pop.setAttribute("role", "dialog");
       pop.setAttribute("aria-label", t("frame.paletteAria"));
-      const current = sessionFrames[sessionId];
+      const current = frames[targetId];
       const title = document.createElement("div");
       title.className = "rdsh-frame-pop-title";
       title.textContent = t("frame.paletteTitle");
@@ -10310,7 +10479,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         swatch.setAttribute("aria-label", color.label);
         swatch.setAttribute("data-current", String(current === color.value));
         swatch.addEventListener("click", () => {
-          saveSessionFrame(sessionId, color.value);
+          save(targetId, color.value);
           closeFramePalette();
           mobileToast(t("frame.applied", { color: color.label }));
         });
@@ -10321,7 +10490,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       clear.className = "rdsh-frame-clear";
       clear.textContent = t("frame.clear");
       clear.addEventListener("click", () => {
-        saveSessionFrame(sessionId, null);
+        save(targetId, null);
         closeFramePalette();
         mobileToast(t("frame.cleared"));
       });
@@ -10351,18 +10520,23 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // is a mobile affordance too (#44). A desktop menu keeps upstream's rows
       // exactly as they were.
       if (!phone()) return null;
-      return h("button", {
-        type: "button",
-        role: "menuitem",
-        className: "rdsh-frame-menu-item",
-        onClick: (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          const anchorRect = event.currentTarget.getBoundingClientRect();
+      // Native menu cell, the same component the shell's pin/rename rows use:
+      // its own padding, gap and 14px icon seat are the reference geometry.
+      let MenuItemButton;
+      try {
+        ({ MenuItemButton } = require("@deepseek-ai/dsh-client-ui-primitives"));
+      } catch (error) {
+        return null;
+      }
+      if (typeof MenuItemButton !== "function") return null;
+      return h(MenuItemButton, {
+        icon: frameIcon(),
+        onSelect: (event) => {
+          const anchorRect = event?.currentTarget?.getBoundingClientRect?.() ?? null;
           if (typeof setMenuOpen === "function") setMenuOpen(false);
           setTimeout(() => showFramePalette(sessionId, anchorRect), 0);
         },
-      }, h("span", { className: "rdsh-frame-menu-icon", "aria-hidden": "true" }, frameIcon()), h("span", null, t("frame.menu")));
+      }, t("frame.menu"));
     }
 
     // ---------------------------------------------------------------------
@@ -12152,19 +12326,16 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
    lives in the mobile sheet, so a desktop never sees it. */
 html[data-rdsh-hide-settings] [data-conversation-tabs] [data-rdsh-trajectory-tab-hidden] { display: none !important; }
 
-/* Session colour frames and their menu/palette. The frame is a phone
-   affordance in the #44 contract: a desktop sidebar is upstream's, unchanged. */
+/* Session/folder colour frames and the session menu palette. The frame is a
+   phone affordance in the #44 contract: a desktop sidebar is upstream's,
+   unchanged. Folder menu rows use the native MenuItemButton seat, so no menu
+   cell geometry is redeclared here. */
 [data-rdsh-session-frame] {
   box-shadow: inset 0 0 0 2px var(--rdsh-session-frame) !important;
 }
-.rdsh-frame-menu-item {
-  width: 100%; display: flex; align-items: center; gap: 10px;
-  padding: 8px 12px; border: 0; border-radius: 8px;
-  background: transparent; color: var(--dsw-alias-label-primary, #f9fafb);
-  font: inherit; font-size: 13px; text-align: left; cursor: pointer;
+[data-rdsh-folder-frame] {
+  box-shadow: inset 0 0 0 2px var(--rdsh-folder-frame) !important;
 }
-.rdsh-frame-menu-item:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,.08)); }
-.rdsh-frame-menu-icon { display: grid; place-items: center; width: 16px; height: 16px; opacity: .9; }
 .rdsh-frame-backdrop { position: fixed; inset: 0; z-index: 900; background: transparent; }
 .rdsh-frame-pop {
   position: fixed; z-index: 901; width: 252px; box-sizing: border-box;
@@ -13993,6 +14164,19 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             controlByte: terminalControlByte,
           },
           phone,
+          // Folder frames and the one-shot workspace-menu claim. The keys,
+          // offsets and DOM checks above are what the browser uses; the tests
+          // drive the same closures.
+          folderFrames: {
+            read: () => ({ ...folderFrames }),
+            save: saveFolderFrame,
+            menu: () => folderMenu,
+            pending: () => folderMenuPending,
+            arm: armFolderMenu,
+            claim: attachFolderMenu,
+            decorate: decorateFolderMenu,
+            clear: clearFolderMenu,
+          },
           markMobileSession,
           closeDrawer,
           openDrawer: toggleDrawer,

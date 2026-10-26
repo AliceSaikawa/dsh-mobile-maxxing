@@ -19,7 +19,7 @@ width-only specification per direct user request.
 | Constant | Contents |
 | --- | --- |
 | `CSS_DEVICE` | Only this plugin's own chrome: `.rdsh-mux-toast` and the Settings cards. Always present. No upstream selector. |
-| `CSS_PHONE` | Every rule that reshapes upstream in mobile mode (drawer, right panel, composer, transcript, question cards, queue, workspace picker, settings navigation, animations, session colour frame, safe-area root padding). |
+| `CSS_PHONE` | Every rule that reshapes upstream in mobile mode (drawer, right panel, composer, transcript, question cards, queue, workspace picker, settings navigation, animations, session/folder colour frames, safe-area root padding). |
 
 There is **no `@media (max-width: 767px)` wrapper**. The mobile half is a
 separate `<style data-rdsh-mux-style="phone">` appended only when the
@@ -45,7 +45,7 @@ mode. The mode never changes during a page, so the cleanup path is dispose
 | `decorateFast` header/crumbs/conversation | `data-rdsh-header`, `-crumbs`, `-conversation` | mobile mode only | attributes removed |
 | `decorateFast` `data-rdsh-anim` | animation choice | mobile mode only | attribute removed |
 | `decorateFast` `data-rdsh-hide-settings` | hidden-control switch | mobile mode only (`onPhone && !hideDisabled`) | attribute removed |
-| `decorateSessionRows` | row/status/title/running/ring/open/minor hooks **and** the colour frame | mobile mode only | `clearSessionRowHooks()` removes all, including `--rdsh-session-frame` |
+| `decorateSessionRows` | row/status/title/running/ring/open/minor hooks **and** the session/folder colour frames | mobile mode only | `clearSessionRowHooks()` removes all, including both frame variables, and `clearFolderMenu()` drops the claimed workspace-menu row |
 | `decorateEditCards` | edit card/header/row | mobile mode only | attributes removed before the scan |
 | `decorateTranscript` | transcript column hooks | mobile mode only | attributes removed |
 | `decorateUserBubbles` | user stack/bubble | mobile mode only | attributes removed |

@@ -99,6 +99,119 @@ function element() {
 }
 
 /**
+ * A tiny element tree for the folder-menu test. The generic stub above answers
+ * every call but keeps no children, so a claim needs a node that can really
+ * append a host, report children and answer the few selectors the claim uses.
+ */
+function treeElement(tagName = "div") {
+	const attributes = new Map();
+	const node = {
+		tagName: tagName.toUpperCase(),
+		className: "",
+		classList: [],
+		textContent: "",
+		parentElement: null,
+		childNodes: [],
+		style: { setProperty() {}, removeProperty() {} },
+		connected: true,
+		get id() {
+			return attributes.get("id") ?? "";
+		},
+		set id(value) {
+			attributes.set("id", String(value));
+		},
+		get children() {
+			return this.childNodes.filter((child) => child.tagName !== undefined);
+		},
+		get isConnected() {
+			return this.connected;
+		},
+		setAttribute(name, value) {
+			attributes.set(name, String(value));
+			if (name === "class") this.classList = String(value).split(/\s+/).filter(Boolean);
+		},
+		getAttribute(name) {
+			return attributes.has(name) ? attributes.get(name) : null;
+		},
+		hasAttribute(name) {
+			return attributes.has(name);
+		},
+		removeAttribute(name) {
+			attributes.delete(name);
+		},
+		append(...children) {
+			for (const child of children) {
+				if (child.parentElement !== null) child.remove();
+				child.parentElement = this;
+				this.childNodes.push(child);
+			}
+		},
+		remove() {
+			const siblings = this.parentElement?.childNodes;
+			if (siblings !== undefined) {
+				const at = siblings.indexOf(this);
+				if (at >= 0) siblings.splice(at, 1);
+			}
+			this.parentElement = null;
+			this.connected = false;
+		},
+		querySelector(selector) {
+			return firstMatch(this, selector);
+		},
+		querySelectorAll(selector) {
+			return allMatches(this, selector);
+		},
+		closest(selector) {
+			let current = this;
+			while (current !== null) {
+				if (matchesTreeSelector(current, selector)) return current;
+				current = current.parentElement;
+			}
+			return null;
+		},
+		getBoundingClientRect() {
+			return { x: 0, y: 0, left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 };
+		},
+		focus() {},
+		blur() {},
+		addEventListener() {},
+		removeEventListener() {},
+	};
+	return node;
+}
+
+function matchesTreeSelector(node, selector) {
+	if (node.tagName === undefined) return false;
+	const match = selector.match(/^([A-Za-z]*)(?:\[([\w-]+)(?:([\^$*]?=)"([^"]*)")?\])?$/);
+	if (match === null) return selector === node.tagName.toLowerCase();
+	const [, tag, name, operator, value] = match;
+	if (tag !== "" && node.tagName !== tag.toUpperCase()) return false;
+	if (name === undefined) return true;
+	if (operator === undefined) return node.hasAttribute(name);
+	const actual = node.getAttribute(name);
+	if (operator === "^=") return actual !== null && actual.startsWith(value);
+	if (operator === "$=") return actual !== null && actual.endsWith(value);
+	if (operator === "*=") return actual !== null && actual.includes(value);
+	return actual === value;
+}
+
+function allMatches(root, selector) {
+	const found = [];
+	const visit = (node) => {
+		for (const child of node.children) {
+			if (matchesTreeSelector(child, selector)) found.push(child);
+			visit(child);
+		}
+	};
+	visit(root);
+	return found;
+}
+
+function firstMatch(root, selector) {
+	return allMatches(root, selector)[0] ?? null;
+}
+
+/**
  * A localStorage that remembers, for tests that boot with a saved choice.
  *
  * The plain stub answers every call, which is enough for code that only checks
@@ -1090,6 +1203,231 @@ test("the session colour frame is a phone-only hook", () => {
 	assert.equal(phone.row.hasAttribute("data-rdsh-session-frame"), true, "the phone colour frame hook was not generated");
 	assert.equal(phone.frameColor, "#ff6b6b", "the phone frame colour was not written");
 	phone.booted.disposeAll();
+});
+
+test("folder colour frames are phone-only and never share a namespace with sessions", () => {
+	// A folder header carries the same palette, but its storage and hook are
+	// separate. The same id in both maps must stay two different colours.
+	const paint = (row) => {
+		let color = null;
+		row.style = {
+			setProperty(name, value) { if (name === "--rdsh-folder-frame") color = value; },
+			removeProperty(name) { if (name === "--rdsh-folder-frame") color = null; },
+		};
+		return () => color;
+	};
+	const folderRow = (narrow, storage = {}) => {
+		const row = element();
+		row.setAttribute("data-row-key", "workspace:w1");
+		const color = paint(row);
+		const frames = [];
+		const booted = bootClient({
+			mode: narrow ? "mobile" : "desktop",
+			narrow,
+			frames,
+			storage,
+			configureDocument(doc) {
+				doc.querySelectorAll = (selector) => (selector === '[data-row-key^="workspace:"]' ? [row] : []);
+				doc.querySelector = () => null;
+			},
+		});
+		for (let index = 0; index < 20 && frames.length > 0; index += 1) frames.shift()();
+		return { row, color, booted };
+	};
+
+	const wide = folderRow(false, { "dsh-mobile-maxxing:folder-frames": JSON.stringify({ w1: "#5bd6a5" }) });
+	assert.equal(wide.row.hasAttribute("data-rdsh-folder-frame"), false, "a desktop folder row got the phone frame hook");
+	assert.equal(wide.color(), null, "a desktop folder row got the frame colour");
+	wide.booted.disposeAll();
+
+	const phone = folderRow(true, { "dsh-mobile-maxxing:folder-frames": JSON.stringify({ w1: "#5bd6a5" }) });
+	assert.equal(phone.row.hasAttribute("data-rdsh-folder-frame"), true, "the phone folder frame hook was not generated");
+	assert.equal(phone.color(), "#5bd6a5", "the phone folder frame colour was not written");
+	const phoneApi = phone.booted.sandbox.__RDSH_MOBILE_UX__.folderFrames;
+	phoneApi.save("w1", null);
+	phone.booted.sandbox.__RDSH_MOBILE_UX__.decorateNow();
+	assert.equal(phone.row.hasAttribute("data-rdsh-folder-frame"), false, "clearing a folder frame left the hook");
+	assert.equal(phone.color(), null, "clearing a folder frame left the colour");
+	assert.equal(phoneApi.read().w1, undefined, "clearing a folder frame left the stored map entry");
+	phone.row.setAttribute("data-row-key", "workspace:");
+	phone.booted.sandbox.__RDSH_MOBILE_UX__.decorateNow();
+	assert.equal(phone.row.hasAttribute("data-rdsh-folder-frame"), false, "the Ungrouped bucket was treated as a folder");
+	phone.booted.disposeAll();
+
+	const collision = (() => {
+		const sessionRow = element();
+		sessionRow.setAttribute("data-row-key", "session:w1");
+		let sessionColor = null;
+		sessionRow.style = {
+			setProperty(name, value) { if (name === "--rdsh-session-frame") sessionColor = value; },
+			removeProperty(name) { if (name === "--rdsh-session-frame") sessionColor = null; },
+		};
+		const row = element();
+		row.setAttribute("data-row-key", "workspace:w1");
+		const color = paint(row);
+		const frames = [];
+		const booted = bootClient({
+			mode: "mobile",
+			narrow: true,
+			frames,
+			storage: {
+				"rdsh-mobile-ux:session-frames": JSON.stringify({ w1: "#ff6b6b" }),
+				"dsh-mobile-maxxing:folder-frames": JSON.stringify({ s1: "#5bd6a5", w1: "#7aaaff" }),
+			},
+			configureDocument(doc) {
+				doc.querySelectorAll = (selector) => (
+					selector === '[data-row-key^="session:"]' ? [sessionRow]
+						: selector === '[data-row-key^="workspace:"]' ? [row]
+							: []
+				);
+				doc.querySelector = () => null;
+			},
+		});
+		for (let index = 0; index < 20 && frames.length > 0; index += 1) frames.shift()();
+		return { sessionRow, sessionColor: () => sessionColor, row, color, booted };
+	})();
+	assert.equal(collision.sessionColor(), "#ff6b6b", "the session row read the folder map");
+	assert.equal(collision.color(), "#7aaaff", "the folder row read the session map");
+	assert.equal(collision.sessionRow.hasAttribute("data-rdsh-folder-frame"), false, "the session row got a folder hook");
+	assert.equal(collision.row.hasAttribute("data-rdsh-session-frame"), false, "the folder row got a session hook");
+	const api = collision.booted.sandbox.__RDSH_MOBILE_UX__.folderFrames;
+	api.save("w2", "#5bd6a5");
+	assert.equal(
+		collision.booted.sandbox.localStorage.getItem("dsh-mobile-maxxing:folder-frames"),
+		JSON.stringify({ s1: "#5bd6a5", w1: "#7aaaff", w2: "#5bd6a5" }),
+		"the folder save did not land in the dsh-named folder key",
+	);
+	assert.equal(
+		collision.booted.sandbox.localStorage.getItem("rdsh-mobile-ux:session-frames"),
+		JSON.stringify({ w1: "#ff6b6b" }),
+		"the folder save rewrote the legacy session key",
+	);
+	collision.booted.disposeAll();
+});
+
+test("a folder menu is claimed by portal structure once and leaves other menus alone", () => {
+	// The shell has no workspace-menu slot. A click on the folder's own "..."
+	// arms one claim; the first menu portal that appears after that click is
+	// the claimed one, marked aria-controls <-> id. No label is ever read.
+	const menus = [];
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		configureDocument(doc) {
+			doc.createElement = (tag) => treeElement(tag);
+			doc.querySelectorAll = (selector) => (selector === '[role="menu"]' ? menus : []);
+			doc.querySelector = () => null;
+		},
+		requireImpl(name) {
+			if (name === "react") return { createElement: () => ({}) };
+			if (name === "react-dom/client") return { createRoot: () => ({ render() {}, unmount() {} }) };
+			if (name === "@deepseek-ai/dsh-client-ui-primitives") return { MenuItemButton: function MenuItemButton() {} };
+			return stub();
+		},
+	});
+	const api = booted.sandbox.__RDSH_MOBILE_UX__?.folderFrames;
+	assert.ok(api, "the mobile half did not publish the folder-frame diagnostics");
+
+	const menuWithItem = () => {
+		const viewport = treeElement("div");
+		viewport.setAttribute("role", "presentation");
+		const item = treeElement("button");
+		item.setAttribute("role", "menuitem");
+		viewport.append(item);
+		const menu = treeElement("div");
+		menu.setAttribute("role", "menu");
+		menu.append(viewport);
+		return { menu, viewport };
+	};
+
+	const other = menuWithItem();
+	menus.push(other.menu);
+
+	const row = treeElement("div");
+	row.setAttribute("data-row-key", "workspace:w1");
+	const actions = treeElement("span");
+	actions.classList = ["YDXeBa_rowActions"];
+	const trigger = treeElement("button");
+	trigger.setAttribute("aria-label", "Workspace actions: repo");
+	const plus = treeElement("button");
+	actions.append(trigger, plus);
+	row.append(actions);
+
+	api.arm(trigger);
+	assert.equal(api.pending()?.key, "w1", "the folder click did not arm a claim");
+	const folder = menuWithItem();
+	menus.push(folder.menu);
+	api.decorate();
+
+	assert.equal(folder.menu.getAttribute("data-rdsh-folder-menu"), "", "the folder portal was not claimed");
+	assert.match(folder.menu.getAttribute("id") ?? "", /^rdsh-folder-menu-\d+$/, "the folder portal has no ownership id");
+	assert.equal(trigger.getAttribute("aria-controls"), folder.menu.getAttribute("id"), "the anchor does not point at the claimed portal");
+	assert.equal(trigger.getAttribute("aria-expanded"), "true", "the anchor does not report the claimed portal");
+	assert.equal(other.menu.hasAttribute("data-rdsh-folder-menu"), false, "another menu was decorated");
+	assert.equal(other.menu.getAttribute("id"), null, "another menu received the ownership id");
+	const hostCount = () => folder.viewport.children.filter((child) => child.hasAttribute("data-rdsh-folder-frame-item")).length;
+	assert.equal(hostCount(), 1, "the frame row host was not appended to the folder menu");
+	api.decorate();
+	api.decorate();
+	assert.equal(hostCount(), 1, "a re-decorate appended a second frame row");
+
+	// Switching folders: the old portal is gone but its replacement opened in
+	// the same frame. The queued claim must survive the old portal's cleanup.
+	folder.menu.remove();
+	api.arm(trigger);
+	const second = menuWithItem();
+	menus.push(second.menu);
+	api.decorate();
+	assert.equal(folder.menu.hasAttribute("data-rdsh-folder-menu"), false, "the closed portal kept its marker");
+	assert.equal(second.menu.getAttribute("data-rdsh-folder-menu"), "", "the replacement portal was not claimed");
+	assert.equal(trigger.getAttribute("aria-controls"), second.menu.getAttribute("id"), "the anchor does not point at the replacement");
+
+	api.clear();
+	assert.equal(second.menu.hasAttribute("data-rdsh-folder-menu"), false, "clear left the ownership marker");
+	assert.equal(second.menu.getAttribute("id"), null, "clear left the ownership id");
+	assert.equal(trigger.hasAttribute("aria-controls"), false, "clear left aria-controls on the anchor");
+	assert.equal(trigger.hasAttribute("aria-expanded"), false, "clear left aria-expanded on the anchor");
+	assert.equal(second.viewport.children.filter((child) => child.hasAttribute("data-rdsh-folder-frame-item")).length, 0, "clear left the frame row host");
+
+	// A click that opens no portal consumes the claim: a menu opened later is
+	// another menu and must not inherit the folder row.
+	api.arm(trigger);
+	api.decorate();
+	assert.equal(api.pending(), null, "the claim survived a pass that saw no new portal");
+
+	// A Session row's "..." is not a Workspace menu: it neither arms nor claims.
+	const sessionRow = treeElement("div");
+	sessionRow.setAttribute("data-row-key", "session:s1");
+	const sessionActions = treeElement("span");
+	sessionActions.classList = ["YDXeBa_rowActions"];
+	const sessionTrigger = treeElement("button");
+	sessionActions.append(sessionTrigger);
+	sessionRow.append(sessionActions);
+	const stray = menuWithItem();
+	// The folder claim is still live when the Session trigger is clicked; that
+	// click must retire it instead of decorating the Session menu.
+	api.arm(trigger);
+	api.arm(sessionTrigger);
+	assert.equal(api.pending(), null, "a later click did not retire the folder claim");
+	menus.push(stray.menu);
+	api.decorate();
+	assert.equal(stray.menu.hasAttribute("data-rdsh-folder-menu"), false, "a session menu was claimed as a folder menu");
+	assert.equal(stray.menu.getAttribute("id"), null, "a session menu received the folder ownership id");
+
+	// The Ungrouped bucket has no Workspace id, so it cannot arm either.
+	const ungrouped = treeElement("div");
+	ungrouped.setAttribute("data-row-key", "workspace:");
+	const ungroupedActions = treeElement("span");
+	ungroupedActions.classList = ["YDXeBa_rowActions"];
+	const ungroupedTrigger = treeElement("button");
+	ungroupedActions.append(ungroupedTrigger);
+	ungrouped.append(ungroupedActions);
+	const strayUngrouped = menuWithItem();
+	api.arm(ungroupedTrigger);
+	menus.push(strayUngrouped.menu);
+	api.decorate();
+	assert.equal(strayUngrouped.menu.hasAttribute("data-rdsh-folder-menu"), false, "the Ungrouped bucket was claimed as a folder");
+	booted.disposeAll();
 });
 
 test("a rightward swipe closes an open right panel from the left edge too", () => {

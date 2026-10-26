@@ -326,6 +326,7 @@ test("upstream hooks are styled only in the mobile stylesheet", () => {
 	assert.deepEqual(leaked, [], "an upstream hook leaked into the always-on stylesheet");
 	const phone = cssTemplate("CSS_PHONE");
 	assert.match(phone, /\[data-rdsh-session-frame\]/, "the session frame rule is not in the mobile sheet");
+	assert.match(phone, /\[data-rdsh-folder-frame\]/, "the folder frame rule is not in the mobile sheet");
 	assert.doesNotMatch(phone, /@media \(max-width: 767px\)/, "the mobile sheet regained a max-width wrapper");
 	// The drawer header toggle: every pointer state is label-primary on a
 	// transparent background, no Android tap flash, and no delayed tooltip.
@@ -416,8 +417,43 @@ test("dispose removes the mobile hooks, including the colour frame", () => {
 	);
 	const phoneCss = cssTemplate("CSS_PHONE");
 	assert.match(phoneCss, /\[data-rdsh-session-frame\]/, "the session frame rule is not in the mobile stylesheet");
+	assert.match(phoneCss, /\[data-rdsh-folder-frame\]/, "the folder frame rule is not in the mobile stylesheet");
 	assert.doesNotMatch(phoneCss, /@media \(max-width: 767px\)/, "the frame is behind a width wrapper again");
 	assert.match(CLIENT, /"data-rdsh-session-frame",/, "the frame hook is not in the cleanup list");
+	assert.match(CLIENT, /"data-rdsh-folder-frame",/, "the folder frame hook is not in the cleanup list");
+	assert.match(CLIENT, /"data-rdsh-folder-menu",/, "the folder menu hook is not in the cleanup list");
+});
+
+test("folder frames reuse the native menu cell and claim only the folder portal", () => {
+	// The icon looked misaligned because the item carried its own padding, gap
+	// and 16px seat. It is now the same MenuItemButton native pin/rename use.
+	const item = functionHead("ColorFrameMenuItem", 1600);
+	assert.match(item, /require\("@deepseek-ai\/dsh-client-ui-primitives"\)/, "the colour-frame row does not use the shell primitive");
+	assert.match(item, /MenuItemButton/, "the colour-frame row no longer renders MenuItemButton");
+	assert.match(item, /icon: frameIcon\(\)/, "the frame glyph is not passed through the native icon seat");
+	assert.doesNotMatch(item, /rdsh-frame-menu-item/, "the hand-built menu cell came back");
+	const phone = cssTemplate("CSS_PHONE");
+	assert.doesNotMatch(phone, /\.rdsh-frame-menu-item/, "the custom menu-cell geometry came back");
+	assert.doesNotMatch(phone, /\.rdsh-frame-menu-icon/, "the custom icon seat came back");
+
+	// No slot exists for the workspace menu: ownership is the portal the click
+	// opened, linked aria-controls <-> id. Labels are never read.
+	assert.match(CLIENT, /const SESSION_FRAME_KEY = "rdsh-mobile-ux:session-frames"/, "the session key moved");
+	assert.match(CLIENT, /const FOLDER_FRAME_KEY = "dsh-mobile-maxxing:folder-frames"/, "the folder key is not the dsh namespace");
+	const attach = functionHead("attachFolderMenu", 2600);
+	assert.match(attach, /menu\.setAttribute\(FOLDER_MENU_ATTR/, "the claimed portal is not marked");
+	assert.match(attach, /button\.setAttribute\("aria-controls", id\)/, "the anchor does not own the portal by aria-controls");
+	assert.match(attach, /MenuItemButton/, "the folder row is not the native menu cell");
+	const decorateAt = CLIENT.indexOf("function decorateFolderMenu(");
+	const decorate = CLIENT.slice(decorateAt, CLIENT.indexOf("\n    function showFramePalette", decorateAt));
+	assert.match(decorate, /!pending\.known\.has\(node\)/, "a menu that was already open can be claimed");
+	assert.match(decorate, /!node\.hasAttribute\(FOLDER_MENU_ATTR\)/, "an already-decorated portal can be claimed twice");
+	assert.doesNotMatch(decorate, /textContent|aria-label|labelOf/, "a folder menu was matched by its copy");
+	const arm = functionHead("armFolderMenu", 1200);
+	assert.match(arm, /folderRowMenuButton\(row\) !== button/, "a non-menu row action can arm the claim");
+	assert.match(arm, /workspaceKeyOf\(row\) === ""/, "the Ungrouped bucket can arm a folder claim");
+	const escape = functionHead("onKeyDown", 400);
+	assert.match(escape, /closeFramePalette\(\)/, "Escape does not close the frame palette");
 });
 
 test("the live-speed poller only runs in mobile mode", () => {

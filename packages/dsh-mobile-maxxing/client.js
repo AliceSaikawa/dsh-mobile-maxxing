@@ -3277,7 +3277,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (menu !== null && hideOnThisDevice) {
         const items = [...menu.querySelectorAll("[role='menuitem']")];
         const localised = items.find((item) => (item.textContent || "").includes(t("sessionId.label")));
-        const stock = items.find((item) => /^Copy Session ID$/i.test(labelOf(item)));
+        // The upstream row is localised too (ja: セッション ID をコピー), so the
+        // duplicate has to be recognised from the PROBES vocabulary, not an
+        // English-only pattern.
+        const stockLabel = probeRegex("sessionIdCopy", "i", "Copy Session ID", true);
+        const stock = stockLabel === null ? undefined : items.find((item) => stockLabel.test(labelOf(item)));
         if (localised !== undefined && stock !== undefined) {
           stock.setAttribute("data-rdsh-hidden", "");
         }
@@ -3436,12 +3440,28 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         // The row actions carry the "..." menu plus archive/pin shortcuts. On a
         // phone only the menu earns its width; the shortcuts stay in the menu.
         const actions = children.find((child) => classToken(child, /_rowActions$/));
-        if (actions) {
-          for (const button of actions.querySelectorAll("button")) {
-            if (/^Session actions/i.test(button.getAttribute("aria-label") || "")) button.removeAttribute("data-rdsh-row-minor");
-            else button.setAttribute("data-rdsh-row-minor", "");
-          }
-        }
+        if (actions) decorateRowActions(actions);
+      }
+    }
+
+    /**
+     * Hide a row's shortcut actions on a phone, keeping its "..." menu (#97).
+     *
+     * The menu must be found structurally, never by its localised label (ja:
+     * "{name} のセッション操作"; zh attaches it to the name too): upstream renders
+     * the Menu anchor first and appends the row-action slot entries after it,
+     * and only the anchor owns a popup. The English prefix stays as a fallback
+     * for a shell whose anchor carries no popup attribute.
+     */
+    function decorateRowActions(actions) {
+      const buttons = [...actions.querySelectorAll("button")];
+      const menu = buttons.find((button) => button.hasAttribute("aria-haspopup") || button.hasAttribute("aria-expanded"))
+        ?? actions.querySelector(ariaContainsSelector("button", "sessionActions", "Session actions"))
+        ?? buttons[0]
+        ?? null;
+      for (const button of buttons) {
+        if (button === menu) button.removeAttribute("data-rdsh-row-minor");
+        else button.setAttribute("data-rdsh-row-minor", "");
       }
     }
 
@@ -3539,6 +3559,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       "data-rdsh-toast-dismissed",
       "data-rdsh-model-search",
       "data-rdsh-model-search-row",
+      "data-rdsh-model-menu",
       "data-rdsh-model-button",
       "data-rdsh-settings-nav-arrow",
       "data-rdsh-nav-scroll",
@@ -3662,6 +3683,16 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       removeRightPanelHeading();
     }
 
+    /**
+     * The edit summary card's headline ("Edited 3 files"), per locale.
+     *
+     * The count is rendered into the template, so each vocabulary entry is
+     * turned into a pattern once; matching the English text alone is what
+     * stopped this decoration in a ja shell (#97).
+     */
+    const EDITED_FILES = probeValues("editedFiles", ["Edited {count} files"])
+      .map((template) => new RegExp(`^${template.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").split("\\{count\\}").join("\\d[\\d,]*")}$`));
+
     function decorateEditCards() {
       for (const element of document.querySelectorAll("[data-rdsh-edit-card]")) element.removeAttribute("data-rdsh-edit-card");
       for (const element of document.querySelectorAll("[data-rdsh-edit-header], [data-rdsh-edit-row]")) {
@@ -3673,7 +3704,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (!phone()) return;
       for (const element of document.querySelectorAll("span, div")) {
         if (element.children.length !== 0) continue;
-        if (!/^Edited \d+ files?$/.test((element.textContent || "").trim())) continue;
+        if (!EDITED_FILES.some((pattern) => pattern.test((element.textContent || "").trim()))) continue;
         const card = element.closest('[class*="_card"]');
         if (card === null) continue;
         card.setAttribute("data-rdsh-edit-card", "");
@@ -3728,11 +3759,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * toggle attribute and keep the English label for builds without it.
      */
     function visibleCollapseButton() {
-      // Two lookups, not one comma selector: the exact English label stays
-      // the first path for builds that expose only that string.
-      const english = document.querySelectorAll('[aria-label="Collapse right sidebar"]');
+      // Two lookups, not one comma selector. The stable toggle attribute goes
+      // first; the label (localised through PROBES, English fallback) is only
+      // for a build that does not expose it.
       const structural = document.querySelectorAll("button[data-sidebar-right-toggle]");
-      for (const button of [...english, ...structural]) {
+      const labelled = document.querySelectorAll(ariaLabelSelector("button", "rightPanelCollapse", "Collapse right sidebar"));
+      for (const button of [...structural, ...labelled]) {
         // Visibility is deliberately not part of this: the real panel keeps
         // its chrome mounted while closed (clipped to a zero-width column and
         // parked off-screen), and its rect stays non-zero. Only a panel that
@@ -4861,6 +4893,25 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     let modelMenuNaturalWidth = null;
 
     /**
+     * The open model picker (#97).
+     *
+     * The picker is portalled and carries a CSS-module class whose hash prefix
+     * changes between builds, so a literal `[class*="_7KE1Ra_menu"]` silently
+     * stops matching (#76). While the trigger is open it points at the menu
+     * with `aria-controls`; that is the structural path. The class suffix plus
+     * a menu role is the fallback for a shell without `aria-controls`.
+     */
+    function modelMenu() {
+      const trigger = modelTrigger();
+      const id = trigger === null ? "" : trigger.getAttribute("aria-controls") || "";
+      if (id !== "") {
+        const controlled = document.getElementById(id);
+        if (controlled !== null) return controlled;
+      }
+      return document.querySelector('[class*="_menu"][role="menu"], [class*="_menu"][role="group"]');
+    }
+
+    /**
      * Keep the open picker inside the safe area of the visible viewport.
      *
      * Upstream positions the menu with a 12px margin against
@@ -4968,16 +5019,21 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     function decorateModelSearch() {
       if (!phone()) {
         clearModelSearch();
+        clearOwnedAttribute("data-rdsh-model-menu");
         return;
       }
       // The picker was closed and React took the input with it. Forget the tap
       // that enabled it, so the next open starts disabled again.
       if (modelSearchState !== null && !modelSearchState.input.isConnected) clearModelSearch();
-      const menu = document.querySelector('[class*="_7KE1Ra_menu"]');
+      const menu = modelMenu();
       if (menu === null) {
         clearModelMenuWatch();
+        clearOwnedAttribute("data-rdsh-model-menu");
         return;
       }
+      // The picker's own class hash is not stable, so the stylesheet keys off
+      // this hook instead (and clears it with the rest of PHONE_HOOKS).
+      menu.setAttribute("data-rdsh-model-menu", "");
       // The root pane (Model / Effort rows) has no search field, but it is
       // the same upstream menu and needs the same safe-area clamp.
       const input = menu.querySelector("input");
@@ -4992,7 +5048,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       watchModelMenu(menu);
       if (!input.hasAttribute("data-rdsh-model-search")) {
         input.setAttribute("data-rdsh-model-search", "");
-        const row = input.closest('[class*="_7KE1Ra_searchRow"]') ?? input.parentElement;
+        const row = input.closest('[class*="_searchRow"]') ?? input.parentElement;
         if (row !== null) {
           row.setAttribute("data-rdsh-model-search-row", "");
           // The picker focuses this field by itself when it opens the model
@@ -6545,15 +6601,15 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     function sidebarToggle(collapseOnly = false) {
       const sidebar = document.querySelector('[data-slot="sidebar"]');
       if (sidebar === null) return null;
-      // Upstream's sidebar ships en and zh only. Both "Open" labels would open
-      // the drawer again, so closeDrawer never clicks one, however it was found.
-      // The zh label is escaped: it is a match target here, not UI copy.
-      const openLabels = ["Open sidebar", "\u6253\u5f00\u4fa7\u8fb9\u680f"];
+      // Every "Open" label would open the drawer again, so closeDrawer never
+      // clicks one, however it was found. The labels come from PROBES, so a
+      // localised shell is covered without hardcoding its language here.
+      const openLabels = probeValues("sidebarOpen", ["Open sidebar"]);
       const canCollapse = (button) => button !== null
         && (!collapseOnly || !openLabels.includes(button.getAttribute("aria-label")));
       const labelled = sidebar.querySelector(collapseOnly
-        ? 'button[aria-label="Collapse sidebar"]'
-        : 'button[aria-label="Open sidebar"], button[aria-label="Collapse sidebar"]');
+        ? ariaLabelSelector("button", "sidebarCollapse", "Collapse sidebar")
+        : `${ariaLabelSelector("button", "sidebarOpen", "Open sidebar")}, ${ariaLabelSelector("button", "sidebarCollapse", "Collapse sidebar")}`);
       if (canCollapse(labelled)) return labelled;
       // Localised label: the toggle is the only labelled button with a direct
       // SVG icon in the sidebar's drag header (the brand logo is wrapped).
@@ -6585,11 +6641,59 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     const ADD_STOCK_LABEL = t("add.stock");
     const ADD_SELECTOR = `[data-rdsh-add], [aria-label="${ADD_LABEL}"], [aria-label="${ADD_STOCK_LABEL}"]`;
 
+    /** The composer card that owns the input and its control row. */
+    function composerCard() {
+      const composer = document.querySelector("[data-composer-input]");
+      return composer === null ? null : composer.closest('[class*="_card"]');
+    }
+
+    /**
+     * The composer's model trigger (#97).
+     *
+     * Upstream renders the trigger as a button whose children are the CSS
+     * module spans `triggerLabel` / `triggerEffort`. Only the suffix is
+     * stable — the hash in front of it changes between builds (#76) — so the
+     * button is found by walking up from those spans, never by its label. The
+     * label is localised (ja: "モデルを選択（現在 …）"), which is exactly why the
+     * old English-prefix lookup silently stopped matching.
+     *
+     * The model slot bounds the search when this shell publishes slots; inside
+     * it the `triggerEffort` span is unique (the permission select in the same
+     * card has a `triggerLabel` but no effort). The English prefix stays as the
+     * last resort for an older shell.
+     */
+    function modelTrigger() {
+      const slot = document.querySelector('[data-slot="conversation.input.model"]');
+      const card = composerCard();
+      const scopes = [slot, card].filter((scope) => scope !== null && scope !== undefined);
+      for (const scope of scopes) {
+        for (const button of scope.querySelectorAll("button")) {
+          if (button.querySelector('[class*="triggerEffort"]') !== null) return button;
+        }
+      }
+      // A model without a reasoning effort renders no effort span. The slot is
+      // then the only way to tell the model trigger from the permission
+      // select's own label in the same card.
+      if (slot !== null && slot !== undefined) {
+        for (const button of slot.querySelectorAll("button")) {
+          if (button.querySelector('[class*="triggerLabel"]') !== null) return button;
+        }
+      }
+      // No slot either: only the model seat wraps its trigger in the picker's
+      // own `root` element, which is what separates it from the permission
+      // select's label-only button in the same card.
+      if (card !== null) {
+        for (const button of card.querySelectorAll("button")) {
+          if (button.querySelector('[class*="triggerLabel"]') !== null && classToken(button.parentElement, /_root$/)) return button;
+        }
+      }
+      return document.querySelector('button[aria-label^="Select model"]');
+    }
+
     function addButton() {
       // Structure first: the composer's only listbox trigger is the "+" button.
       // Labels are localised, so they are only the fallback.
-      const composer = document.querySelector("[data-composer-input]");
-      const card = composer === null ? null : composer.closest('[class*="_card"]');
+      const card = composerCard();
       const structural = card === null ? null : card.querySelector('button[aria-haspopup="listbox"]');
       return structural || document.querySelector(ADD_SELECTOR);
     }
@@ -6619,9 +6723,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         clearComposerHooks();
         return;
       }
-      for (const model of document.querySelectorAll('button[aria-label^="Select model"]')) {
-        model.setAttribute("data-rdsh-model-button", "");
-      }
+      const model = modelTrigger();
+      if (model !== null) model.setAttribute("data-rdsh-model-button", "");
       const add = addButton();
       if (add === null) {
         document.documentElement.removeAttribute("data-rdsh-has-dock");
@@ -6670,6 +6773,23 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     let lastSlowAt = 0;
+
+    /**
+     * The session breadcrumb navigation (#97).
+     *
+     * `showTitlePopover()` and the header typing both hang off this one node,
+     * so the tag must survive a localised shell. Upstream renders the nav
+     * inside `header[data-window-drag]` with the CSS-module `crumbs` suffix;
+     * the session-header slot bounds it on a shell that publishes slots. The
+     * localised label is matched through PROBES as the last resort.
+     */
+    function sessionHierarchy() {
+      const slot = document.querySelector('[data-slot="conversation.session.header"] nav');
+      if (slot !== null) return slot;
+      const structural = document.querySelector('header[data-window-drag] nav[class*="_crumbs"]');
+      if (structural !== null) return structural;
+      return document.querySelector(ariaLabelSelector("nav", "sessionHierarchy", "Session hierarchy"));
+    }
 
     function decorateFast() {
       // One mode decision per pass. Every tag below belongs to the mobile
@@ -6734,7 +6854,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       decorateStatsDock();
       enforceNoZoomViewport();
       if (onPhone) {
-        const crumbs = document.querySelector('nav[aria-label="Session hierarchy"]');
+        const crumbs = sessionHierarchy();
         if (crumbs !== null) crumbs.setAttribute("data-rdsh-crumbs", "");
         for (const slot of document.querySelectorAll('[data-slot="main.conversation"], [data-slot="conversation"]')) {
           slot.setAttribute("data-rdsh-conversation", "");
@@ -6867,7 +6987,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // drawer; the stock global label is only the fallback for a route with
       // no sidebar slot.
       const button = sidebarToggle()
-        ?? document.querySelector('[aria-label="Open sidebar"], [aria-label="Collapse sidebar"]');
+        ?? document.querySelector(`${ariaLabelSelector("button", "sidebarOpen", "Open sidebar")}, ${ariaLabelSelector("button", "sidebarCollapse", "Collapse sidebar")}`);
       if (button !== null) button.click();
     }
 
@@ -6886,7 +7006,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         // Collapse-only fallback for a route whose frame has no sidebar slot;
         // the selector can never match a control that says "Open".
         const collapse = sidebarToggle(true)
-          ?? document.querySelector('[aria-label="Collapse sidebar"]');
+          ?? document.querySelector(ariaLabelSelector("button", "sidebarCollapse", "Collapse sidebar"));
         if (collapse !== null) {
           collapse.click();
         } else {
@@ -9021,7 +9141,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         if (dx > -64) return;
         edgeSwipe = null;
         if (event.cancelable) event.preventDefault();
-        document.querySelector('[aria-label="Open right sidebar"]')?.click();
+        (document.querySelector("[data-sidebar-right-expand]")
+          ?? document.querySelector(ariaLabelSelector("button", "rightPanelOpen", "Open right sidebar")))?.click();
         return;
       }
       if (dx < 64) return;
@@ -10187,8 +10308,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (!phone()) return;
       const target = event.target;
       if (target === null || target === undefined || target.closest === undefined) return;
-      const root = target.closest('[class*="_7KE1Ra_root"]');
-      const menu = document.querySelector('[class*="_7KE1Ra_menu"]');
+      const trigger = modelTrigger();
+      const root = trigger === null ? null : trigger.parentElement;
+      const menu = modelMenu();
       if (menu === null) return;
       if (root === null && !menu.contains(target)) return;
       const related = event.relatedTarget;
@@ -10206,7 +10328,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // Popovers (the model picker's search, dialogs, etc.) focus their own
       // inputs programmatically. Blurring those closes the popover because the
       // menu's onBlur sees no related focus target.
-      if (field.closest('[role="menu"], [role="dialog"], [role="listbox"], [class*="_7KE1Ra_menu"], .xterm, [class*="xterm"]') !== null) return;
+      if (field.closest('[role="menu"], [role="dialog"], [role="listbox"], [class*="_menu"], .xterm, [class*="xterm"]') !== null) return;
       if (field === allowFocusElement && Date.now() <= allowFocusUntil) return;
       // Deferred: Safari/the app re-focuses synchronously from its onFocus
       // handler, so an immediate blur() recurses until the stack overflows.
@@ -10469,7 +10591,13 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       for (const img of root.querySelectorAll("img")) {
         if ((img.currentSrc || img.src) !== src) continue;
         const item = img.closest('[class*="_imageItem"]');
-        return { src, img, item, remove: item?.querySelector('button[aria-label^="Remove image"]') ?? null };
+        // The remove control is the CSS-module `remove` button inside the
+        // item; its label is localised (ja: "画像 {name} を削除"), so match the
+        // stable suffix and fall back to the item's only labelled button.
+        const remove = item?.querySelector('button[class*="_remove"]')
+          ?? item?.querySelector("button[aria-label]")
+          ?? null;
+        return { src, img, item, remove };
       }
       return null;
     }
@@ -10724,9 +10852,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
             let tries = 0;
             const timer = setInterval(() => {
               const root = document.querySelector('[data-rdsh-composer-root]');
-              const remove = root === null ? null : [...root.querySelectorAll("button")]
-                .find((button) => button.getAttribute("aria-label") === `Remove image ${name}`);
-              const img = remove?.closest('[class*="_imageItem"]')?.querySelector("img") ?? null;
+              // Find the new thumbnail by the file name upstream writes into
+              // the img's alt, not by the localised remove label (#97).
+              const item = root === null ? null : [...root.querySelectorAll('[class*="_imageItem"]')]
+                .find((candidate) => (candidate.querySelector("img")?.getAttribute("alt") || "") === name) ?? null;
+              const img = item?.querySelector("img") ?? null;
               if (img !== null) {
                 clearInterval(timer);
                 const newSrc = img.currentSrc || img.src;
@@ -12792,7 +12922,10 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
     flex: 1 1 auto !important;
     min-width: 0 !important;
   }
-  [data-rdsh-model-button] [class*="triggerEffort"] {
+  /* #97: the second selector survives the JS hook going missing (an
+     unrecognised model trigger); triggerEffort is unique to the model seat. */
+  [data-rdsh-model-button] [class*="triggerEffort"],
+  [data-rdsh-composer-root] [class*="triggerEffort"] {
     flex: 0 0 auto !important;
     width: auto !important;
     max-width: none !important;
@@ -13086,10 +13219,12 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   [data-shortcut-modal="settings"] [class*="zGbnIq_rowActions"] { flex-shrink: 0; gap: 6px; }
   [data-shortcut-modal="settings"] [class*="zGbnIq_rowActions"] button { padding-left: 10px !important; padding-right: 10px !important; }
 
-  /* Model picker: value never runs into the chevron. */
-  [class*="_7KE1Ra_menu"] { max-width: calc(100vw - 24px) !important; box-sizing: border-box !important; }
-  [class*="_7KE1Ra_cell"] { min-width: 0 !important; gap: 8px !important; }
-  [class*="_7KE1Ra_cell"] > span:last-of-type { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Model picker: value never runs into the chevron. The menu class hash
+     changes between builds (#76), so the JS hook scopes the rule and only the
+     stable cell suffix is matched. */
+  [data-rdsh-model-menu] { max-width: calc(100vw - 24px) !important; box-sizing: border-box !important; }
+  [data-rdsh-model-menu] [class*="_cell"] { min-width: 0 !important; gap: 8px !important; }
+  [data-rdsh-model-menu] [class*="_cell"] > span:last-of-type { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   [data-rdsh-model-search]:disabled { opacity: 1 !important; cursor: text; }
 
   /* Agent question / plan review card: use the same 16px gutter and 349px
@@ -13476,8 +13611,13 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   /* The preview's close control is drawn as a panel glyph, which reads as
      "collapse this pane" rather than "leave the preview". Swap it for an X,
      the same glyph the tab close buttons already use. */
-  [data-rdsh-rightpanel] [aria-label="Collapse right sidebar"] svg,
+  /* #97: the panel toggle's label is localised, so the stable upstream
+     attribute carries the glyph swap; the English label stays for an older
+     shell that does not emit it. */
+  [data-rdsh-rightpanel] [data-sidebar-right-toggle] svg,
+  [data-sidebar-right-toggle] svg,
   [aria-label="Collapse right sidebar"] svg { display: none !important; }
+  [data-sidebar-right-toggle]::before,
   [aria-label="Collapse right sidebar"]::before {
     content: ""; width: 16px; height: 16px; display: block;
     background: currentColor;

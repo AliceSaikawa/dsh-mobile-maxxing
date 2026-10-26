@@ -385,7 +385,7 @@ function drawerClosedAfterTapping(label, { narrow = true, mode = "mobile" } = {}
 		schedule: (callback) => timers.push(callback),
 		configureDocument(doc) {
 			doc.getElementById = (id) => (id === "root" ? root : null);
-			doc.querySelector = (selector) => (selector === '[aria-label="Collapse sidebar"]' ? collapse : null);
+			doc.querySelector = (selector) => (selector.includes("Collapse sidebar") ? collapse : null);
 			doc.addEventListener = (type, handler) => {
 				if (type === "click") clickHandlers.push(handler);
 			};
@@ -1108,7 +1108,9 @@ test("a rightward swipe closes an open right panel from the left edge too", () =
 			doc.documentElement.setAttribute("data-rdsh-rightpanel-open", "");
 			doc.addEventListener = (type, handler) => documentHandlers.push([type, handler]);
 			doc.querySelector = () => null;
-			doc.querySelectorAll = (selector) => (selector === '[aria-label="Collapse right sidebar"]' ? [collapse] : []);
+			// #97: upstream marks the panel toggle with a stable data attribute.
+			collapse.setAttribute("data-sidebar-right-toggle", "");
+			doc.querySelectorAll = (selector) => (selector.includes("data-sidebar-right-toggle") ? [collapse] : []);
 		},
 	});
 	const handler = (type, name) => [...documentHandlers].reverse()

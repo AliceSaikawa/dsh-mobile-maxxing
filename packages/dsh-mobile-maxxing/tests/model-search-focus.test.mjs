@@ -19,8 +19,11 @@ import vm from "node:vm";
 
 const source = readFileSync(new URL("../client.js", import.meta.url), "utf8");
 const block = source.match(/    let modelSearchState = null;[\s\S]*?\n    function decorateModelSearch\(\) \{[\s\S]*?\n    \}/)[0];
-const MENU_SELECTOR = '[class*="_7KE1Ra_menu"]';
-const ROW_SELECTOR = '[class*="_7KE1Ra_searchRow"]';
+// #97: the picker no longer carries a literal class hash. The fallback path
+// (no aria-controls) matches the `menu` suffix plus a menu role; the search row
+// is likewise matched by its suffix.
+const MENU_SELECTOR = '[class*="_menu"][role="menu"], [class*="_menu"][role="group"]';
+const ROW_SELECTOR = '[class*="_searchRow"]';
 
 /** A node with the attribute, listener and focus surface the block touches. */
 function element(document, tagName) {
@@ -101,6 +104,9 @@ function fixture({ mobile = true } = {}) {
 		// #84 reads the visible viewport; this fixture never measures layout.
 		window: { innerWidth: 390, visualViewport: { width: 390, offsetLeft: 0 } },
 		safeInset: () => 0,
+		// The block's structural menu lookup reads these from the module scope.
+		modelTrigger: () => null,
+		clearOwnedAttribute: () => {},
 		requestAnimationFrame(callback) {
 			frames.push(callback);
 			return frames.length;

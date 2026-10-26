@@ -643,6 +643,25 @@ export const PROBES = {
 	split: ["Split", "分割"],
 	/** The Conversation view tab that opens the Trajectory view (#75). */
 	trajectoryTab: ["Trajectory", "軌跡", "轨迹", "トラジェクトリ"],
+	/** The composer's model trigger. The label carries the current model and
+	 *  effort, so only its opening words are stable ("モデルを選択（現在 …）"). */
+	modelTrigger: ["Select model", "选择模型", "モデルを選択"],
+	/** The breadcrumb navigation above the chat (#97). */
+	sessionHierarchy: ["Session hierarchy", "会话层级", "セッション階層"],
+	/** A session row's "..." trigger: en puts it first, zh/ja attach it to the
+	 *  session name ("{name} のセッション操作"). */
+	sessionActions: ["Session actions", "的操作", "のセッション操作"],
+	/** The stock "copy this session's ID" menu row. This plugin adds its own
+	 *  localised row, and both must be recognised to keep only one. */
+	sessionIdCopy: ["Copy Session ID", "复制 Session ID", "セッション ID をコピー"],
+	/** The edit summary card's headline, with {count} as the file count. */
+	editedFiles: ["Edited {count} files", "已编辑 {count} 个文件", "{count} ファイルを編集しました"],
+	/** The left drawer's toggle, in both states. */
+	sidebarOpen: ["Open sidebar", "打开侧边栏", "サイドバーを開く"],
+	sidebarCollapse: ["Collapse sidebar", "收起侧边栏", "サイドバーを折りたたむ"],
+	/** The right panel's toggle, in both states. */
+	rightPanelOpen: ["Open right sidebar", "打开右侧边栏", "右サイドバーを開く"],
+	rightPanelCollapse: ["Collapse right sidebar", "收起右侧边栏", "右サイドバーを折りたたむ"],
 };
 
 /** Keys the service worker needs, picked out of {@link COPY}. */

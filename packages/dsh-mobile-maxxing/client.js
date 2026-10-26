@@ -10158,7 +10158,9 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
 html:has([data-rdsh-route-detail]) .rdsh-mux-fab { display: none !important; }
 [data-rdsh-route-detail="back"] { padding-top: 56px !important; }
 .rdsh-mux-route-back {
-  position: fixed; left: 8px; top: calc(env(safe-area-inset-top, 0px) + 8px);
+  /* #59: the route back button shares the drawer button's corner, so it has to
+     follow the same landscape notch inset. */
+  position: fixed; left: calc(env(safe-area-inset-left, 0px) + 8px); top: calc(env(safe-area-inset-top, 0px) + 8px);
   width: 40px; height: 40px; border: 0; border-radius: 12px; z-index: 40;
   display: none; align-items: center; justify-content: center;
   color: var(--dsw-alias-label-primary, #f9fafb);
@@ -10579,7 +10581,13 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
        keeps its rows clear of it (a fixed layer ignores #root's padding). */
     padding-left: env(safe-area-inset-left, 0px);
     padding-right: env(safe-area-inset-right, 0px);
-    width: 280px !important; max-width: 86vw; height: 100dvh !important; min-height: 100dvh;
+    /* #59: the outer width must hold the 280px content plus both notch
+       paddings. A fixed 280px let the padding eat 59px from every row on a
+       landscape phone; the 86vw cap applies to the content, so the insets are
+       added to the cap as well. */
+    width: calc(280px + env(safe-area-inset-left, 0px) + env(safe-area-inset-right, 0px)) !important;
+    max-width: calc(86vw + env(safe-area-inset-left, 0px) + env(safe-area-inset-right, 0px));
+    height: 100dvh !important; min-height: 100dvh;
     z-index: 50; overflow: hidden;
     transform: translateX(-104%);
     transition: transform var(--rdsh-slide-ms) var(--rdsh-slide-ease), box-shadow var(--rdsh-slide-ms) var(--rdsh-slide-ease);
@@ -11229,6 +11237,21 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   [data-rdsh-edit-header] { height: 44px !important; min-height: 44px !important; padding: 4px 10px !important; }
   [data-rdsh-edit-row] { height: 26px !important; padding-top: 2px !important; padding-bottom: 2px !important; }
 
+  /* #59: the safe-area padding belongs to upstream's own panel surface
+     ([data-sidebar-right-panel], verified in
+     @deepseek-ai/dsh-client-ui-sidebar-right 0.2.1-rc.2: absolute against the
+     frame's right edge, width 100vw in fullscreen). In fullscreen that puts the
+     left edge at -safe-right, so the tab strip, path and file tree lost the
+     first notch width; a pushed panel is already inside #root's padded frame
+     and must not be padded again. Vertical insets come from #root, which the
+     frame and every panel mode already sit inside. */
+  [data-sidebar-right-panel="fullscreen"] {
+    box-sizing: border-box !important;
+    right: calc(-1 * env(safe-area-inset-right, 0px)) !important;
+    padding-left: env(safe-area-inset-left, 0px) !important;
+    padding-right: env(safe-area-inset-right, 0px) !important;
+  }
+
   /* Right panel: never wider than the phone, wide tables scroll inside it. */
   [data-rdsh-rightpanel] {
     max-width: 100vw !important; overflow-x: hidden;
@@ -11238,12 +11261,9 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
        this layer only has to stay in the sheet's own context. */
     isolation: isolate;
     box-sizing: border-box;
-    /* #59: the sheet is viewport-anchored. A zero top put the tab strip and the
-       path under the status bar, and the sides ran under a landscape notch. */
-    padding-top: env(safe-area-inset-top, 0px) !important;
-    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + var(--rdsh-native-gap-px, 0px)) !important;
-    padding-left: env(safe-area-inset-left, 0px) !important;
-    padding-right: env(safe-area-inset-right, 0px) !important;
+    /* No safe-area padding here: the stable panel surface above owns it. Adding
+       it to this full-width pane as well double-insets the panel (and cost 47px
+       of height in portrait). */
   }
   /* The preview's close control is drawn as a panel glyph, which reads as
      "collapse this pane" rather than "leave the preview". Swap it for an X,

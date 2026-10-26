@@ -252,6 +252,13 @@ test("the route detail's back affordance lives in the mobile stylesheet only", (
 		"the task detail has no top inset for the back button",
 	);
 	assert.match(phone, /\.rdsh-mux-route-back\[data-visible\] \{ display: flex; \}/, "the back button has no visible state");
+	// #59: the button sits in the drawer button's corner, so a landscape notch
+	// must move it exactly like the FAB.
+	assert.match(
+		phone,
+		/\.rdsh-mux-route-back \{[^}]*left: calc\(env\(safe-area-inset-left, 0px\) \+ 8px\); top: calc\(env\(safe-area-inset-top, 0px\) \+ 8px\);/,
+		"the back button still uses the fixed 8px gutter",
+	);
 	assert.doesNotMatch(device, /data-rdsh-route-detail|rdsh-mux-route-back/, "a route back rule leaked into the device sheet");
 
 	// The node is built in the same mobile-only branch as the drawer button.

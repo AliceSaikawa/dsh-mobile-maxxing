@@ -20,8 +20,9 @@ import vm from "node:vm";
 
 const source = readFileSync(new URL("../client.js", import.meta.url), "utf8");
 const block = source.match(/    let modelSearchState = null;[\s\S]*?\n    function decorateModelSearch\(\) \{[\s\S]*?\n    \}/)[0];
-const MENU_SELECTOR = '[class*="_7KE1Ra_menu"]';
-const ROW_SELECTOR = '[class*="_7KE1Ra_searchRow"]';
+// #97: matched by class suffix and menu role instead of a literal hash.
+const MENU_SELECTOR = '[class*="_menu"][role="menu"], [class*="_menu"][role="group"]';
+const ROW_SELECTOR = '[class*="_searchRow"]';
 
 /** The inline-style surface the menu and this module share. */
 function styleSheet(initial = {}) {
@@ -148,6 +149,9 @@ function fixture({ mobile = true, width = 390, visualWidth = width, insetLeft = 
 			visualViewport: { width: visualWidth, offsetLeft: viewportLeft },
 		},
 		safeInset: (edge) => (edge === "left" ? insetLeft : edge === "right" ? insetRight : 0),
+		// The block's structural menu lookup reads these from the module scope.
+		modelTrigger: () => null,
+		clearOwnedAttribute: () => {},
 		MutationObserver: FakeMutationObserver,
 		requestAnimationFrame(callback) {
 			frames.push(callback);

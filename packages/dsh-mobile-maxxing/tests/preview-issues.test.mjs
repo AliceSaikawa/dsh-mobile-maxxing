@@ -599,6 +599,8 @@ function makePreview(env, { secondary = ["Reload", "Save"], hidden = true } = {}
 	};
 	panel.getBoundingClientRect = screenRect;
 	const collapse = document.createElement("button");
+	// #97: the panel toggle is found by its stable attribute, not its label.
+	collapse.setAttribute("data-sidebar-right-toggle", "");
 	collapse.setAttribute("aria-label", "Collapse right sidebar");
 	collapse.getBoundingClientRect = () => ({ x: 0, y: 0, top: 0, left: 0, right: 30, bottom: 30, width: 30, height: 30 });
 	panel.append(collapse);
@@ -1264,6 +1266,8 @@ function makeSidebarPanel(env, { type = "terminal" } = {}) {
 		strip.append(chip);
 	}
 	const collapse = document.createElement("button");
+	// #97: upstream's stable toggle attribute; the localised label is not used.
+	collapse.setAttribute("data-sidebar-right-toggle", "");
 	collapse.setAttribute("aria-label", "Collapse right sidebar");
 	collapse.getBoundingClientRect = () => ({ x: 0, y: 0, top: 0, left: 0, right: 30, bottom: 30, width: 30, height: 30 });
 	strip.append(collapse);

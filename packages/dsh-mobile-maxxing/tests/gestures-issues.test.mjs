@@ -849,11 +849,14 @@ function panelFixture(doc, width = 390) {
 	const collapse = new FakeElement("button");
 	panel._closest = (selector) => (selector === "[data-sidebar-right-panel]" ? root : null);
 	panel._rect = () => ({ x: 0, y: 0, top: 0, left: 0, right: width, bottom: 800, width, height: 800 });
+	// #97: upstream marks the toggle with a stable data attribute; the label is
+	// localised and only a fallback.
+	collapse.setAttribute("data-sidebar-right-toggle", "");
 	collapse.setAttribute("aria-label", "Collapse right sidebar");
 	collapse._closest = (selector) => (selector === "[data-sidebar-right-panel]" ? root : null);
 	collapse._rect = () => ({ x: width - 90, y: 10, top: 10, left: width - 90, right: width - 66, bottom: 34, width: 24, height: 24 });
 	collapse.parentElement = panel;
-	doc.querySelectorAll = (selector) => (selector === '[aria-label="Collapse right sidebar"]' ? [collapse] : []);
+	doc.querySelectorAll = (selector) => (selector.includes("data-sidebar-right-toggle") ? [collapse] : []);
 	return { root, panel, collapse };
 }
 
@@ -989,7 +992,7 @@ function terminalFixture(doc, collapseFixture, emulator = null) {
 	doc.querySelectorAll = (selector) => {
 		if (selector === "[data-sidebar-terminal]") return [section];
 		if (selector === "[data-rdsh-terminal-fit]") return screen.hasAttribute("data-rdsh-terminal-fit") ? [screen] : [];
-		if (selector === '[aria-label="Collapse right sidebar"]') return [collapseFixture.collapse];
+		if (selector.includes("data-sidebar-right-toggle")) return [collapseFixture.collapse];
 		if (selector === "[data-rdsh-rightpanel]") return [];
 		return [];
 	};

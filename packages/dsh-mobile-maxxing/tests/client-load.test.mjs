@@ -1986,7 +1986,8 @@ test("terminal-only dark is off by default, device-local and asks for a terminal
 	assert.equal(repaint.active, hostTheme.active, "the repaint changed the shared tokens");
 	assert.equal(repaint.preference, hostTheme.preference, "the repaint changed the shared preference");
 	assert.deepEqual(repaint.fontSizes, hostTheme.fontSizes, "the repaint changed the shared fonts");
-	assert.ok(repaint.revision > hostTheme.revision, "the repaint was not distinct from the Host snapshot");
+	assert.equal(repaint.revision, hostTheme.revision,
+		"the repaint fabricated a revision the Appearance/font row stores would adopt");
 	assert.deepEqual(writes, [], "a shared theme writer was called");
 
 	api.writeTerminalDark(false);
@@ -2030,10 +2031,112 @@ test("a terminal-dark repaint keeps the device-local font projection (#79)", () 
 	assert.equal(theme.snapshot.fontSizes.text, 17, "the terminal repaint dropped the device-local font sizes");
 	assert.equal(theme.snapshot.fontSizes.code, 13, "the terminal repaint dropped the device-local font sizes");
 	assert.equal(theme.snapshot.fontSizes.terminal, 16, "the terminal repaint dropped the device-local font sizes");
+	booted.sandbox.__RDSH_MOBILE_UX__.writeTerminalDark(false);
+	assert.equal(theme.snapshot.fontSizes.text, 17, "turning terminal dark off reverted the device-local font sizes");
+	assert.equal(theme.snapshot.fontSizes.code, 13, "turning terminal dark off reverted the device-local font sizes");
+	assert.equal(theme.snapshot.fontSizes.terminal, 16, "turning terminal dark off reverted the device-local font sizes");
 	booted.disposeAll();
 	assert.equal(theme.snapshot.fontSizes.text, 14, "dispose did not restore the Host font sizes");
 	assert.equal(theme.snapshot.fontSizes.code, 11, "dispose did not restore the Host font sizes");
 	assert.equal(theme.snapshot.fontSizes.terminal, 13, "dispose did not restore the Host font sizes");
+});
+
+test("terminal-dark repaints keep Host revisions so later rows still update (#79)", async () => {
+	const hostTheme = {
+		preference: "light",
+		revision: 4,
+		fontSizes: { text: 14, code: 11, terminal: 13 },
+		fontFamilies: { text: "", code: "", terminal: "" },
+		active: { id: "light", colorScheme: "light", tokens: {} },
+		themes: [],
+	};
+	const theme = {
+		snapshot: hostTheme,
+		getTheme() { return this.snapshot; },
+		setTheme(id) { throw new Error("the shared theme writer was called: " + id); },
+		setFontSize(role, px) { throw new Error("the shared font writer was called: " + role + " " + px); },
+	};
+	let documentElement;
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		theme,
+		computedStyle: () => ({
+			backgroundColor: documentElement.hasAttribute("data-rdsh-terminal-dark") ? "#151517" : "#f9fafb",
+			color: documentElement.hasAttribute("data-rdsh-terminal-dark") ? "#f9fafb" : "#1b1b1c",
+		}),
+		configureDocument(doc) {
+			documentElement = doc.documentElement;
+		},
+	});
+	const api = booted.sandbox.__RDSH_MOBILE_UX__;
+	// Upstream Appearance/font row stores mirror the Host snapshot and ignore a
+	// revision that is not newer than the one they stored.
+	const rows = {
+		revision: hostTheme.revision,
+		preference: hostTheme.preference,
+		fontSizes: hostTheme.fontSizes,
+	};
+	booted.ctx.on("theme/change", (snapshot) => {
+		if (snapshot === null || snapshot === undefined || snapshot.revision <= rows.revision) return;
+		rows.revision = snapshot.revision;
+		rows.preference = snapshot.preference;
+		rows.fontSizes = snapshot.fontSizes;
+	});
+	// A mounted terminal subscribes through the theme store's getSnapshot and
+	// reruns getComputedStyle only when the rendered snapshot object changed.
+	const terminal = { rendered: theme.getTheme(), repaints: 0, backgrounds: [] };
+	booted.ctx.on("theme/change", () => {
+		queueMicrotask(() => {
+			const snapshot = theme.getTheme();
+			if (snapshot === terminal.rendered) return;
+			terminal.rendered = snapshot;
+			terminal.repaints += 1;
+			terminal.backgrounds.push(booted.sandbox.getComputedStyle(documentElement).backgroundColor);
+		});
+	});
+
+	api.writeTerminalDark(true);
+	await Promise.resolve();
+	assert.equal(terminal.repaints, 1, "turning terminal dark on did not repaint the mounted terminal");
+	assert.deepEqual(terminal.backgrounds, ["#151517"], "the terminal did not reread the dark surface");
+	assert.equal(theme.snapshot.revision, hostTheme.revision, "the repaint inflated the Host revision");
+	assert.equal(rows.revision, hostTheme.revision, "the repaint was adopted by the row stores");
+
+	api.writeTerminalDark(false);
+	await Promise.resolve();
+	assert.equal(terminal.repaints, 2, "turning terminal dark off did not repaint the mounted terminal");
+	assert.deepEqual(terminal.backgrounds, ["#151517", "#f9fafb"], "the terminal did not reread the light surface");
+	assert.equal(theme.snapshot.revision, hostTheme.revision, "turning terminal dark off left an inflated revision");
+	assert.equal(rows.revision, hostTheme.revision, "the repaint was adopted by the row stores");
+
+	// A later Host theme change with an ordinary revision must still land.
+	const nextTheme = {
+		...hostTheme,
+		revision: hostTheme.revision + 1,
+		preference: "dark",
+		active: { id: "dark", colorScheme: "dark", tokens: {} },
+	};
+	theme.snapshot = nextTheme;
+	booted.emit("theme/change", nextTheme);
+	await Promise.resolve();
+	assert.equal(rows.revision, nextTheme.revision, "the Appearance row froze after a terminal-dark toggle");
+	assert.equal(rows.preference, "dark", "the Appearance row kept the stale preference");
+
+	// A later Host font snapshot must still reach the font row store.
+	const fontTheme = {
+		...nextTheme,
+		revision: nextTheme.revision + 1,
+		fontSizes: { text: 18, code: 12, terminal: 15 },
+	};
+	theme.snapshot = fontTheme;
+	booted.emit("theme/change", fontTheme);
+	await Promise.resolve();
+	assert.equal(rows.revision, fontTheme.revision, "the font rows froze after a terminal-dark toggle");
+	assert.deepEqual(rows.fontSizes, fontTheme.fontSizes, "the font rows kept the stale Host sizes");
+	assert.equal(theme.snapshot.revision, fontTheme.revision, "the Host revision stayed inflated");
+	assert.equal(theme.snapshot.fontSizes.text, 18, "the Host font snapshot did not land");
+	booted.disposeAll();
 });
 
 test("a saved terminal-dark choice survives reload and a Host theme change (#79)", async () => {
@@ -2062,6 +2165,7 @@ test("a saved terminal-dark choice survives reload and a Host theme change (#79)
 	assert.equal(docEl.hasAttribute("data-rdsh-terminal-dark"), true, "the stored choice was not painted");
 	assert.notEqual(theme.snapshot, hostTheme, "the stored choice sent no repaint at boot");
 	assert.equal(theme.snapshot.active, hostTheme.active, "the boot repaint changed the shared tokens");
+	assert.equal(theme.snapshot.revision, hostTheme.revision, "the boot repaint inflated the Host revision");
 
 	const nextHost = {
 		...hostTheme,

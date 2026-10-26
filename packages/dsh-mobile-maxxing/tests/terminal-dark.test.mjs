@@ -100,6 +100,7 @@ test("the terminal is repainted through the existing theme/change path, not a ne
 	assert.match(attach, /service\.getTheme\(\)/);
 	assert.match(attach, /service\.snapshot = next/);
 	assert.match(attach, /ctx\.emit\("theme\/change", next\)/);
+	assert.doesNotMatch(attach, /revision\s*\+\s*1000/, "the repaint fabricated a revision upstream row stores would adopt");
 	assert.doesNotMatch(attach, /new\s+Terminal|new\s+xterm|\.open\(|createElement\("div"\)|appendChild/,
 		"a custom terminal mount or direct xterm handle was introduced");
 });

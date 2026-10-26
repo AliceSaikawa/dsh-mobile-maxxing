@@ -2319,6 +2319,13 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * existing terminal effect run its `getComputedStyle` pass again. The
      * snapshot is marked so this module does not mistake its own echo for a
      * Host theme change, and the latest Host snapshot is restored on dispose.
+     *
+     * The clone deliberately keeps the Host revision. Upstream Appearance and
+     * font row stores ignore a snapshot whose revision is not newer than the
+     * one they stored, so a fabricated revision here would make this synthetic
+     * repaint the last snapshot they ever accept and freeze those rows. The
+     * new object identity is what forces an already-mounted terminal to
+     * reread its computed styles; the revision stays the Host's.
      */
     function attachTerminalDark(ctx) {
       let service;
@@ -2335,7 +2342,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         let host = null;
         let projected = false;
         let projecting = false;
-        let epoch = 0;
         try {
           host = service.getTheme() ?? null;
         } catch (error) {
@@ -2350,9 +2356,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
             current = host;
           }
           if (current === null || current === undefined) return;
-          epoch += 1;
-          const revision = Number.isFinite(current.revision) ? current.revision : 0;
-          const next = { ...current, revision: revision + 1000 + epoch };
+          // Same revision as the Host: see the note on attachTerminalDark. The
+          // clone is a distinct object, which is all the terminal's snapshot
+          // subscription needs to run its getComputedStyle pass again.
+          const next = { ...current };
           Object.defineProperty(next, TERMINAL_DARK_PROJECTION, { value: true });
           Object.freeze(next);
           projected = true;
@@ -2366,7 +2373,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
             projecting = false;
             // A teardown repaint only has to make the terminal run its
             // getComputedStyle pass once; the shared snapshot goes back to the
-            // Host immediately so a dispose leaves no projected revision.
+            // Host immediately so a dispose leaves nothing projected. A live
+            // repaint keeps the clone installed until the terminal's snapshot
+            // subscription renders: restoring the Host object here would make
+            // that read return the previous identity and skip the repaint.
             if (restoreHost) {
               try {
                 service.snapshot = host;

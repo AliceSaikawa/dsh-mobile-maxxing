@@ -132,6 +132,38 @@ test("the root pads the in-flow content on every side", () => {
 	assert.match(ruleBody(phone, "html[data-rdsh-safe-top] #root"), /padding-top: env\(safe-area-inset-top, 0px\)/);
 });
 
+test("iOS 27: only a standalone WebKit app gets the fixed, unpainted top-edge box", () => {
+	const shell = cssTemplate("CSS");
+	// Everywhere else the node is inert: a Safari tab would turn its toolbar
+	// opaque, and Chromium has no top-edge blur to cancel.
+	assert.match(ruleBody(shell, ".dsh-mobile-maxxing-top-edge"), /display: none/);
+	const gate = "@supports (-webkit-touch-callout: none) {";
+	const start = shell.indexOf(gate);
+	assert.notEqual(start, -1, "the top-edge box is not limited to iOS WebKit");
+	const block = shell.slice(start, shell.indexOf("\n}\n", start));
+	const body = ruleBody(block, 'html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-top-edge');
+	// What WebKit's top-edge sampling needs: a fixed, full-width box on top of
+	// everything at the top centre, with a declared background colour.
+	for (const declaration of [
+		"display: block",
+		"position: fixed",
+		"top: 0",
+		"left: 0",
+		"right: 0",
+		"z-index: 2147483647",
+		"pointer-events: none",
+		"background-color: var(--dsw-alias-bg-base, #151517)",
+		"-webkit-background-clip: text",
+		"background-clip: text",
+	]) {
+		assert.ok(body.includes(declaration), `the top-edge box lost: ${declaration}`);
+	}
+	const height = Number(/(?:^|[\s;])height: (\d+)px/.exec(body)?.[1]);
+	assert.ok(height > 10, `WebKit ignores a fixed box 10px or thinner, got ${height}px`);
+	// WebKit drops a nearly transparent or hidden candidate, so the blur returns.
+	assert.equal(/opacity|visibility/.test(body), false, "the top-edge box hides itself from WebKit");
+});
+
 test("the left/right insets never reach the desktop stylesheet", () => {
 	const device = cssTemplate("CSS_DEVICE");
 	for (const pattern of [

@@ -1,5 +1,5 @@
 /**
- * Behavioural checks for #33 / #34 / #35.
+ * Behavioural checks for #33 / #34 / #35 / #81.
  *
  * The browser half is a single bundle with no exports, so this file boots it
  * against a small in-memory DOM and drives the same decoration pass the app
@@ -611,6 +611,45 @@ function makePreview(env, { secondary = ["Reload", "Save"], hidden = true } = {}
 	return { panel, header, path, viewer, wrap, openTarget, openButton, actions };
 }
 
+/**
+ * A code preview inside a right panel.
+ *
+ * Upstream mirrors its wrap state onto the preview body as
+ * `data-textpreview-wrap` and the stock header toggle writes the same state,
+ * so the fixture wires the two together exactly like React does.
+ */
+function makeCodePreview(env, { wrap = true } = {}) {
+	const preview = makePreview(env);
+	const body = env.document.createElement("div");
+	body.setAttribute("data-textpreview-body", "");
+	const scroller = env.document.createElement("div");
+	const pre = env.document.createElement("pre");
+	const line = env.document.createElement("span");
+	line.setAttribute("class", "line");
+	line.textContent = "const longToken = 'https://example.test/' + 'x'.repeat(4096);";
+	pre.append(line);
+	scroller.append(pre);
+	body.append(scroller);
+	preview.panel.append(body);
+
+	// The in-memory DOM has no layout: report this one node as the scrollport.
+	const computed = env.sandbox.getComputedStyle;
+	env.sandbox.getComputedStyle = (node) => node === scroller
+		? { ...computed(node), overflowX: "auto" }
+		: computed(node);
+
+	const setWrap = (value) => {
+		preview.wrap.setAttribute("aria-pressed", value ? "true" : "false");
+		if (value) body.setAttribute("data-textpreview-wrap", "");
+		else body.removeAttribute("data-textpreview-wrap");
+	};
+	preview.wrap.addEventListener("click", () => {
+		setWrap(preview.wrap.getAttribute("aria-pressed") !== "true");
+	});
+	setWrap(wrap);
+	return { ...preview, body, scroller, pre, line, setWrap };
+}
+
 /** A review surface inside a dockkit pane. */
 function makeReview(env, { pressed = false, tab = "tab-a", replace = false } = {}) {
 	const { document } = env;
@@ -713,7 +752,7 @@ test("#35 adds the kebab and moves only secondary preview actions", () => {
 	const moved = preview.header.querySelectorAll("[data-rdsh-preview-secondary]");
 	assert.deepEqual(moved.map((button) => button.getAttribute("aria-label")), ["Reload", "Save"]);
 	assert.equal(preview.viewer.hasAttribute("data-rdsh-preview-secondary"), false, "the viewer picker was moved out");
-	assert.equal(preview.wrap.hasAttribute("data-rdsh-preview-secondary"), false, "the forced-wrap toggle was offered");
+	assert.equal(preview.wrap.hasAttribute("data-rdsh-preview-secondary"), false, "the stock wrap toggle was moved into the kebab");
 	assert.equal(preview.openButton.hasAttribute("data-rdsh-preview-secondary"), false, "#33 open target leaked into the kebab");
 	assert.equal(preview.header.querySelector('[data-textpreview-tool="auto-refresh"]').hasAttribute("data-rdsh-preview-secondary"), false, "the hidden auto-refresh was offered");
 	env.dispose();
@@ -1071,4 +1110,102 @@ test("#34 long-token CSS is scoped to the upstream wrap state, not forced global
 	assert.match(rule, /\[data-review-wrap\]/, "the rule is not gated on upstream's wrap state");
 	// The plugin must not make the split/unified choice for the user.
 	assert.doesNotMatch(CLIENT, /data-review-tool="split"\)[^;]*\.click\(\)/s, "the plugin clicks the split toggle");
+});
+
+test("#81 long-token wrapping is scoped to the upstream preview wrap state", () => {
+	const start = CLIENT.indexOf("[data-rdsh-rightpanel] [data-textpreview-body][data-textpreview-wrap] pre");
+	assert.notEqual(start, -1, "the preview long-token rule is missing");
+	const rule = CLIENT.slice(start, CLIENT.indexOf("}", start));
+	assert.match(rule, /white-space: pre-wrap !important/, "long tokens do not wrap");
+	assert.match(rule, /overflow-wrap: anywhere !important/, "an unbroken token can still overflow");
+	assert.match(rule, /\[data-textpreview-wrap\]/, "the rule is not gated on upstream's wrap state");
+	assert.equal(CLIENT.includes("[data-rdsh-rightpanel] [data-textpreview-body] pre,"), false, "an unconditional force-wrap rule is back");
+	const lockStart = CLIENT.indexOf("[data-textpreview-wrap] [data-rdsh-code-scroll]");
+	assert.notEqual(lockStart, -1, "the code-scroll lock is missing or not gated");
+	const lockRule = CLIENT.slice(lockStart, CLIENT.indexOf("}", lockStart));
+	assert.match(lockRule, /overflow-x: hidden !important/, "the code scroller is not locked while wrapped");
+	assert.doesNotMatch(CLIENT, /^\s*\[data-rdsh-code-scroll\]\s*\{/m, "an unconditional code-scroll lock is back");
+	// The stock toggle is the control that writes the state, so it must be
+	// reachable on a phone instead of hidden by the mobile sheet.
+	assert.doesNotMatch(CLIENT, /\[data-textpreview-tool="wrap"\]\s*\{[^}]*display:\s*none/, "the stock wrap toggle is hidden");
+});
+
+test("#81 a wrap toggle repaints without waiting for an unrelated mutation", () => {
+	// React writes upstream's wrap state onto the body; the observer has to
+	// watch that attribute or the OFF above could leave the lock in place.
+	assert.match(
+		CLIENT,
+		/observer\.observe\(document\.body, \{[^}]*"data-textpreview-wrap"/,
+		"the observer ignores upstream's wrap state",
+	);
+});
+
+test("#81 wrap ON keeps the code-scroll lock", () => {
+	const env = boot();
+	const code = makeCodePreview(env, { wrap: true });
+	env.api.decorateNow();
+	assert.equal(code.body.hasAttribute("data-textpreview-wrap"), true, "the fixture lost its wrap state");
+	assert.equal(code.pre.hasAttribute("data-rdsh-code-pre"), true, "the code preview was not tagged");
+	assert.equal(code.scroller.hasAttribute("data-rdsh-code-scroll"), true, "wrap ON did not lock the code scroller");
+	env.dispose();
+});
+
+test("#81 wrap OFF gives the stock horizontal scroll back", () => {
+	const env = boot();
+	const code = makeCodePreview(env, { wrap: true });
+	env.api.decorateNow();
+	assert.equal(code.scroller.hasAttribute("data-rdsh-code-scroll"), true);
+
+	code.wrap.click();
+	assert.equal(code.wrap.getAttribute("aria-pressed"), "false", "the stock toggle did not turn wrap off");
+	assert.equal(code.body.hasAttribute("data-textpreview-wrap"), false, "the fixture did not drop upstream's wrap state");
+	env.api.decorateNow();
+	assert.equal(code.scroller.hasAttribute("data-rdsh-code-scroll"), false, "wrap OFF still locked the horizontal scroll");
+
+	code.wrap.click();
+	env.api.decorateNow();
+	assert.equal(code.scroller.hasAttribute("data-rdsh-code-scroll"), true, "wrap ON did not restore the lock");
+	env.dispose();
+});
+
+test("#81 the stock wrap toggle keeps its state and stays out of the kebab", () => {
+	const env = boot();
+	const code = makeCodePreview(env, { wrap: true });
+	env.api.decorateNow();
+	code.wrap.click();
+	env.api.decorateNow();
+	assert.equal(code.wrap.getAttribute("aria-pressed"), "false", "the plugin changed the stock wrap state");
+	assert.equal(code.wrap.hasAttribute("data-rdsh-preview-secondary"), false, "the stock wrap toggle was moved into the kebab");
+
+	const kebab = code.header.querySelector("[data-rdsh-preview-kebab]");
+	assert.notEqual(kebab, null, "the kebab is missing");
+	kebab.click();
+	const labels = [...env.document.body.querySelectorAll('[data-rdsh-preview-menu] [role="menuitem"]')].map((item) => item.textContent);
+	assert.deepEqual(labels, ["Reload", "Save"], "the kebab duplicated the visible wrap toggle");
+	env.dispose();
+});
+
+test("#81 disposal removes the preview wrap hooks and the scroller lock", () => {
+	const env = boot();
+	const code = makeCodePreview(env, { wrap: true });
+	env.api.decorateNow();
+	assert.equal(code.pre.hasAttribute("data-rdsh-code-pre"), true);
+	assert.equal(code.scroller.hasAttribute("data-rdsh-code-scroll"), true);
+
+	env.dispose();
+	assert.equal(code.pre.hasAttribute("data-rdsh-code-pre"), false, "dispose left the code tag behind");
+	assert.equal(code.scroller.hasAttribute("data-rdsh-code-scroll"), false, "dispose left the horizontal lock behind");
+	assert.equal(code.header.hasAttribute("data-rdsh-preview-header"), false, "dispose left the preview header hook behind");
+	assert.equal(env.document.querySelectorAll("[data-rdsh-preview-kebab]").length, 0, "dispose left the kebab behind");
+});
+
+test("#81 a desktop leaves the wrap state and the code scroller alone", () => {
+	const env = boot({ mode: "desktop", width: 390 });
+	const code = makeCodePreview(env, { wrap: true });
+	assert.equal(env.api, undefined, "a desktop booted the mobile half");
+	assert.equal(code.pre.hasAttribute("data-rdsh-code-pre"), false, "a desktop tagged the code preview");
+	assert.equal(code.scroller.hasAttribute("data-rdsh-code-scroll"), false, "a desktop locked the code scroller");
+	assert.equal(code.wrap.getAttribute("aria-pressed"), "true", "a desktop changed the stock wrap state");
+	assert.equal(code.header.querySelector("[data-rdsh-preview-kebab]"), null, "a desktop got the kebab");
+	env.dispose();
 });

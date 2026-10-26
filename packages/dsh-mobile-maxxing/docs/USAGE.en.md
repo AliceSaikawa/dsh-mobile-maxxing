@@ -28,7 +28,7 @@ separate because it changes the PC renderer.
 | Installable PWA | Manifest, service worker, offline page, update banner |
 | Notifications | In-app banner while the app is on screen, Web Push otherwise |
 | Notification sounds | Five synthesised presets, volume, no audio files |
-| Mobile layout | Sidebar becomes a drawer, settings open in one tap, code wraps |
+| Mobile layout | Sidebar becomes a drawer, settings open in one tap, code wraps by default (toggle available) |
 | CJK rendering (optional) | Only with the separate `rdsh-markdown-cjk` package; this package leaves the Markdown renderer stock to avoid changing the PC |
 | Session id copy | One row in the session row menu |
 
@@ -143,12 +143,14 @@ What changes:
 
 - The sidebar becomes an overlay drawer you open with the floating button
 - Settings get a single column and a scrolling tab strip
-- The code viewer always wraps and never scrolls sideways
+- The code viewer wraps by default; the header's wrap button turns that
+  off and long lines scroll sideways again
 - Code review opens with wrap on; a wrap you turn off stays off for that
   review tab for this page (upstream switches the diff from side-by-side to the unified
   layout while wrap is on, so both columns come back when you turn wrap off)
 - Text-preview header actions (reload and file actions) move into a "…" menu
-  that calls the original buttons; the path and the viewer picker stay put
+  that calls the original buttons; the path, the viewer picker and the wrap
+  toggle stay in the header
 - The native "Open in <app>" split button is not shown in mobile mode, because
   the mobile surface cannot hand the file to that desktop app
 - The composer stays above the keyboard

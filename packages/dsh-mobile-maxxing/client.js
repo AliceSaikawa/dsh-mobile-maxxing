@@ -2865,8 +2865,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     /**
      * Tag the scroller that owns a code preview.
      *
-     * The viewer scrolls in both axes by default; the lock in the stylesheet
-     * keys off this attribute so a long line cannot be panned sideways.
+     * The viewer scrolls in both axes when upstream's wrap is off; while wrap
+     * is on a long line must not pan sideways. Upstream already marks the
+     * current choice on the preview body as `data-textpreview-wrap`, so the
+     * scroller lock follows that state instead of forcing it: turning wrap
+     * off through the stock header button gives the horizontal travel back.
      */
     function decorateCodePreview() {
       if (!phone()) {
@@ -2874,13 +2877,14 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         clearOwnedAttribute("data-rdsh-code-scroll");
         return;
       }
-      for (const pre of document.querySelectorAll("[data-rdsh-rightpanel] [data-textpreview-body] pre:not([data-rdsh-code-pre])")) {
+      for (const pre of document.querySelectorAll("[data-rdsh-rightpanel] [data-textpreview-body] pre")) {
         pre.setAttribute("data-rdsh-code-pre", "");
+        const wrapped = pre.closest("[data-textpreview-wrap]") !== null;
         let node = pre.parentElement;
         while (node !== null && node !== document.body) {
           const overflowX = getComputedStyle(node).overflowX;
           if (overflowX === "auto" || overflowX === "scroll") {
-            node.setAttribute("data-rdsh-code-scroll", "");
+            node.toggleAttribute("data-rdsh-code-scroll", wrapped);
             break;
           }
           node = node.parentElement;
@@ -3075,12 +3079,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     /**
      * Buttons the kebab may offer.
      *
-     * The path and the viewer picker stay in the header (the picker renders
-     * the current renderer's name and its upstream Menu is anchored to the
-     * visible button). Wrap is excluded on purpose: the phone stylesheet
-     * already forces text previews to wrap, so the stock toggle is hidden by
-     * the same query and would be a dead control. `#33`'s native open targets
-     * and upstream's deliberately-hidden auto-refresh stay out too.
+     * The path, the viewer picker and the stock wrap toggle stay in the header
+     * (the picker renders the current renderer's name and its upstream Menu is
+     * anchored to the visible button; wrap is the user's own choice now that
+     * #81 stopped forcing it, so moving it would only duplicate one control).
+     * `#33`'s native open targets and upstream's deliberately-hidden
+     * auto-refresh stay out too.
      */
     function previewSecondaryButtons(header) {
       return [...header.querySelectorAll("button")].filter((button) => {
@@ -10932,26 +10936,29 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
     box-shadow: var(--dsw-elevation-prominent, 0 2px 8px rgba(0, 0, 0, .28));
   }
 
-  /* Code files: wrap every line, including a single long token (URLs,
-     minified lines). Wrapping only at spaces left those overflowing, which
-     turned the viewer into a free two-axis scroller.
+  /* Code files: while upstream's wrap is on, wrap every line, including a
+     single long token (URLs, minified lines). Wrapping only at spaces left
+     those overflowing, which turned the viewer into a free two-axis scroller.
      The lines are their own boxes: .line carries
      "white-space: var(--dsl-code-block-line-white-space, pre)", so styling
-     pre alone left them unwrapped (and the horizontal lock clipped them). */
+     pre alone left them unwrapped (and the horizontal lock clipped them).
+     Upstream writes data-textpreview-wrap on the preview body while its
+     header toggle is ON (#81), so both rules stop applying the moment the
+     user turns wrap off and the stock sideways scroll comes back. */
   /* Do NOT style the code element: the newline text nodes between the .line
      spans live there, and giving them pre-wrap painted an empty row between
      every line (19px -> 38px). The lines carry their own content. */
-  [data-rdsh-rightpanel] [data-textpreview-body] pre,
-  [data-rdsh-rightpanel] [data-textpreview-body] pre .line {
+  [data-rdsh-rightpanel] [data-textpreview-body][data-textpreview-wrap] pre,
+  [data-rdsh-rightpanel] [data-textpreview-body][data-textpreview-wrap] pre .line {
     white-space: pre-wrap !important;
     overflow-wrap: anywhere !important;
     word-break: break-word !important;
   }
-  /* ...and the code scroller itself keeps no sideways travel. */
-  [data-rdsh-code-scroll] { overflow-x: hidden !important; }
-  /* Wrapping is forced above, so the viewer's own toggle no longer changes
-     anything. Hide it rather than leave a control that does nothing. */
-  [data-rdsh-rightpanel] [data-textpreview-tool="wrap"] { display: none !important; }
+  /* ...and only in that wrapped state the code scroller keeps no sideways
+     travel. decorateCodePreview also drops the hook when the state turns off;
+     matching the state here keeps the lock off for the frame before it does. */
+  [data-textpreview-wrap] [data-rdsh-code-scroll],
+  [data-textpreview-wrap][data-rdsh-code-scroll] { overflow-x: hidden !important; }
 
   /* #33: the host's native "open in <app>" split button. The wrapper carries
      data-open-target and both halves carry data-open-path-*; hiding it takes
@@ -11102,7 +11109,10 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         // own open/close signals on the app frame. They change without a
         // resize when the user toggles a sidebar, so without them the drawer
         // and right-panel state only caught up on the next unrelated mutation.
-        observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["aria-label", "aria-selected", "data-state", "draggable", "data-sidebar-collapsed", "data-rightbar-collapsed"] });
+        // `data-textpreview-wrap` is the same kind of signal for #81: the stock
+        // header toggle writes it, and without it the code-scroll lock would
+        // outlive the OFF until an unrelated mutation happened to repaint.
+        observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["aria-label", "aria-selected", "data-state", "draggable", "data-sidebar-collapsed", "data-rightbar-collapsed", "data-textpreview-wrap"] });
 
         document.addEventListener("pointerdown", onPointerDown, true);
         document.addEventListener("pointermove", onPointerMove, true);

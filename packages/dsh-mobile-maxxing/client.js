@@ -2888,6 +2888,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       "data-rdsh-workspace-search",
       "data-rdsh-workspace-empty",
       "data-rdsh-workspace-trigger",
+      "data-rdsh-workspace-picking",
       "data-rdsh-activity-chip",
       "data-rdsh-activity-spinner",
       "data-rdsh-activity-icon",
@@ -6081,12 +6082,14 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     let workspacePickerWatchTimer = 0;
 
     /**
-     * Stop watching for the picker's portal.
+     * Stop watching for the picker's portal and release the reserved band.
      *
      * The observer exists only between the trigger click and the first
      * decorated panel: the search row has to be in the menu before its first
      * visible paint, otherwise upstream's anchor pass measures the old height
-     * and the panel jumps on the next frame.
+     * and the panel jumps on the next frame. The armed attribute is left on
+     * <html> until this point; the tagged rules repeat the same geometry, so
+     * swapping the two changes no box.
      */
     function stopWorkspacePickerWatch() {
       if (workspacePickerWatchTimer !== 0) {
@@ -6095,6 +6098,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       }
       workspacePickerWatch?.disconnect();
       workspacePickerWatch = null;
+      document.documentElement.removeAttribute("data-rdsh-workspace-picking");
     }
 
     /**
@@ -6105,9 +6109,16 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * callback runs at the microtask checkpoint of the commit that mounts the
      * portal, so the search row and its attributes are in place before the
      * upstream rAF anchor pass measures the panel.
+     *
+     * Upstream's Menu still reads its own offsetHeight in the layout effect of
+     * that commit, before a microtask observer can run. The armed attribute is
+     * therefore written here, synchronously on the opening click and before
+     * React mounts the portal, so the CSS reserves the search band for the
+     * first measurement (#39).
      */
     function beginWorkspacePicker() {
       workspacePickerPending = true;
+      if (phone()) document.documentElement.setAttribute("data-rdsh-workspace-picking", "");
       if (workspacePickerWatch !== null) return;
       workspacePickerWatch = new MutationObserver(() => {
         decorateWorkspacePicker();
@@ -6135,10 +6146,26 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       }, 1500);
     }
 
+    /**
+     * Arm the pre-mount reservation for a keyboard-opened picker.
+     *
+     * The session-less composer opens the chooser from Enter/Space without a
+     * click, so the capture handler cannot rely on the pointer path. A normal
+     * composer has no popup wiring and a space is just text, so this only
+     * matches the picker trigger recognized by `workspaceTriggerControl`.
+     */
+    function armWorkspacePickerFromKey(event) {
+      if (!phone() || (event.key !== "Enter" && event.key !== " ")) return;
+      if (event.target === null || event.target === undefined) return;
+      const trigger = workspaceTriggerControl(event.target);
+      if (trigger !== null && trigger.getAttribute("aria-expanded") !== "true") beginWorkspacePicker();
+    }
+
     function clearWorkspacePicker() {
       const state = workspacePickerState;
       workspacePickerState = null;
       workspacePickerPending = false;
+      document.documentElement.removeAttribute("data-rdsh-workspace-picking");
       if (state === null) return;
       state.input.removeEventListener("keydown", state.keydown);
       state.search.remove();
@@ -7771,6 +7798,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     function onKeyDownCapture(event) {
+      // The session-less composer opens the picker on Enter/Space without a
+      // click, so arm the same pre-mount reservation here (#39).
+      armWorkspacePickerFromKey(event);
       // Enter follows the device mode: mobile gets newline by default, a
       // desktop stays stock unless the #15 opt-in is on.
       const finger = phone();
@@ -11208,8 +11238,28 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   .rdsh-mux-queue-menu button:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,.08)); }
   .rdsh-mux-queue-menu button:disabled { opacity: .45; }
   /* New-session workspace picker: a search row, a bounded item viewport and
-     the upstream Add workspace footer outside that viewport. */
-  [data-rdsh-workspace-menu] { max-height: min(70vh, 520px) !important; overflow: hidden !important; }
+     the upstream Add workspace footer outside that viewport.
+
+     #39: upstream's Menu reads its own offsetWidth/offsetHeight in the layout
+     effect of the commit that mounts it, before this module's microtask
+     observer can tag the portal. The geometry therefore has to hold before
+     the tag exists. The opening click writes data-rdsh-workspace-picking
+     on <html>; the structural selector below matches the shared Menu surface
+     (and its presentation viewport) while armed. The tagged rules repeat the
+     same values, so replacing the armed state with the tag changes no box.
+
+     The search row is out of flow inside a statically reserved band, so
+     inserting it adds neither height nor width to the menu the first place()
+     measured. One custom property is the single source of truth for that
+     band: the menu's padding and the row's height both use it. */
+  html[data-rdsh-workspace-picking] [role="menu"][data-menu-material],
+  [data-rdsh-workspace-menu] {
+    --rdsh-workspace-search-block: 44.5px;
+    padding-top: calc(4px + var(--rdsh-workspace-search-block)) !important;
+    max-height: min(70vh, 520px) !important;
+    overflow: hidden !important;
+  }
+  html[data-rdsh-workspace-picking] [role="menu"][data-menu-material] > div[aria-hidden="true"] + [role="presentation"],
   [data-rdsh-workspace-menu] [data-rdsh-workspace-viewport] {
     max-height: min(40vh, 320px) !important;
     overflow-y: auto !important;
@@ -11218,12 +11268,14 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   }
   [data-rdsh-workspace-menu] [data-rdsh-workspace-hidden] { display: none !important; }
   .rdsh-mux-workspace-search {
-    flex: none; box-sizing: border-box; padding: 6px 0;
+    position: absolute; top: 4px; left: 4px; right: 4px;
+    box-sizing: border-box; height: var(--rdsh-workspace-search-block, 44.5px);
+    padding: 6px 0; overflow: hidden;
     border-bottom: .5px solid var(--dsw-alias-border-l1, rgba(255,255,255,.1));
     background: var(--dsw-alias-bg-layer-2, #2c2c2e);
   }
   .rdsh-mux-workspace-search input {
-    display: block; box-sizing: border-box; width: 100%; height: 32px;
+    display: block; box-sizing: border-box; width: 100%; min-width: 0; height: 32px;
     margin: 0; padding: 0 8px; border-radius: 8px;
     border: .5px solid var(--dsw-alias-border-l3, rgba(255,255,255,.16));
     background: var(--dsw-alias-bg-base, #1b1b1d);
@@ -11844,6 +11896,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
     if (workspaceTestHook !== null && typeof workspaceTestHook === "object") {
       workspaceTestHook.workspace = {
         beginWorkspacePicker,
+        armWorkspacePickerFromKey,
         decorateWorkspacePicker,
         workspaceTriggerControl,
         clearWorkspacePicker,

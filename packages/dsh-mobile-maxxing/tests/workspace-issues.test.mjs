@@ -528,12 +528,14 @@ function buttonWithName(document, name, attributes = {}) {
 }
 
 /**
- * The upstream picker portal: [role=menu] > viewport + footer. The footer
- * label is a parameter so a test can use the translated one: the picker is
- * recognized without reading it (#39).
+ * The upstream picker portal: [role=menu] (the shared Menu surface, marked by
+ * data-menu-material) > material + viewport + footer. The footer label is a
+ * parameter so a test can use the translated one: the picker is recognized
+ * without reading it (#39).
  */
 function workspaceMenu(document, names, addLabel = "Add workspace…") {
-	const menu = element(document, "div", { role: "menu" });
+	const menu = element(document, "div", { role: "menu", "data-menu-material": "translucent" });
+	const material = element(document, "div", { "aria-hidden": "true" });
 	const viewport = element(document, "div", { role: "presentation" });
 	for (const name of names) {
 		const wrap = element(document, "div");
@@ -544,8 +546,8 @@ function workspaceMenu(document, names, addLabel = "Add workspace…") {
 	const footerWrap = element(document, "div");
 	footerWrap.append(buttonWithName(document, addLabel, { role: "menuitem" }));
 	footer.append(footerWrap);
-	menu.append(viewport, footer);
-	return { menu, viewport, footer };
+	menu.append(material, viewport, footer);
+	return { menu, viewport, footer, material };
 }
 
 /**
@@ -611,6 +613,84 @@ test("#39 the picker search row is in the menu before its first paint", () => {
 	assert.equal(menu.getAttribute("data-rdsh-workspace-menu"), "", "the static height hook was not applied");
 	assert.equal(viewport.getAttribute("data-rdsh-workspace-viewport"), "", "the list viewport hook was not applied");
 	assert.equal(run.sandbox.CSS.highlights.size, 0, "the picker does not use the file-search highlight");
+	// The row is out of flow: the menu's measured box comes from the band the
+	// stylesheet reserves, not from this element.
+	assert.equal(search.hasAttribute("data-rdsh-workspace-search"), true);
+	assert.equal(menu.children[0].getAttribute("aria-hidden"), "true", "the fixture lost upstream's material layer");
+});
+
+test("#39 the opening click reserves the search band before the menu mounts", () => {
+	const run = boot();
+	run.reset();
+	const html = run.document.documentElement;
+	const { menu } = workspaceMenu(run.document, ["Alpha", "Beta"]);
+	// The click handler calls beginWorkspacePicker() in the capture phase,
+	// before React can mount the portal. The attribute must therefore exist
+	// while the portal is still absent, so the first offsetHeight/offsetWidth
+	// read already sees the reserved band.
+	run.tools.beginWorkspacePicker();
+	assert.equal(html.getAttribute("data-rdsh-workspace-picking"), "", "the first placement was not armed");
+	assert.equal(run.document.querySelector('[role="menu"]'), null, "the fixture mounted the portal too early");
+
+	run.document.body.appendChild(menu);
+	run.flushObservers();
+	assert.ok(menu.querySelector("[data-rdsh-workspace-search]"), "the armed portal was not decorated");
+	assert.equal(menu.getAttribute("data-rdsh-workspace-menu"), "", "the tagged geometry hook is missing");
+	assert.equal(html.hasAttribute("data-rdsh-workspace-picking"), false, "the armed state outlived the tagged menu");
+});
+
+test("#39 a keyboard-opened session-less composer is armed before the menu mounts", () => {
+	const run = boot();
+	run.reset();
+	// The hero draft editor opens the picker from Enter/Space without a click,
+	// so the click capture never sees it. Both keys must arm the reservation.
+	const card = element(run.document, "div", { "data-composer-card": "" });
+	const editor = element(run.document, "div", {
+		"data-composer-input": "",
+		"aria-haspopup": "menu",
+		"aria-expanded": "false",
+	});
+	card.append(editor);
+	run.document.body.append(card);
+	const key = (value) => event("keydown", editor, { key: value, shiftKey: false, ctrlKey: false, metaKey: false, altKey: false });
+
+	run.tools.armWorkspacePickerFromKey(key("Enter"));
+	assert.equal(run.document.documentElement.getAttribute("data-rdsh-workspace-picking"), "", "Enter did not arm the reservation");
+	run.tools.clearWorkspacePicker();
+
+	run.tools.armWorkspacePickerFromKey(key(" "));
+	assert.equal(run.document.documentElement.getAttribute("data-rdsh-workspace-picking"), "", "Space did not arm the reservation");
+	run.tools.clearWorkspacePicker();
+
+	// A normal session composer has no popup wiring: typing a space must not
+	// reserve the picker band or arm its observer.
+	const plain = element(run.document, "div", { "data-composer-input": "" });
+	run.document.body.append(plain);
+	run.tools.armWorkspacePickerFromKey(event("keydown", plain, { key: " " }));
+	assert.equal(run.document.documentElement.hasAttribute("data-rdsh-workspace-picking"), false, "a plain space armed the picker");
+	// The capture handler the browser installs must call this same path.
+	assert.match(CLIENT, /function onKeyDownCapture\(event\) \{[\s\S]{0,400}armWorkspacePickerFromKey\(event\)/, "the keydown listener does not arm the picker");
+});
+
+test("#39 the reserved band is released when no portal arrives, or on teardown", () => {
+	const timeout = boot();
+	timeout.reset();
+	timeout.tools.beginWorkspacePicker();
+	assert.equal(timeout.document.documentElement.hasAttribute("data-rdsh-workspace-picking"), true);
+	timeout.runTimers(1500);
+	assert.equal(timeout.document.documentElement.hasAttribute("data-rdsh-workspace-picking"), false, "the timeout kept the menu armed");
+
+	const cleared = boot();
+	cleared.reset();
+	cleared.tools.beginWorkspacePicker();
+	cleared.tools.clearWorkspacePicker();
+	assert.equal(cleared.document.documentElement.hasAttribute("data-rdsh-workspace-picking"), false, "clear kept the menu armed");
+
+	const disposed = boot();
+	disposed.reset();
+	disposed.tools.beginWorkspacePicker();
+	disposed.tools.disposeWorkspaceTools();
+	assert.equal(disposed.document.documentElement.hasAttribute("data-rdsh-workspace-picking"), false, "teardown kept the menu armed");
 });
 
 test("#39 picker filter, no-match row, Escape and removal", () => {

@@ -778,14 +778,49 @@ test("the queue joins only at its lower corners and leaves the composer unchange
 		assert.ok(rules.some((entry) => entry.head === head), `${head} is missing from the mobile sheet`);
 	}
 });
-test("the workspace picker caps its list and keeps Add workspace outside it", () => {
-	assert.match(CLIENT, /\[data-rdsh-workspace-menu\] \{[^}]*max-height: min\(70vh, 520px\) !important;/, "the workspace menu is not height-bounded");
-	assert.match(CLIENT, /\[data-rdsh-workspace-menu\] \[data-rdsh-workspace-viewport\] \{[^}]*max-height: min\(40vh, 320px\) !important;[^}]*overflow-y: auto !important;/, "the workspace list is not the scroll viewport");
-	assert.match(CLIENT, /\[data-rdsh-workspace-menu\] \[data-rdsh-workspace-hidden\] \{ display: none !important; \}/, "filtered rows are still visible");
-	assert.match(CLIENT, /\.rdsh-mux-workspace-search input \{[^}]*font-size: 16px;/, "the search field can trigger iOS zoom");
-	assert.match(CLIENT, /\.rdsh-mux-workspace-empty \{[^}]*font-size: 13px;/, "the no-match row has no style");
-	const rules = cssRules(cssTemplate("CSS_PHONE"));
-	for (const head of ["[data-rdsh-workspace-menu]", "[data-rdsh-workspace-menu] [data-rdsh-workspace-viewport]", ".rdsh-mux-workspace-search", ".rdsh-mux-workspace-empty"]) {
+test("the workspace picker reserves its search band before the first placement", () => {
+	const phone = cssTemplate("CSS_PHONE");
+	// #39: upstream's Menu reads offsetWidth/offsetHeight in the layout effect
+	// of the commit that mounts it, before the plugin can tag the portal. The
+	// armed selector (set by the opening click) and the tagged selector must
+	// describe the same box, or the first place() and the decorated panel
+	// disagree and the menu jumps.
+	const menuRule = /html\[data-rdsh-workspace-picking\] \[role="menu"\]\[data-menu-material\],\s*\[data-rdsh-workspace-menu\] \{([^}]*)\}/.exec(phone);
+	assert.ok(menuRule, "the picker menu has no pre-tag geometry rule");
+	const menuBody = menuRule[1];
+	assert.match(menuBody, /--rdsh-workspace-search-block: 44\.5px;/, "the reserved band has no single size");
+	assert.match(menuBody, /padding-top: calc\(4px \+ var\(--rdsh-workspace-search-block\)\) !important;/, "the reserved band is not part of the menu box");
+	assert.match(menuBody, /max-height: min\(70vh, 520px\) !important;/, "the pre-tag menu is not height-bounded");
+	assert.match(menuBody, /overflow: hidden !important;/, "the pre-tag menu does not clip");
+
+	// The list cap is part of the same pre-tag contract; without it a long
+	// picker shrinks when the viewport is tagged.
+	const viewportRule = /html\[data-rdsh-workspace-picking\] \[role="menu"\]\[data-menu-material\] > div\[aria-hidden="true"\] \+ \[role="presentation"\],\s*\[data-rdsh-workspace-menu\] \[data-rdsh-workspace-viewport\] \{([^}]*)\}/.exec(phone);
+	assert.ok(viewportRule, "the list viewport has no pre-tag cap");
+	assert.match(viewportRule[1], /max-height: min\(40vh, 320px\) !important;/, "the pre-tag list is not capped");
+	assert.match(viewportRule[1], /overflow-y: auto !important;/, "the pre-tag list is not the scroller");
+
+	// The row is absolutely positioned inside that band, so inserting it adds
+	// neither height nor width to the box upstream measured. A width here
+	// would re-place the panel horizontally on decoration.
+	const rowRule = /\.rdsh-mux-workspace-search \{([^}]*)\}/.exec(phone);
+	assert.ok(rowRule, "the search row has no style");
+	const rowBody = rowRule[1];
+	assert.match(rowBody, /position: absolute; top: 4px; left: 4px; right: 4px;/, "the search row still takes flow space");
+	assert.match(rowBody, /height: var\(--rdsh-workspace-search-block, 44\.5px\);/, "the row does not fill exactly the reserved band");
+	assert.doesNotMatch(rowBody, /(?:^|[;\s])width:/, "the search row changes the menu width");
+	assert.match(phone, /\.rdsh-mux-workspace-search input \{[^}]*width: 100%; min-width: 0;/, "the input's intrinsic width can widen the menu");
+	assert.match(phone, /\.rdsh-mux-workspace-search input \{[^}]*font-size: 16px;/, "the search field can trigger iOS zoom");
+
+	assert.match(phone, /\[data-rdsh-workspace-menu\] \[data-rdsh-workspace-hidden\] \{ display: none !important; \}/, "filtered rows are still visible");
+	assert.match(phone, /\.rdsh-mux-workspace-empty \{[^}]*font-size: 13px;/, "the no-match row has no style");
+
+	const rules = cssRules(phone);
+	assert.ok(rules.some((entry) => entry.head.includes("[data-rdsh-workspace-menu]")), "the tagged menu geometry is missing from the mobile sheet");
+	assert.ok(rules.some((entry) => entry.head.includes("[data-rdsh-workspace-menu] [data-rdsh-workspace-viewport]")), "the tagged viewport rules are missing from the mobile sheet");
+	for (const head of [".rdsh-mux-workspace-search", ".rdsh-mux-workspace-empty"]) {
 		assert.ok(rules.some((entry) => entry.head === head), `${head} is missing from the mobile sheet`);
 	}
+	const device = CLIENT.slice(CLIENT.indexOf("const CSS_DEVICE"), CLIENT.indexOf("const CSS_PHONE"));
+	assert.doesNotMatch(device, /data-rdsh-workspace-picking/, "the pre-tag reservation leaked into the device sheet");
 });

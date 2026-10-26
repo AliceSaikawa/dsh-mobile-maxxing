@@ -2635,6 +2635,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       let projectedLocale = null;
       let disposed = false;
       const baseDocumentLang = document.documentElement.lang;
+      // The Host active the boot document language was written for. Only a
+      // real Host active change moves the restore target (see
+      // restoredDocumentLang); a store republish that inherits this module's
+      // projected active is normalised before adoption and never counts.
+      const baseHostLanguage = typeof hostLocale?.active === "string" ? hostLocale.active : "";
 
       const emitTheme = (snapshot) => {
         projectingTheme = true;
@@ -2741,6 +2746,23 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       };
 
       /**
+       * The document language to restore when this device stops projecting.
+       *
+       * The boot document language belongs to the Host active seen at attach.
+       * Only a real Host active change moves the restore target: an
+       * authoritative `locale/change`, a silent durable switch folded in by
+       * refreshHostActive(), or the runtime's fallback after an externally
+       * removed language. `zh` keeps the upstream `zh-CN` spelling.
+       */
+      const restoredDocumentLang = () => {
+        const active = hostLocale !== null && typeof hostLocale.active === "string" ? hostLocale.active : "";
+        if (active === "" || active === baseHostLanguage) return baseDocumentLang;
+        const locales = hostLocale?.locales;
+        if (Array.isArray(locales) && !locales.some((entry) => entry?.id === active)) return baseDocumentLang;
+        return active === "zh" ? "zh-CN" : active;
+      };
+
+      /**
        * The Host view behind a snapshot read from the public store.
        *
        * `LocaleRuntime.register` republishes `this.snapshot.active` instead of
@@ -2816,9 +2838,13 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
             projectedLocale = null;
             if (localeService.snapshot !== hostLocale) {
               localeService.snapshot = hostLocale;
-              if (document.documentElement.lang !== baseDocumentLang) document.documentElement.lang = baseDocumentLang;
               notifyLocale();
             }
+            // A removed language can already have published the Host fallback
+            // snapshot, so the restore must not depend on rewriting the
+            // identity: unproject the document language in either case.
+            const lang = restoredDocumentLang();
+            if (document.documentElement.lang !== lang) document.documentElement.lang = lang;
             return;
           }
           // Same Host revision as the theme projection, for the same row-store
@@ -2925,6 +2951,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
             /* the theme fiber may already be gone */
           }
           try {
+            let lang = baseDocumentLang;
             if (state.localDisplay.available.language === true && localeService !== null && hostLocale !== null) {
               // A silent Host switch to the projected language emitted no
               // locale/change; restore the durable Host active, not the one
@@ -2932,8 +2959,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
               refreshHostActive();
               localeService.snapshot = hostLocale;
               notifyLocale();
+              lang = restoredDocumentLang();
             }
-            if (document.documentElement.lang !== baseDocumentLang) document.documentElement.lang = baseDocumentLang;
+            if (document.documentElement.lang !== lang) document.documentElement.lang = lang;
           } catch (error) {
             /* the locale fiber may already be gone */
           }

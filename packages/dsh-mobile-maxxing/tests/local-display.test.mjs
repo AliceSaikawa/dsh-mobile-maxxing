@@ -85,6 +85,9 @@ test("font sizes use the published theme variables and exact roles", () => {
 	assert.doesNotMatch(body, /revision\s*\+\s*1000/, "a projection fabricated a revision upstream row stores would adopt");
 	assert.doesNotMatch(body, /themeEpoch|localeEpoch/, "an unused projection epoch survived");
 	assert.doesNotMatch(body, /\.setFontSize\(|\.setLocale\(/, "a shared writer is called");
+	// A Host active change (authoritative, silent or catalog fallback) must
+	// move the restored document language; an unchanged Host keeps the boot one.
+	assert.match(body, /restoredDocumentLang/, "the document language restore ignores Host changes");
 });
 
 test("catalog publishes ride the public LocaleFace subscription, not locale/change alone (#80)", () => {

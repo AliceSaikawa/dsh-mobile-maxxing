@@ -2647,7 +2647,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       "data-rdsh-route-detail",
       "data-rdsh-sidebar-toggle",
       "data-rdsh-more-row",
-      "data-rdsh-settings-row",
       "data-rdsh-settings-tab-hidden",
       "data-rdsh-settings-close",
       "data-rdsh-hidden",
@@ -2661,6 +2660,18 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     function clearOwnedAttribute(name) {
       for (const element of document.querySelectorAll(`[${name}]`)) element.removeAttribute(name);
+    }
+
+    /**
+     * Remove every Settings row this module injected (#87).
+     *
+     * The row is a node, not a state hook: stripping its attribute leaves the
+     * <button> behind and the next decorate pass adds another one. The class is
+     * the node's own identity, so a legacy attribute-only teardown still finds
+     * the row it must reuse or remove.
+     */
+    function removeSettingsRows() {
+      for (const row of document.querySelectorAll("[data-rdsh-settings-row], .rdsh-mux-settings-row")) row.remove();
     }
 
     /**
@@ -2694,6 +2705,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       clearTypingAnimations();
       removeRouteBack();
       removeDrawerNodes();
+      removeSettingsRows();
       // Inline styles this module wrote onto upstream nodes.
       clearQueueDockHooks();
       clearToastHooks();
@@ -4802,11 +4814,22 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         // row stays hidden by the mobile stylesheet and Settings becomes
         // unreachable.
         for (const tagged of document.querySelectorAll("[data-rdsh-more-row]")) tagged.removeAttribute("data-rdsh-more-row");
-        for (const injected of document.querySelectorAll("[data-rdsh-settings-row]")) injected.remove();
+        removeSettingsRows();
         return;
       }
       const nav = document.querySelector("nav.hHd-Xa_panelList");
       if (nav === null) return;
+      // #87: this row is a node, not a state hook. A teardown that only strips
+      // `data-rdsh-settings-row` leaves the <button> in the nav and the next
+      // pass cannot see it; the class survives that strip, so the node is
+      // adopted instead of duplicated. Any other row is a stale copy.
+      const rows = [...document.querySelectorAll("[data-rdsh-settings-row], .rdsh-mux-settings-row")]
+        .filter((candidate) => candidate !== nav);
+      let row = rows.find((candidate) => nav.contains(candidate)) ?? null;
+      for (const candidate of rows) {
+        if (candidate !== row) candidate.remove();
+      }
+      if (row !== null) row.setAttribute("data-rdsh-settings-row", "");
       // The account "More" row is not used on the phone.
       //
       // Never let the Settings row this function injects answer the account
@@ -4835,11 +4858,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       }
       if (moreRow !== null) moreRow.setAttribute("data-rdsh-more-row", "");
       const auto = nav.querySelector('button[aria-label="Automation tasks"]');
-      let row = nav.querySelector("[data-rdsh-settings-row]");
       if (row === null) {
         row = document.createElement("button");
         row.type = "button";
-        row.className = "hHd-Xa_panelRow";
+        row.className = "hHd-Xa_panelRow rdsh-mux-settings-row";
         row.setAttribute("aria-label", t("mux.settingsRow"));
         row.setAttribute("data-rdsh-settings-row", "");
         row.innerHTML = `<span class="hHd-Xa_panelGlyph" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2.1"/><path d="M6.9 1.9h2.2l.35 1.5 1.28.74 1.45-.5 1.1 1.9-1.05 1.1.1 1.48 1.05 1.1-1.1 1.9-1.45-.5-1.28.74-.35 1.5H6.9l-.35-1.5-1.28-.74-1.45.5-1.1-1.9 1.05-1.1-.1-1.48-1.05-1.1 1.1-1.9 1.45.5 1.28-.74z"/></svg></span><span class="hHd-Xa_panelTitle hHd-Xa_wide">${t("mux.settingsRow")}</span>`;

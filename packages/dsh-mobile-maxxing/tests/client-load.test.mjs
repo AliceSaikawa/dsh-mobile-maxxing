@@ -328,6 +328,7 @@ function bootClient({
 	plugin.apply(ctx);
 	return {
 		definition,
+		plugin,
 		sandbox,
 		ctx,
 		disposers,
@@ -881,9 +882,11 @@ test("the four-row drawer survives decoration when the upstream nav exists", () 
 	let afterNode = null;
 	auto.after = (node) => {
 		afterNode = node;
+		node.parentElement = nav;
 		auto.nextElementSibling = node;
 		nav.lastElementChild = node;
 	};
+	nav.contains = (node) => node.parentElement === nav;
 	nav.querySelector = (selector) => {
 		if (selector === 'button[aria-label="Automation tasks"]') return auto;
 		if (selector === 'button[aria-label="Plugins"]') return plugins;
@@ -903,6 +906,9 @@ test("the four-row drawer survives decoration when the upstream nav exists", () 
 			};
 			doc.querySelector = (selector) => (selector === "nav.hHd-Xa_panelList" ? nav : null);
 			doc.querySelectorAll = (selector) => {
+				if (selector === "[data-rdsh-settings-row], .rdsh-mux-settings-row") {
+					return afterNode === null ? [] : [afterNode];
+				}
 				if (selector === "button[aria-label], [role='menuitem']") {
 					return [newSession, plugins, auto, ...(afterNode === null ? [] : [afterNode])];
 				}
@@ -958,6 +964,7 @@ test("a localized Settings row is never mistaken for the account menu", () => {
 		auto.nextElementSibling = node;
 		nav.lastElementChild = node;
 	};
+	nav.contains = (node) => node.parentElement === nav;
 	nav.querySelector = (selector) => {
 		if (selector === 'button[aria-label="Automation tasks"]') return auto;
 		if (selector === 'button[aria-label="Plugins"]') return plugins;
@@ -982,6 +989,9 @@ test("a localized Settings row is never mistaken for the account menu", () => {
 				return null;
 			};
 			doc.querySelectorAll = (selector) => {
+				if (selector === "[data-rdsh-settings-row], .rdsh-mux-settings-row") {
+					return settingsRow() === null ? [] : [settingsRow()];
+				}
 				if (selector.includes('aria-label="Account menu"')) {
 					return settingsRow() === null ? [account] : [settingsRow(), account];
 				}
@@ -1009,6 +1019,100 @@ test("a localized Settings row is never mistaken for the account menu", () => {
 		assert.equal(control.hasAttribute("data-rdsh-hidden"), false, "one of the four rows is hidden");
 	}
 	booted.disposeAll();
+});
+
+test("re-applying the Settings row decoration never duplicates the row (#87)", () => {
+	// The legacy teardown removed only `data-rdsh-settings-row` from the
+	// button. The <button> stayed in the nav, the next pass found no tagged
+	// row and appended another one, so every plugin re-apply (one per iOS
+	// page restore) left one more Settings row.
+	const nav = element();
+	const newSession = element();
+	const plugins = element();
+	const auto = element();
+	newSession.setAttribute("aria-label", "New Session");
+	plugins.setAttribute("aria-label", "Plugins");
+	auto.setAttribute("aria-label", "Automation tasks");
+	const children = [newSession, plugins, auto];
+	const frames = [];
+	nav.lastElementChild = auto;
+	nav.contains = (node) => children.includes(node);
+	nav.append = (node) => {
+		if (!children.includes(node)) children.push(node);
+		node.parentElement = nav;
+		nav.lastElementChild = node;
+	};
+	nav.querySelector = (selector) => {
+		if (selector === 'button[aria-label="Automation tasks"]') return auto;
+		if (selector === 'button[aria-label="Plugins"]') return plugins;
+		return null;
+	};
+	auto.after = (node) => {
+		if (!children.includes(node)) {
+			const at = children.indexOf(auto);
+			children.splice(at < 0 ? children.length : at + 1, 0, node);
+		}
+		node.parentElement = nav;
+		auto.nextElementSibling = node;
+	};
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		frames,
+		configureDocument(doc) {
+			const create = doc.createElement;
+			doc.createElement = (tag) => {
+				const node = create(tag);
+				if (tag === "button") {
+					node.remove = () => {
+						const at = children.indexOf(node);
+						if (at >= 0) children.splice(at, 1);
+						node.parentElement = null;
+					};
+				}
+				return node;
+			};
+			doc.querySelector = (selector) => (selector === "nav.hHd-Xa_panelList" ? nav : null);
+			doc.querySelectorAll = (selector) => {
+				if (selector === "[data-rdsh-settings-row], .rdsh-mux-settings-row") {
+					return children.filter((node) => node.hasAttribute("data-rdsh-settings-row")
+						|| String(node.className).includes("rdsh-mux-settings-row"));
+				}
+				if (selector === "[data-rdsh-more-row]") return children.filter((node) => node.hasAttribute("data-rdsh-more-row"));
+				if (selector === "button") return children;
+				if (selector === "button[aria-label], [role='menuitem']") return children;
+				return [];
+			};
+		},
+	});
+	// Three stock rows are in the nav; everything else appended to it is an
+	// injected Settings row, tagged or not.
+	const rowCount = () => children.length - 3;
+	const settle = () => {
+		for (let index = 0; index < 10 && frames.length > 0; index += 1) frames.shift()();
+	};
+	settle();
+	assert.equal(rowCount(), 1, "the first apply did not inject exactly one row");
+
+	// A legacy teardown: clearOwnedAttribute was applied to the row attribute.
+	// The node itself survived, so the next pass must adopt it, not duplicate.
+	for (const node of children) node.removeAttribute("data-rdsh-settings-row");
+	booted.sandbox.__RDSH_MOBILE_UX__.decorateNow();
+	assert.equal(rowCount(), 1, "an attribute-only teardown left a duplicate row");
+
+	// A full dispose + apply cycle, twice.
+	for (let cycle = 0; cycle < 2; cycle += 1) {
+		booted.disposeAll();
+		assert.equal(rowCount(), 0, `dispose ${cycle + 1} left the injected row behind`);
+		booted.plugin.apply(booted.ctx);
+		settle();
+		assert.equal(rowCount(), 1, `re-apply ${cycle + 1} duplicated the Settings row`);
+	}
+
+	// Guard: the row is a node, not an attribute cleanup hook.
+	const hooks = CLIENT.match(/const PHONE_HOOKS = \[([\s\S]*?)\n    \];/);
+	assert.ok(hooks, "PHONE_HOOKS exists");
+	assert.doesNotMatch(hooks[1], /"data-rdsh-settings-row"/, "the Settings row tag is back in the attribute cleanup list");
 });
 
 test("tapping Plugins or Automation tasks closes the phone drawer, never a desktop sidebar", () => {

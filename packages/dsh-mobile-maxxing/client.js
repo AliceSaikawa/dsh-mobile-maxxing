@@ -6305,15 +6305,16 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     function ensureSidebarNavMore(nav, firstRow) {
       let button = nav.querySelector("[data-rdsh-nav-more]") ?? document.querySelector("[data-rdsh-nav-more]");
+      const label = t("mux.navMore");
       if (button === null) {
         button = document.createElement("button");
         button.type = "button";
         button.className = "hHd-Xa_panelRow rdsh-mux-nav-more";
         button.setAttribute("data-rdsh-nav-more", "");
-        button.setAttribute("aria-label", t("mux.navMore"));
+        button.setAttribute("aria-label", label);
         button.setAttribute("aria-haspopup", "menu");
         button.setAttribute("aria-expanded", "false");
-        button.innerHTML = `<span class="hHd-Xa_panelGlyph" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><circle cx="3.2" cy="8" r="1.45"/><circle cx="8" cy="8" r="1.45"/><circle cx="12.8" cy="8" r="1.45"/></svg></span><span class="hHd-Xa_panelTitle hHd-Xa_wide">${t("mux.navMore")}</span>`;
+        button.innerHTML = `<span class="hHd-Xa_panelGlyph" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><circle cx="3.2" cy="8" r="1.45"/><circle cx="8" cy="8" r="1.45"/><circle cx="12.8" cy="8" r="1.45"/></svg></span><span class="hHd-Xa_panelTitle hHd-Xa_wide">${label}</span>`;
         button.addEventListener("click", (event) => {
           event.preventDefault();
           event.stopPropagation();
@@ -6321,6 +6322,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         });
         button.addEventListener("keydown", onSidebarNavMoreButtonKey);
       }
+      // An existing node keeps its listeners, SVG and menu wiring across a
+      // language switch; only its label text moves. Write on change alone so
+      // this pass does not wake the MutationObserver that scheduled it.
+      if (button.getAttribute("aria-label") !== label) button.setAttribute("aria-label", label);
+      const title = button.querySelector(".hHd-Xa_panelTitle");
+      if (title !== null && title.textContent !== label) title.textContent = label;
       if (button.parentElement !== nav || button.nextElementSibling !== firstRow) {
         if (firstRow.parentElement === nav) nav.insertBefore(button, firstRow);
         else nav.append(button);

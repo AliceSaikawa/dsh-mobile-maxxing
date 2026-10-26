@@ -4228,6 +4228,75 @@ test("#59 the More menu dismisses on Escape, outside press, Tab and resize", () 
 	fixture.booted.disposeAll();
 });
 
+test("#59 a language switch relabels the same More row in place", () => {
+	const fixture = navBoot();
+	const more = fixture.more();
+	assert.equal(more.getAttribute("aria-label"), COPY.en["mux.navMore"]);
+	// The real button's innerHTML carries the title span; the stub discards
+	// markup, so the node the copy is written into is attached here.
+	const title = navNode(fixture.doc, "span");
+	title.className = "hHd-Xa_panelTitle hHd-Xa_wide";
+	title.textContent = COPY.en["mux.navMore"];
+	more.append(title);
+	let titleText = COPY.en["mux.navMore"];
+	let titleWrites = 0;
+	Object.defineProperty(title, "textContent", {
+		configurable: true,
+		get: () => titleText,
+		set(value) {
+			titleWrites += 1;
+			titleText = String(value);
+		},
+	});
+	let ariaWrites = 0;
+	const setAttribute = more.setAttribute;
+	more.setAttribute = (name, value) => {
+		if (name === "aria-label") ariaWrites += 1;
+		return setAttribute.call(more, name, value);
+	};
+
+	// The node already exists in English; the switch must relabel it.
+	fixture.sandbox.__RDSH_PWA_LANG__ = "ja";
+	fixture.booted.sandbox.__RDSH_MOBILE_UX__.decorateNow();
+	assert.equal(fixture.more(), more, "the language switch replaced the More row");
+	assert.equal(fixture.nav.querySelectorAll("[data-rdsh-nav-more]").length, 1, "the language switch duplicated More");
+	assert.equal(more.getAttribute("aria-label"), "その他");
+	assert.equal(title.textContent, "その他", "the visible title kept the old language");
+	assert.equal(titleWrites, 1, "the title was not rewritten exactly once");
+	assert.equal(more.children.length, 1, "the title sync added nodes");
+
+	// A re-apply must not write the same label again: every write wakes the
+	// MutationObserver that scheduled this pass.
+	fixture.booted.sandbox.__RDSH_MOBILE_UX__.decorateNow();
+	fixture.booted.sandbox.__RDSH_MOBILE_UX__.decorateNow();
+	assert.equal(ariaWrites, 1, "a pass with no language change rewrote aria-label");
+	assert.equal(titleWrites, 1, "a pass with no language change rewrote the title");
+
+	// An open menu keeps its state and focus across the relabel.
+	more.click();
+	const menu = fixture.menus()[0];
+	const item = fixture.items()[0];
+	assert.equal(fixture.doc.activeElement, item, "the menu did not focus its first item");
+	assert.equal(more.getAttribute("aria-expanded"), "true");
+	const controls = more.getAttribute("aria-controls");
+	fixture.sandbox.__RDSH_PWA_LANG__ = "en";
+	fixture.booted.sandbox.__RDSH_MOBILE_UX__.decorateNow();
+	assert.equal(more.getAttribute("aria-label"), "More");
+	assert.equal(title.textContent, "More");
+	assert.equal(titleWrites, 2);
+	assert.equal(fixture.menus().length, 1, "the language switch closed or duplicated the menu");
+	assert.equal(menu.parentElement, fixture.body, "the open menu left the page");
+	assert.equal(more.getAttribute("aria-expanded"), "true");
+	assert.equal(more.getAttribute("aria-controls"), controls);
+	assert.equal(fixture.doc.activeElement, item, "the language switch stole menu focus");
+
+	const escape = { key: "Escape", preventDefault() {}, stopPropagation() {} };
+	[...fixture.docListeners].reverse().find((entry) => entry.type === "keydown" && entry.capture).handler(escape);
+	assert.equal(menu.parentElement, null, "Escape stopped closing the menu");
+	assert.equal(fixture.doc.activeElement, more, "Escape stopped restoring focus to More");
+	fixture.booted.disposeAll();
+});
+
 test("#59 the More row is mobile-landscape only and is removed on dispose", () => {
 	const portrait = navBoot({ narrow: true });
 	assert.equal(portrait.more(), null, "a portrait phone got the landscape More row");

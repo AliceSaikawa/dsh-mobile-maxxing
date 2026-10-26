@@ -4957,6 +4957,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     let modelMenuWatched = null;
     let modelMenuMaxWidth = null;
     let modelMenuNaturalWidth = null;
+    let modelMenuBand = null;
 
     /**
      * The open model picker (#97).
@@ -5055,6 +5056,15 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       clearModelMenuWatch();
       modelMenuWatched = menu;
       clampModelMenu(menu);
+      // #84: the safe band moves when the keyboard opens, the page pans or the
+      // phone rotates, and upstream's inline left does not change then. Without
+      // these listeners the clamp only ran on the menu's own style writes, so
+      // an open panel could sit outside the band the user can see.
+      modelMenuBand = () => clampModelMenu(menu);
+      for (const target of [window, window.visualViewport]) {
+        target?.addEventListener?.("resize", modelMenuBand);
+        target?.addEventListener?.("scroll", modelMenuBand);
+      }
       if (typeof MutationObserver !== "function") return;
       modelMenuWatch = new MutationObserver(() => clampModelMenu(menu));
       modelMenuWatch.observe(menu, { attributes: true, attributeFilter: ["style"] });
@@ -5063,6 +5073,14 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     function clearModelMenuWatch() {
       modelMenuWatch?.disconnect();
       modelMenuWatch = null;
+      const band = modelMenuBand;
+      modelMenuBand = null;
+      if (band !== null) {
+        for (const target of [window, window.visualViewport]) {
+          target?.removeEventListener?.("resize", band);
+          target?.removeEventListener?.("scroll", band);
+        }
+      }
       if (modelMenuWatched !== null && modelMenuMaxWidth !== null
         && modelMenuWatched.style !== null && modelMenuWatched.style !== undefined
         && modelMenuWatched.style.maxWidth === modelMenuMaxWidth) {
@@ -13625,7 +13643,10 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   /* Model picker: value never runs into the chevron. The menu class hash
      changes between builds (#76), so the JS hook scopes the rule and only the
      stable cell suffix is matched. */
-  [data-rdsh-model-menu] { max-width: calc(100vw - 24px) !important; box-sizing: border-box !important; }
+  /* No !important on max-width: the clamp writes a narrower inline cap when the
+     safe band is smaller than the menu, and !important made that write lose, so
+     a wide menu crossed the right edge (#84). */
+  [data-rdsh-model-menu] { max-width: calc(100vw - 24px); box-sizing: border-box !important; }
   [data-rdsh-model-menu] [class*="_cell"] { min-width: 0 !important; gap: 8px !important; }
   [data-rdsh-model-menu] [class*="_cell"] > span:last-of-type { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   [data-rdsh-model-search]:disabled { opacity: 1 !important; cursor: text; }

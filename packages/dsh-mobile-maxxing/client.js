@@ -3608,6 +3608,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       "data-rdsh-question-frame",
       "data-rdsh-question-tile",
       "data-rdsh-question-arrow",
+      "data-rdsh-question-typing",
       "data-rdsh-todo-item",
       "data-rdsh-todo-text",
       "data-rdsh-todo-status",
@@ -5816,10 +5817,127 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       update();
     }
 
+    /** Question cards whose Enter/validation behaviour is already installed. */
+    const questionBehaviorCards = new WeakSet();
+
+    /**
+     * Whether this card still needs a selected option, or null when it offers
+     * none: a free-text-only question has nothing to select, so its text is
+     * the whole answer and the required-choice rule cannot apply.
+     *
+     * Structure only: the option's role plus aria-checked is what the upstream
+     * card exposes in every locale, so no translated label is matched here.
+     *
+     * @param {Element} card - the question card.
+     * @returns {boolean|null}
+     */
+    function questionNeedsSelection(card) {
+      const options = card.querySelectorAll('[class*="_options"] [role="radio"], [class*="_options"] [role="checkbox"]');
+      if (options.length === 0) return null;
+      return card.querySelector('[role="radio"][aria-checked="true"], [role="checkbox"][aria-checked="true"]') === null;
+    }
+
+    /** The footer button that submits this question, or advances the set. */
+    function questionSubmitButton(card) {
+      const actions = card.querySelector('[class*="_footerActions"]');
+      const buttons = actions === null ? [] : [...actions.querySelectorAll("button")];
+      return buttons.length === 0 ? null : buttons[buttons.length - 1];
+    }
+
+    /** Scroll the focused answer field into the card's own body scroller. */
+    function revealQuestionField(card) {
+      const body = card.querySelector('[class*="_body"]');
+      const field = card.querySelector("textarea");
+      const row = field === null ? null : field.closest('[class*="_customRow"], [class*="_customBlock"], [class*="_field"]');
+      if (body === null || row === null || body.scrollHeight <= body.clientHeight + 2) return;
+      const bodyRect = body.getBoundingClientRect();
+      const rowRect = row.getBoundingClientRect();
+      if (rowRect.bottom > bodyRect.bottom - 4) body.scrollTop += rowRect.bottom - bodyRect.bottom + 8;
+      else if (rowRect.top < bodyRect.top + 4) body.scrollTop -= bodyRect.top - rowRect.top + 8;
+    }
+
+    /** Say why nothing was sent, in the card's own status line. */
+    function refuseEmptyQuestion(card) {
+      const feedback = card.querySelector('[class*="_feedback"]');
+      if (feedback !== null) feedback.textContent = t("question.selectRequired");
+    }
+
+    /** Take our refusal down once a choice exists; leave upstream errors alone. */
+    function clearQuestionFeedback(card) {
+      const feedback = card.querySelector('[class*="_feedback"]');
+      if (feedback !== null && feedback.textContent === t("question.selectRequired")) feedback.textContent = "";
+    }
+
+    /**
+     * The submit button stays the only way to send without a keyboard
+     * shortcut; the guard runs before the click, so upstream's "a custom
+     * answer counts" rule cannot send a zero-selection answer for a question
+     * that has options. Skip remains its own explicit, labelled action.
+     */
+    function submitQuestionCard(card) {
+      if (questionNeedsSelection(card) === true) {
+        refuseEmptyQuestion(card);
+        return;
+      }
+      questionSubmitButton(card)?.click();
+    }
+
+    /**
+     * Enter in the answer field is a line break; the button or Cmd/Ctrl+Enter
+     * sends. Upstream's React handler submits on any Enter, so this capture
+     * listener stops that handler. A plain Enter is not default-prevented and
+     * still inserts the newline.
+     *
+     * @param {KeyboardEvent} event - the field's keydown.
+     * @param {Element} card - the question card that owns the field.
+     */
+    function questionCardKeyDown(event, card) {
+      if (event.key !== "Enter" || event.shiftKey || event.isComposing || event.keyCode === 229) return;
+      event.stopPropagation();
+      if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+      if (!event.metaKey && !event.ctrlKey) return;
+      event.preventDefault();
+      submitQuestionCard(card);
+    }
+
+    /** Install the phone-only answer-field rules once per card node. */
+    function installQuestionCardBehavior(card) {
+      if (questionBehaviorCards.has(card) || card.querySelector('[class*="_options"]') === null) return;
+      const field = card.querySelector("textarea");
+      if (field === null || questionSubmitButton(card) === null) return;
+      questionBehaviorCards.add(card);
+      card.addEventListener("focusin", () => {
+        // The keyboard shrinks the layout viewport; this attribute lifts the
+        // 60vh cap while a field is focused, and the next frame keeps that
+        // field inside the card's scroller.
+        card.setAttribute("data-rdsh-question-typing", "");
+        requestAnimationFrame(() => revealQuestionField(card));
+      });
+      card.addEventListener("focusout", (event) => {
+        if (card.contains(event.relatedTarget)) return;
+        card.removeAttribute("data-rdsh-question-typing");
+      });
+      field.addEventListener("keydown", (event) => questionCardKeyDown(event, card), true);
+      card.addEventListener("click", (event) => {
+        const button = event.target?.closest?.("button") ?? null;
+        if (button === null || button !== questionSubmitButton(card)) {
+          // A choice lands after React commits; clear our message on that frame.
+          requestAnimationFrame(() => {
+            if (questionNeedsSelection(card) === false) clearQuestionFeedback(card);
+          });
+          return;
+        }
+        if (questionNeedsSelection(card) !== true) return;
+        event.preventDefault();
+        if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+        refuseEmptyQuestion(card);
+      }, true);
+    }
+
     function decorateQuestionCards() {
       if (!phone()) {
         clearQuestionArrows();
-        for (const attribute of ["data-rdsh-question-card", "data-rdsh-question-frame", "data-rdsh-question-tile"]) {
+        for (const attribute of ["data-rdsh-question-card", "data-rdsh-question-frame", "data-rdsh-question-tile", "data-rdsh-question-typing"]) {
           clearOwnedAttribute(attribute);
         }
         return;
@@ -5834,6 +5952,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           tile.setAttribute("data-rdsh-question-tile", "");
         }
         decorateQuestionArrow(card);
+        installQuestionCardBehavior(card);
+        if (card.hasAttribute("data-rdsh-question-typing")) revealQuestionField(card);
         live.add(card);
       }
       for (const [card, state] of questionArrowState) {
@@ -13920,6 +14040,13 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   /* The answer field takes its height from a hidden mirror, so both layers
      must share the font size (16px here stops iOS from zooming on focus). */
   [data-rdsh-question-card] [class*="_field"] > * { font-size: 16px !important; }
+  /* The on-screen keyboard shrinks the layout viewport, and upstream's 60vh
+     cap then collapsed the card to its header and footer before the answer
+     field. While a field inside the card has focus, size the card from the
+     visible height; the phone JS keeps that field scrolled into view. */
+  [data-rdsh-question-card][data-rdsh-question-typing] {
+    max-height: calc(100dvh - 28px) !important;
+  }
   /* The card clips its overflow, so a long unbroken token used to be cut. */
   [data-rdsh-question-card] [class*="_optionLabel"],
   [data-rdsh-question-card] [class*="_title"],
@@ -14575,6 +14702,13 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             decorate: decorateTerminalKeys,
             sequence: terminalKeySequence,
             controlByte: terminalControlByte,
+          },
+          // The answer field's Enter/required-selection rules. The tests drive
+          // these closures the way folderFrames is driven above.
+          questionCard: {
+            keyDown: questionCardKeyDown,
+            needsSelection: questionNeedsSelection,
+            clearFeedback: clearQuestionFeedback,
           },
           phone,
           // Folder frames and the one-shot workspace-menu claim. The keys,

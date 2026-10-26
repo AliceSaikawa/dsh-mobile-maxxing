@@ -58,7 +58,7 @@ test("every fixed layer pads the notch side itself", () => {
 			"padding-left: env(safe-area-inset-left, 0px)",
 			"padding-right: env(safe-area-inset-right, 0px)",
 		]],
-		["[data-shortcut-modal=\"settings\"] [class*=\"VOzbGW_close\"]", [
+		["[data-shortcut-modal=\"settings\"] [data-rdsh-settings-close]", [
 			"right: calc(env(safe-area-inset-right, 0px) + 12px) !important",
 		]],
 		["[data-rdsh-rightpanel]", [

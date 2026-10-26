@@ -2324,6 +2324,19 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     function decorateMobileSettingsTabs(modal) {
       if (!phone() || modal === null) return;
       const generalLabel = readGeneralSettingsLabel();
+      // The upstream panel has nav + content > header > actions, close.
+      // Use that position, not a translated label or a CSS-module hash.
+      const headers = [...modal.querySelectorAll(":scope > nav + div > div:first-child")];
+      const candidates = headers.length === 1
+        ? [...headers[0].children].filter((child) => child.tagName === "BUTTON"
+          && child.querySelector(":scope > svg") !== null
+          && child.querySelector(":scope > span") !== null)
+        : [];
+      const close = candidates.length === 1 ? candidates[0] : null;
+      for (const button of modal.querySelectorAll("[data-rdsh-settings-close]")) {
+        if (button !== close) button.removeAttribute("data-rdsh-settings-close");
+      }
+      close?.setAttribute("data-rdsh-settings-close", "");
       const tabs = [...modal.querySelectorAll("nav button")];
       const mobile = tabs.find((button) => labelOf(button) === t("tab.mobile"));
       let generalActive = false;
@@ -2636,6 +2649,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       "data-rdsh-more-row",
       "data-rdsh-settings-row",
       "data-rdsh-settings-tab-hidden",
+      "data-rdsh-settings-close",
       "data-rdsh-hidden",
       "data-rdsh-setting-hidden",
       "data-rdsh-lightbox",
@@ -10401,7 +10415,7 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
 
   /* Settings: full screen, stacked navigation, nothing narrowed. */
   /* Close lives on the top row with the Settings title, as a round button. */
-  [data-shortcut-modal="settings"] [class*="VOzbGW_close"] {
+  [data-shortcut-modal="settings"] [data-rdsh-settings-close] {
     position: fixed !important;
     top: calc(env(safe-area-inset-top, 0px) + 12px) !important;
     right: calc(env(safe-area-inset-right, 0px) + 12px) !important;
@@ -10415,8 +10429,8 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
     box-shadow: var(--dsw-shadow-lv2, 0 2px 8px rgba(0,0,0,.08));
     z-index: 1007 !important;
   }
-  [data-shortcut-modal="settings"] [class*="VOzbGW_close"]:hover { background: var(--dsw-alias-button-floating-hover, #f1f3f5) !important; }
-  [data-shortcut-modal="settings"] [class*="VOzbGW_close"] svg { width: 18px !important; height: 18px !important; }
+  [data-shortcut-modal="settings"] [data-rdsh-settings-close]:hover { background: var(--dsw-alias-button-floating-hover, #f1f3f5) !important; }
+  [data-shortcut-modal="settings"] [data-rdsh-settings-close] svg { width: 18px !important; height: 18px !important; }
 
   /* Tab names fade toward a scrollable edge, so the floating arrows never
      sit on top of a hard-cut label. The flags are set by positionSettingsArrows. */

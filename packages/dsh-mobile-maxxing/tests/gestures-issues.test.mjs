@@ -1182,7 +1182,7 @@ function routeDetailNode({ attribute = "data-plugin-detail", value = "demo", onB
 }
 
 /** The three document lookups routeDetailOf and the drawer use. */
-function wireRouteDetail(doc, current, open = null) {
+function wireRouteDetail(doc, current, open = null, page = null) {
 	doc.querySelectorAll = (selector) => {
 		if (selector === "[data-plugin-detail], [data-plugin-item-detail], [data-plugin-row-detail]") {
 			const detail = current();
@@ -1191,7 +1191,7 @@ function wireRouteDetail(doc, current, open = null) {
 		return [];
 	};
 	doc.querySelector = (selector) => {
-		if (selector === '[data-testid="task-manager-page"]') return null;
+		if (selector === '[data-testid="task-manager-page"]') return page;
 		if (open !== null && selector.includes("Open sidebar")) return open;
 		return null;
 	};
@@ -1236,6 +1236,53 @@ test("a left-edge swipe on a plugin detail presses the breadcrumb instead of ope
 	assert.equal(drawerPresses, 0, "the detail opened the session drawer instead of going back");
 	assert.ok(event.prevented > 0, "the detail did not claim the horizontal swipe");
 	assert.equal(booted.doc.documentElement.getAttribute("data-rdsh-drawer"), "closed", "the detail left the drawer open");
+	booted.disposeAll();
+});
+
+test("a left-edge swipe on an automation detail closes it instead of opening the drawer", () => {
+	const booted = bootGestures({ narrow: true });
+	const open = new FakeElement("button");
+	let drawerPresses = 0;
+	open.click = () => {
+		drawerPresses += 1;
+	};
+	const page = new FakeElement("section");
+	page.setAttribute("data-testid", "task-manager-page");
+	page._rect = () => ({ x: 0, y: 0, top: 0, left: 0, right: 390, bottom: 800, width: 390, height: 800 });
+	const listPane = new FakeElement("div");
+	// Upstream hides the list below 760px: a 0x0 box is the signal.
+	listPane._rect = () => ({ x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0 });
+	const detailPane = new FakeElement("div");
+	detailPane._rect = () => ({ x: 0, y: 0, top: 0, left: 0, right: 390, bottom: 800, width: 390, height: 800 });
+	detailPane.parentElement = page;
+	const close = new FakeElement("button");
+	close.setAttribute("aria-label", "Close details");
+	close._rect = () => ({ x: 354, y: 8, top: 8, left: 354, right: 382, bottom: 36, width: 28, height: 28 });
+	close.parentElement = detailPane;
+	close.click = () => {
+		close.clicks += 1;
+		// Closing the detail puts the list pane back on screen.
+		listPane._rect = () => ({ x: 0, y: 0, top: 0, left: 0, right: 390, bottom: 800, width: 390, height: 800 });
+	};
+	page.children = [listPane, detailPane];
+	page.querySelectorAll = (selector) => (selector === "button[aria-label]" ? [close] : []);
+	wireRouteDetail(booted.doc, () => null, open, page);
+	booted.doc.documentElement.setAttribute("data-rdsh-drawer", "closed");
+	booted.doc.documentElement.removeAttribute("data-rdsh-rightpanel-open");
+	const { start, move } = edgeSwipeHandlers(booted);
+
+	swipeStart(start, 8, new FakeElement("div"));
+	const event = swipeTouch(120);
+	move(event);
+	assert.equal(close.clicks, 1, "the automation detail's close control was not pressed");
+	assert.equal(drawerPresses, 0, "the task detail opened the session drawer instead of going back");
+	assert.ok(event.prevented > 0, "the automation detail did not claim the horizontal swipe");
+	assert.equal(booted.doc.documentElement.getAttribute("data-rdsh-drawer"), "closed", "the task detail left the drawer open");
+
+	// With the list back, the same screen is an ordinary route again.
+	swipeStart(start, 8, new FakeElement("div"));
+	move(swipeTouch(120));
+	assert.equal(drawerPresses, 1, "the list did not recover the ordinary drawer swipe");
 	booted.disposeAll();
 });
 

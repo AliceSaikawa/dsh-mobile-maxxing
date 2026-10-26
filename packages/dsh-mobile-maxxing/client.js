@@ -10893,6 +10893,13 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
      actions: margin affects the H1 box, while the wrapper's other children
      keep their position. */
   [data-rdsh-route-heading] > h1 { margin-left: 40px !important; }
+  /* #62: the Automation route scrolls its own list, and a row that passes
+     under the floating drawer button is unreadable. Start the route below the
+     button instead of covering scrolled text with a band: the page's padding
+     moves the scroll container itself, so nothing can travel above 56px. The
+     existing task-detail rule uses the same value, so the list and its back
+     button keep one clearance. */
+  [data-testid="task-manager-page"] { box-sizing: border-box; padding-top: 56px !important; }
   [data-rdsh-header] [class*="_titleCluster"] { min-width: 0; flex: 1 1 auto; }
   /* Pin the activity chips to the right edge of the header. Without this the
      actions block sits directly after the title, so a short session name drags

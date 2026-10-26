@@ -8147,10 +8147,18 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       runFilesSearch(filesSearch?.input.value ?? "");
     }
 
-    /** Keep the explicit clear button in step with the field. */
+    /**
+     * Keep the explicit clear button in step with the field.
+     *
+     * #83: it used to wait for an `input` event, so on a phone the ✕ was
+     * invisible until a soft-keyboard keystroke arrived (and WebKit's native
+     * cancel can emit only `search`). It is shown while the field is focused,
+     * which is the state the user is in when looking for it.
+     */
     function syncFilesSearchClear() {
       if (filesSearch === null) return;
-      filesSearch.clear.hidden = filesSearch.input.value === "";
+      const { clear, input } = filesSearch;
+      clear.hidden = input.value === "" && document.activeElement !== input;
     }
 
     /** Clear the field, the filter and the highlight, then return focus. */
@@ -8210,6 +8218,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (filesSearch !== null) {
         filesSearch.input.removeEventListener("keydown", onFilesSearchKeyDown);
         filesSearch.input.removeEventListener("input", onFilesSearchInput);
+        filesSearch.input.removeEventListener("search", onFilesSearchInput);
+        filesSearch.input.removeEventListener("focus", syncFilesSearchClear);
+        filesSearch.input.removeEventListener("blur", syncFilesSearchClear);
         filesSearch.button.removeEventListener("click", onFilesSearchSubmit);
         filesSearch.clear.removeEventListener("click", onFilesSearchClear);
         filesSearch.search.remove();
@@ -8252,6 +8263,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       input.addEventListener("input", onFilesSearchInput);
       button.addEventListener("click", onFilesSearchSubmit);
       clear.addEventListener("click", onFilesSearchClear);
+      input.addEventListener("search", onFilesSearchInput);
+      input.addEventListener("focus", syncFilesSearchClear);
+      input.addEventListener("blur", syncFilesSearchClear);
       const body = root.querySelector("[data-files-body]");
       if (body === null) root.append(search);
       else root.insertBefore(search, body);
@@ -8619,6 +8633,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (filesSearch !== null) {
         filesSearch.input.removeEventListener("keydown", onFilesSearchKeyDown);
         filesSearch.input.removeEventListener("input", onFilesSearchInput);
+        filesSearch.input.removeEventListener("search", onFilesSearchInput);
+        filesSearch.input.removeEventListener("focus", syncFilesSearchClear);
+        filesSearch.input.removeEventListener("blur", syncFilesSearchClear);
         filesSearch.button.removeEventListener("click", onFilesSearchSubmit);
         filesSearch.clear.removeEventListener("click", onFilesSearchClear);
         filesSearch.search.remove();

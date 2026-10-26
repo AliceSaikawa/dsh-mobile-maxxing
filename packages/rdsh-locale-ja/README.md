@@ -83,6 +83,13 @@ behaviors and the known limit they cannot cover:
   id, the plugin falls back to the last published baseline and a silent switch
   is not detected. It never calls `write`/`setLocale`, and no future SDK is
   assumed to keep that internal reader available.
+- **Boxed revision is a projection shortcut.** The view keeps the Host number
+  (125) but passes `Object(125)` so identity-keyed text/slot caches refresh;
+  `<=`, `+ 1` and JSON still see the number, and System/dispose restore the
+  primitive snapshot. It adapts the SDK's public `number` type locally: rc.2
+  consumers are verified, but `typeof number`/`Number.isInteger` assumptions
+  elsewhere break, with no general guarantee. No Host writer calls, fake
+  `locale/change` or numeric bump (`SHORTCUT(#80)`).
 
 ## Install (optional, local tarball)
 

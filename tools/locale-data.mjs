@@ -233,6 +233,19 @@ export function assertPlaceholders(namespace, key, japanese, english) {
 	}
 }
 
+/**
+ * A blank Japanese value is intentional only where the English source is
+ * blank too. Some English values are separators or join strings ("", " "),
+ * not text, so a blank translation keeps the rendered output unchanged.
+ * Blank values for ordinary English text are still missing translations.
+ *
+ * @param {string} japanese
+ * @param {string} english
+ */
+export function isIntentionalBlank(japanese, english) {
+	return japanese.trim() === '' && english.trim() === '';
+}
+
 /** @param {any} upstream */
 export function validateUpstream(upstream) {
 	if (upstream === null || typeof upstream !== 'object' || Array.isArray(upstream)) throw new Error('locale/upstream.json must be an object');
@@ -333,7 +346,9 @@ export function loadJapanese(upstream, english, packageDir = DEFAULT_PACKAGE_DIR
 		const dictionary = readFlatDictionary(path.join(paths.jaDir, file));
 		for (const [key, value] of Object.entries(dictionary)) {
 			if (!Object.hasOwn(english[namespace], key)) throw new Error(namespace + '.' + key + ': Japanese dictionary has a key that is not in English');
-			if (value.trim() === '') throw new Error(namespace + '.' + key + ': Japanese value must not be empty');
+			if (value.trim() === '' && !isIntentionalBlank(value, english[namespace][key])) {
+				throw new Error(namespace + '.' + key + ': Japanese value must not be blank unless the English source is blank');
+			}
 			assertPlaceholders(namespace, key, value, english[namespace][key]);
 		}
 		dictionaries[namespace] = dictionary;

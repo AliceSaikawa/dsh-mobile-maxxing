@@ -31,6 +31,7 @@ import {
 	DEFAULT_PACKAGE_DIR,
 	assertPlaceholders,
 	duplicateValueWarnings,
+	isIntentionalBlank,
 	jsonText,
 	loadEnglish,
 	loadJapanese,
@@ -128,8 +129,11 @@ export function mergeReviewedBatches(options = {}) {
 		const target = updates.get(batch.namespace);
 		for (const key of batch.keys) {
 			const value = output.values[key];
-			if (typeof value !== 'string' || value.trim() === '') throw new Error(id + ': ' + batch.namespace + '.' + key + ' must be a non-empty string');
 			const englishValue = english[batch.namespace][key];
+			if (typeof value !== 'string') throw new Error(id + ': ' + batch.namespace + '.' + key + ' must be a string');
+			if (value.trim() === '' && !isIntentionalBlank(value, englishValue)) {
+				throw new Error(id + ': ' + batch.namespace + '.' + key + ' must not be blank unless the English source is blank');
+			}
 			assertPlaceholders(batch.namespace, key, value, englishValue);
 			if (target.has(key) && target.get(key) !== value) throw new Error(id + ': conflicting reviewed values for ' + batch.namespace + '.' + key);
 			target.set(key, value);

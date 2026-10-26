@@ -16,6 +16,7 @@ import {
 	checkArtifacts,
 	dictionaryHash,
 	duplicateValueWarnings,
+	isIntentionalBlank,
 	jsonText,
 	loadEnglish,
 	loadJapanese,
@@ -242,6 +243,44 @@ test('duplicate JSON keys and duplicate translated values are checked', (t) => {
 	assert.throws(() => buildArtifacts({ packageDir: directory }), /duplicate key/);
 });
 
+test('intentional blank values are accepted only where the English source is blank', (t) => {
+	const { dictionaries: english } = loadEnglish(packageDir);
+	const blankKeys = [];
+	for (const [namespace, dictionary] of Object.entries(english)) {
+		for (const [key, value] of Object.entries(dictionary)) {
+			if (value.trim() === '') blankKeys.push(namespace + '.' + key);
+		}
+	}
+	assert.deepEqual(blankKeys.sort(), [
+		'chat.message.stepProcess.sharedPrefix',
+		'pluginManager.sentenceSeparator',
+		'schedule.catalog.cron.part.join',
+		'schedule.manager.cron.part.join',
+	]);
+	assert.equal(isIntentionalBlank('', ''), true);
+	assert.equal(isIntentionalBlank(' ', ''), true);
+	assert.equal(isIntentionalBlank('\t', ' '), true);
+	assert.equal(isIntentionalBlank('', 'Preparing tool calls'), false);
+	assert.equal(isIntentionalBlank('保存', 'Save'), false);
+
+	const directory = copyPackageLocale(t);
+	const jaDirectory = path.join(directory, 'locale', 'namespaces', 'ja');
+	writeJson(path.join(jaDirectory, 'chat.json'), { 'message.stepProcess.sharedPrefix': '' });
+	writeJson(path.join(jaDirectory, 'schedule.manager.json'), { 'cron.part.join': ' ' });
+	writeJson(path.join(jaDirectory, 'pluginManager.json'), { sentenceSeparator: '  ' });
+	const artifacts = buildArtifacts({ packageDir: directory });
+	assert.equal(artifacts.dictionaries.chat['message.stepProcess.sharedPrefix'], '');
+	assert.equal(artifacts.dictionaries['schedule.manager']['cron.part.join'], ' ');
+	assert.equal(artifacts.dictionaries.pluginManager.sentenceSeparator, '  ');
+
+	const commonFile = path.join(jaDirectory, 'common.json');
+	const common = readJsonFile(commonFile);
+	const ordinaryKey = Object.keys(english.common).find((key) => english.common[key].trim() !== '');
+	common[ordinaryKey] = '   ';
+	writeJson(commonFile, common);
+	assert.throws(() => buildArtifacts({ packageDir: directory }), /must not be blank unless the English source is blank/);
+});
+
 test('batch manifest covers every key once in 40-50 key chunks and hashes the source namespaces', () => {
 	const document = readBatchFile(packageDir);
 	const { upstream, dictionaries: english } = loadEnglish(packageDir);
@@ -306,6 +345,59 @@ test('merge is all-or-nothing when one reviewed batch is invalid', (t) => {
 	});
 	assert.throws(() => mergeReviewedBatches({ packageDir: directory, workDir: workDirectory }), /missing/);
 	assert.deepEqual(readJsonFile(path.join(directory, 'locale', 'namespaces', 'ja', 'common.json')), beforeJapanese, 'a later validation failure must not leave an earlier batch applied');
+});
+
+test('merge accepts an intentional blank for blank English and rejects ordinary blanks atomically', (t) => {
+	const directory = copyPackageLocale(t);
+	const workDirectory = path.join(directory, 'work');
+	fs.mkdirSync(path.join(workDirectory, 'out'), { recursive: true });
+	const validId = 'schedule.manager-01';
+	const validBatch = batchById(directory, validId);
+	const validOutput = makeOutput(directory, validId);
+	validOutput.values['cron.part.join'] = '  ';
+	writeJson(path.join(workDirectory, 'out', validId + '.json'), validOutput);
+	writeReviewed(workDirectory, { [validId]: validBatch.sourceHash });
+	const result = mergeReviewedBatches({ packageDir: directory, workDir: workDirectory });
+	assert.deepEqual(result.applied, [validId]);
+	const merged = readJsonFile(path.join(directory, 'locale', 'namespaces', 'ja', 'schedule.manager.json'));
+	assert.deepEqual(Object.keys(merged), validBatch.keys);
+	assert.equal(merged['cron.part.join'], '  ');
+
+	const invalidDirectory = copyPackageLocale(t);
+	const invalidWork = path.join(invalidDirectory, 'work');
+	fs.mkdirSync(path.join(invalidWork, 'out'), { recursive: true });
+	const blankId = 'schedule.manager-01';
+	const blankBatch = batchById(invalidDirectory, blankId);
+	const blankOutput = makeOutput(invalidDirectory, blankId);
+	blankOutput.values['cron.part.join'] = '';
+	const chatId = 'chat-03';
+	const chatBatch = batchById(invalidDirectory, chatId);
+	const chatOutput = makeOutput(invalidDirectory, chatId);
+	const ordinaryKey = chatBatch.keys.find((key) => key !== 'message.stepProcess.sharedPrefix');
+	chatOutput.values[ordinaryKey] = ' ';
+	writeJson(path.join(invalidWork, 'out', blankId + '.json'), blankOutput);
+	writeJson(path.join(invalidWork, 'out', chatId + '.json'), chatOutput);
+	writeReviewed(invalidWork, { [blankId]: blankBatch.sourceHash, [chatId]: chatBatch.sourceHash });
+	assert.throws(
+		() => mergeReviewedBatches({ packageDir: invalidDirectory, workDir: invalidWork }),
+		/must not be blank unless the English source is blank/,
+	);
+	assert.equal(fs.existsSync(path.join(invalidDirectory, 'locale', 'namespaces', 'ja', 'schedule.manager.json')), false, 'an earlier valid batch must not be written when a later batch fails');
+	assert.equal(fs.existsSync(path.join(invalidDirectory, 'locale', 'namespaces', 'ja', 'chat.json')), false);
+});
+
+test('merge rejects non-string values even for a blank English key', (t) => {
+	const directory = copyPackageLocale(t);
+	const workDirectory = path.join(directory, 'work');
+	fs.mkdirSync(path.join(workDirectory, 'out'), { recursive: true });
+	const id = 'schedule.manager-01';
+	const batch = batchById(directory, id);
+	const output = makeOutput(directory, id);
+	output.values['cron.part.join'] = null;
+	writeJson(path.join(workDirectory, 'out', id + '.json'), output);
+	writeReviewed(workDirectory, { [id]: batch.sourceHash });
+	assert.throws(() => mergeReviewedBatches({ packageDir: directory, workDir: workDirectory }), /must be a string/);
+	assert.equal(fs.existsSync(path.join(directory, 'locale', 'namespaces', 'ja', 'schedule.manager.json')), false);
 });
 
 test('merge rejects stale source hashes and stale review hashes without writing', (t) => {

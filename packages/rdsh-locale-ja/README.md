@@ -67,8 +67,9 @@ Generated files are `package.json`, `index.js`, `client.js`,
 `locale/batches.json` and `locale/translation-status.json`. Do not edit them
 by hand. The generator reads the English snapshot and the Japanese source
 files, verifies the stage-1 dictionary hashes, checks key sets, duplicate JSON
-keys, non-empty values and placeholder sets, then writes only those five
-paths. It never writes an English file.
+keys, blank values (allowed only where the English source is blank) and
+placeholder sets, then writes only those five paths. It never writes an
+English file.
 
 The generated client exports:
 
@@ -103,9 +104,10 @@ A worker writes **only** `work/out/<batch-id>.json`:
 ```
 
 `values` must cover exactly the batch's key list: no missing keys, no extra
-keys, non-empty strings, and the same `{placeholder}` names as English. Do
-not write English files, generated files, or another batch's output. `work/`
-is gitignored and is not in the package `files` list.
+keys, strings with the same blankness as English (a blank value is allowed
+only where the English value is blank too), and the same `{placeholder}`
+names as English. Do not write English files, generated files, or another
+batch's output. `work/` is gitignored and is not in the package `files` list.
 
 A guessed translation is not a reviewed translation. A reviewer records the
 exact batch hash they reviewed in `work/reviewed.json`:
@@ -130,12 +132,13 @@ node --test packages/rdsh-locale-ja/test/stage2.test.mjs
 
 The merge accepts only batch ids present in `work/reviewed.json`. It rejects
 a stale reviewed hash, a stale output hash, a wrong namespace, missing/extra
-keys, empty values and placeholder changes. Every reviewed batch is validated
-before the first write; writes are temp-file renames under
-`locale/namespaces/ja/`, with the previous files restored if a rename fails.
-Unreviewed outputs are ignored with a warning. The English snapshot is never a
-write target. The merge does not run the generator automatically, so the
-generated client stays stale until `build-client.mjs` succeeds.
+keys, blank values for non-blank English text, and placeholder changes. Every
+reviewed batch is validated before the first write; writes are temp-file
+renames under `locale/namespaces/ja/`, with the previous files restored if a
+rename fails. Unreviewed outputs are ignored with a warning. The English
+snapshot is never a write target. The merge does not run the generator
+automatically, so the generated client stays stale until `build-client.mjs`
+succeeds.
 
 Duplicate translated values are reported as warnings (for example two
 different English strings intentionally sharing one Japanese word). Duplicate
@@ -211,7 +214,7 @@ pnpm test:locale
 
 `stage2.test.mjs` covers single ownership, 64 registrations with disposers,
 byte-for-byte migration of the 83 values, en/ja parity with the incomplete
-status explicit, placeholder preservation, duplicate-key/value checks, batch
-coverage/hashes, reviewed merge, stale hashes, all-or-nothing validation,
-generated `--check` drift, and that `work/` is gitignored and absent from the
-package files.
+status explicit, intentional-blank acceptance and ordinary-blank rejection,
+placeholder preservation, duplicate-key/value checks, batch coverage/hashes,
+reviewed merge, stale hashes, all-or-nothing validation, generated `--check`
+drift, and that `work/` is gitignored and absent from the package files.

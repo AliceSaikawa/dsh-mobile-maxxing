@@ -235,6 +235,29 @@ push. A hidden, disconnected, or failed page sends no acknowledgement, so ordina
 Push is the fallback; there is no visibility heartbeat or expiring lease. Every push
 that reaches the service worker calls `showNotification`, as WebKit requires.
 
+An acknowledgement is **per subscription (endpoint)**. A reinstall or a browser-side
+rotation creates a new registration while the old endpoint, still delivered to the same
+device, becomes unreachable from the page. A leftover endpoint therefore turns one
+foreground event into a banner plus a system notification (#98). Two steps retire it:
+
+- on subscribe, the page sends the endpoint it held last (kept in `localStorage` as
+  `rdsh-mobile-ux:push-endpoint`) as `previousEndpoint`, and **only that one entry of
+  the same origin** is removed
+- every launch re-registers the current subscription, and entries of the same origin and
+  label that have not been refreshed for 7 days are removed (the fallback for a reinstall,
+  which clears `localStorage`)
+
+An origin is shared by every device, so the store never collapses it to "the newest
+endpoint". Another origin always keeps its subscription, and another device on the same
+origin is only removed by its own named endpoint. The caveat: a second device with the
+same label (User-Agent) that has not opened the app for over 7 days can be caught by the
+fallback; opening the app again re-registers it and notifications return.
+
+**Settings → Mobile → Test** follows the same rule: while the app is visible it only
+shows the in-app banner, and the host's `/push/test` (a real Web Push) is used only when
+the page is backgrounded — that route was the remaining way to get a system notification
+while the app was open.
+
 The turn-end banner follows the host's own rule. While `onlyMobileTurns` is on (the
 default) only a session this browser sent in raises one, because that is the only turn
 the host notifies. Questions are always announced in the app, whichever device started
@@ -308,6 +331,12 @@ stored subscription, which would notify both installed apps for one event. Openi
 once teaches the host its origin (after a restart, `webServer.getOrigin()` is adopted too
 when it matches a stored subscription). A subscription answered with 404/410 is removed from
 the store on the spot.
+
+So that one device does not accumulate endpoints, `/push/subscribe` accepts
+`previousEndpoint` (the endpoint that browser held last) and removes that one entry of
+the same origin. Entries of the same origin and label that have not been refreshed for 7
+days are removed too; the launch-time re-registration refreshes `addedAt`, so a device
+that is still in use is never stale.
 
 Every stored endpoint is validated on subscribe: it must be `https` and must not resolve
 to loopback, a private range or a link-local address. The host POSTs to whatever is stored,

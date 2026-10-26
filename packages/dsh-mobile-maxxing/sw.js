@@ -350,10 +350,19 @@ self.addEventListener("pushsubscriptionchange", (event) => {
 			const raw = atob((publicKey + padding).replace(/-/g, "+").replace(/_/g, "/"));
 			const key = new Uint8Array([...raw].map((character) => character.charCodeAt(0)));
 			const subscription = await self.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+			// The host retires the endpoint this rotation replaced (#98). The
+			// page keeps its own copy in localStorage, which a worker cannot
+			// read, so the replaced registration is named here instead.
+			const previousEndpoint = typeof event.oldSubscription?.endpoint === "string" ? event.oldSubscription.endpoint : "";
 			await fetch(new URL("api/dsh-mobile-maxxing/push/subscribe", SCOPE), {
 				method: "POST",
 				headers: { "content-type": "application/json" },
-				body: JSON.stringify({ subscription: subscription.toJSON(), label: navigator.userAgent, origin: self.location.origin }),
+				body: JSON.stringify({
+					subscription: subscription.toJSON(),
+					label: navigator.userAgent,
+					origin: self.location.origin,
+					previousEndpoint,
+				}),
 			});
 		} catch {
 			/* the Settings button remains the manual recovery path */

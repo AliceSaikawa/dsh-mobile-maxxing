@@ -35,6 +35,15 @@ const PUSH_TTL_SECONDS = 600;
 const VAPID_TTL_SECONDS = 12 * 60 * 60;
 /** How many subscriptions one store keeps; the oldest is dropped past this. */
 const MAX_SUBSCRIPTIONS = 32;
+/**
+ * How long one device's registration stays trusted while it is never refreshed.
+ *
+ * A browser re-registers on every launch, so a live device keeps its entry
+ * fresh. An entry this old belongs to a registration the device no longer
+ * holds — typically left behind by a reinstall that cleared its storage, which
+ * also clears the endpoint it would otherwise name (#98).
+ */
+const STALE_SUBSCRIPTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // Small helpers
@@ -562,10 +571,24 @@ export class PushStore {
 	}
 
 	/**
-	 * Add or refresh one subscription.
+	 * Add or refresh one subscription, retiring the registration it replaced.
+	 *
+	 * A browser can replace its push registration (reinstall, RFC 8030
+	 * rotation). The replaced endpoint is unreachable from the page but still
+	 * delivered to the same device, so leaving it stored makes every
+	 * notification arrive twice — the foreground banner plus a system
+	 * notification from the stale copy (#98). The page names the endpoint it
+	 * held last, and only that exact entry is dropped.
+	 *
+	 * The endpoint is per browser registration, not per origin: two devices can
+	 * serve the same origin, and a device that reinstalled can name nothing.
+	 * An entry left without a `previousEndpoint` is therefore only dropped once
+	 * it has not been refreshed for {@link STALE_SUBSCRIPTION_MS} and carries
+	 * this device's label — a live device refreshes its entry on every launch.
 	 *
 	 * @param {object} subscription - `{ endpoint, keys }` from the browser.
-	 * @param {object} [meta] - `{ label, origin }` for the VAPID contact.
+	 * @param {object} [meta] - `{ label, origin, previousEndpoint }` for the
+	 *   VAPID contact and for the registration this browser replaced.
 	 * @returns {number} how many subscriptions are stored now.
 	 */
 	add(subscription, meta = {}) {
@@ -591,9 +614,29 @@ export class PushStore {
 			origin: normalizeOrigin(meta.origin),
 			addedAt: Date.now(),
 		};
+		const previous = typeof meta.previousEndpoint === "string" ? meta.previousEndpoint : "";
 		this.reload();
-		this.state.subscriptions = [entry, ...this.state.subscriptions.filter((item) => item.endpoint !== endpoint)]
-			.slice(0, MAX_SUBSCRIPTIONS);
+		let kept = this.state.subscriptions.filter((item) => item.endpoint !== endpoint);
+		// Same origin only: the endpoint came from this browser, but an entry
+		// owned by another app is not this registration's to remove.
+		if (previous !== "" && previous !== endpoint) {
+			kept = kept.filter((item) => !(item.endpoint === previous && sameOrigin(item.origin, entry.origin)));
+		}
+		// The safety valve for entries no client can name. It is scoped to this
+		// origin and this label, so another origin (or a device with a different
+		// label) is never touched; a live device resets its own `addedAt` at
+		// every launch, which is what keeps it out of this filter.
+		if (entry.origin !== "" && entry.label !== "") {
+			const cutoff = entry.addedAt - STALE_SUBSCRIPTION_MS;
+			kept = kept.filter((item) => !(
+				item.endpoint !== endpoint
+				&& item.label === entry.label
+				&& sameOrigin(item.origin, entry.origin)
+				&& Number.isFinite(item.addedAt)
+				&& item.addedAt <= cutoff
+			));
+		}
+		this.state.subscriptions = [entry, ...kept].slice(0, MAX_SUBSCRIPTIONS);
 		this.save();
 		return this.state.subscriptions.length;
 	}
@@ -1051,7 +1094,13 @@ export function applyNotify(ctx, config) {
 						// and overwriting it would misroute the push. The
 						// headers remain the fallback for a hand-rolled request.
 						const origin = requestOrigin(req, body);
-						const count = store.add(body.subscription, { label: body.label, origin });
+						const count = store.add(body.subscription, {
+							label: body.label,
+							origin,
+							// The endpoint this browser held before this
+							// registration; see `PushStore.add` (#98).
+							previousEndpoint: body.previousEndpoint,
+						});
 						json(res, 200, { ok: true, count, subject: store.subject(copy.subject) });
 					} catch (error) {
 						json(res, 400, { ok: false, error: String(error?.message ?? error) });

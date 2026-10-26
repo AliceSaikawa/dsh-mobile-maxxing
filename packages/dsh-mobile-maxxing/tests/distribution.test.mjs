@@ -59,3 +59,19 @@ test("the docs use the plugin command DSH takes", async () => {
 		assert.ok(text.includes("dsh plugin --profile web add "), `${doc}: show the install command`);
 	}
 });
+
+test("the nested manifest and the README install URLs match the root version", async () => {
+	const nested = JSON.parse(await readFile(join(packageDir, "package.json"), "utf8"));
+	assert.equal(nested.name, manifest.name, "the implementation keeps the published name");
+	assert.equal(nested.version, manifest.version, "the nested manifest stays version-synced");
+
+	const readme = await readFile(join(packageDir, "README.md"), "utf8");
+	const installs = [...readme.matchAll(
+		/https:\/\/github\.com\/kuraneko1\/dsh-mobile-maxxing\/releases\/download\/v([^\/\s"']+)\/([^\s"'#?]+\.tgz)/g,
+	)];
+	assert.ok(installs.length >= 1, "the implementation README has to show a versioned install URL");
+	for (const [, version, file] of installs) {
+		assert.equal(version, manifest.version, `the download path says v${version}`);
+		assert.equal(file, `${manifest.name}-${manifest.version}.tgz`, `the download file says ${file}`);
+	}
+});

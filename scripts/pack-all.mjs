@@ -32,7 +32,7 @@ const packages = [{
 // URL is cached by pnpm, so the docs must point at the versioned one.
 for (const item of packages) {
 	const url = `https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v${item.version}/${item.file}`;
-	for (const doc of [join(root, "README.md"), join(item.directory, "README.md")]) {
+	for (const doc of [join(item.directory, "README.md"), join(root, "packages", item.name, "README.md")]) {
 		let text;
 		try {
 			text = readFileSync(doc, "utf8");

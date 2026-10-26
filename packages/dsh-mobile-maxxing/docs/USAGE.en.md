@@ -161,15 +161,20 @@ disagree, the global wins and the root attribute is synchronised to it.
   Android token and be treated as desktop. It is not infallible.
 
 The layout (sidebar becomes a drawer) uses the same mode. Width never selects the
-mode, but the right panel has one size tier: at **768px and wider** it docks beside
-the conversation (upstream's own dock), and below 768px it opens as the phone sheet.
-The existing <=380px composer compression is the only other size tweak.
+mode, but the right panel has one size tier: at **768px and wider** it uses upstream's
+dock layout, and below 768px it opens as the phone sheet. Docking is not guaranteed by
+width alone: it needs the room left after the safe-area insets and the conversation's
+minimum width and gutters, measured against upstream's minimum panel width (420px in the
+rc.2 implementation). Measurements showed too little room at 1024–1119px and with large
+insets, so the panel stayed a sheet. The existing <=380px composer compression is the only
+other size tweak.
 
 What changes:
 
 - The sidebar becomes an overlay drawer you open with the floating button
-- At 768px and wider the right panel docks beside the conversation instead of
-  covering it; below 768px it stays the full-screen sheet
+- At 768px and wider the right panel uses the dock beside the conversation when the
+  measured width allows it; otherwise it stays the full-screen sheet. Below 768px it is
+  always the sheet
 - Settings get a single column and a scrolling tab strip
 - The code viewer wraps by default; the header's wrap button turns that
   off and long lines scroll sideways again
@@ -188,7 +193,9 @@ What changes:
   tabs get no heading
 - Dragging inside the terminal scrolls it (the bundled xterm has no touch support)
 - The terminal gets a top key row for Esc, Tab, arrows and Ctrl; it stays above the keyboard.
-  Ctrl applies to the next key only: Ctrl then C sends SIGINT, and tapping Ctrl again cancels it.
+  Ctrl applies to the next key only: Ctrl then C sends ETX (0x03) to the PTY, which an
+  ordinary shell treats as an interrupt (raw-mode apps may handle it differently), and
+  tapping Ctrl again cancels it.
 - Scrolling to the top of a conversation loads older messages automatically while history
   remains: after a real scroll settles at the top, the existing load-earlier control is
   pressed once. A new send that scrolls to the bottom, or any programmatic scroll, does not

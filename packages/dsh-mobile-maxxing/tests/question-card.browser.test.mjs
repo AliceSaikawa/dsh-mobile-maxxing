@@ -45,7 +45,16 @@ const LONG_TOKEN = `https://example.invalid/${"a".repeat(96)}`;
 function shippedStylesheet(source) {
 	const narrowMatch = source.match(/const NARROW_QUERY = "([^"]+)"/);
 	const narrow = narrowMatch === null ? "(max-width: 767px)" : narrowMatch[1];
-	const resolve = (css) => css.replace(/\$\{NARROW_QUERY\}/g, narrow);
+	const resolve = (css) => css
+		.replace(/\$\{NARROW_QUERY\}/g, narrow)
+		.replace(
+			/\$\{RIGHT_PANEL_EXIT\}/g,
+			'[data-rdsh-rightpanel] [aria-label="Exit fullscreen"], [data-rdsh-rightpanel] [aria-label="全画面表示を終了"]',
+		)
+		.replace(
+			/\$\{RIGHT_PANEL_SPLIT\}/g,
+			'[data-rdsh-rightpanel] [aria-label="Split"], [data-rdsh-rightpanel] [aria-label="分割"]',
+		);
 
 	const blocks = [];
 	for (const match of source.matchAll(/const CSS = `([\s\S]*?)`;(?:\r?\n|$)/g)) {

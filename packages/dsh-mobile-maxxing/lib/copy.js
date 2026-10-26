@@ -32,10 +32,13 @@ export const COPY = {
 
 		// --- local display -------------------------------------------------
 		"localDisplay.title": "Display",
-		"localDisplay.desc": "Text, code and terminal sizes for this device. These choices stay in this browser.",
+		"localDisplay.desc": "Text, code and terminal sizes, plus a terminal-only dark palette, for this device. These choices stay in this browser.",
 		"localDisplay.text": "Body text",
 		"localDisplay.code": "Code",
 		"localDisplay.terminal": "Terminal",
+		"localDisplay.subagent": "Subagent",
+		"localDisplay.terminalDark": "Dark terminal only",
+		"localDisplay.terminalDark.note": "Keeps the terminal dark while the surrounding UI and the shared theme stay unchanged. Saved in this browser only.",
 		"localDisplay.language": "Display language",
 		"localDisplay.language.system": "System",
 		"localDisplay.language.note": "Changes the DSH UI language on this device only. It does not change the shared Host setting.",
@@ -46,6 +49,22 @@ export const COPY = {
 		"localDisplay.reason.localeMissing": "The locale service is not available.",
 		"localDisplay.reason.localeShape": "The locale service does not expose a mutable locale.",
 		"localDisplay.reason.noLocales": "No display language is registered.",
+
+		// --- terminal key row ----------------------------------------------
+		"terminalKeys.label": "Terminal keys",
+		"terminalKeys.esc": "Esc",
+		"terminalKeys.escape": "Escape",
+		"terminalKeys.tab": "Tab",
+		"terminalKeys.up": "↑",
+		"terminalKeys.down": "↓",
+		"terminalKeys.left": "←",
+		"terminalKeys.right": "→",
+		"terminalKeys.arrowUp": "Arrow up",
+		"terminalKeys.arrowDown": "Arrow down",
+		"terminalKeys.arrowLeft": "Arrow left",
+		"terminalKeys.arrowRight": "Arrow right",
+		"terminalKeys.ctrl": "Ctrl",
+		"terminalKeys.control": "Control",
 
 		// --- PWA section ----------------------------------------------------
 		"pwa.install.promptable": "Install DSH as an app",
@@ -99,6 +118,8 @@ export const COPY = {
 		"mux.stats.tokPerSec": "{speed} tok/s",
 		"mux.stats.cacheHit": "Cache hit {percent}%",
 		"mux.settingsRow": "Settings",
+		"mux.navMore": "More",
+		"mux.navMore.menu": "More actions",
 		"mux.fab.open": "Open session list",
 		"mux.fab.openWithCount": "Open session list ({count} unread or waiting)",
 		"mux.route.back": "Back",
@@ -137,6 +158,27 @@ export const COPY = {
 		"mux.sound.drop": "Drop",
 		"mux.sound.tick": "Tick",
 		"mux.note.notifyScope": "Notifies on turn end and questions. Only the main agent is covered. By default, only turns sent from this phone are notified.",
+
+		// --- device-local chat policy (this phone only) ----------------------
+		"localChat.title": "Chat view (this device)",
+		"localChat.desc": "Applies to this device only. The Host configuration is not changed.",
+		"localChat.note": "A row you have not changed follows the Host setting.",
+		"localChat.followHost": "Follow Host setting",
+		"localChat.unavailable": "Not adjustable here ({reason})",
+		"localChat.workDetails": "Work details",
+		"localChat.workDetails.compact": "Compact",
+		"localChat.workDetails.standard": "Standard",
+		"localChat.workDetails.detailed": "Detailed",
+		"localChat.workDetails.verbose": "Verbose",
+		"localChat.collapse": "Collapse completed turns",
+		"localChat.collapse.completion": "On completion",
+		"localChat.collapse.next-input": "On the next input",
+		"localChat.busyEnter": "Enter while a turn runs",
+		"localChat.busyEnter.queue": "Queue",
+		"localChat.busyEnter.steer": "Steer",
+		"localChat.performance": "Performance detail",
+		"localChat.performance.compact": "Compact",
+		"localChat.performance.detailed": "Detailed",
 		"mux.notify.deviceTurns": "Notify me for turns sent from this browser too",
 		"localPermission.title": "Default permission (this device only)",
 		"localPermission.desc": "Applied to new sessions started on this device. The shared default and your other devices are untouched.",
@@ -234,6 +276,7 @@ export const COPY = {
 		"workspace.search.noMatches": "No matches",
 		"files.search.placeholder": "Search this folder",
 		"files.search.submit": "Search this folder",
+		"files.search.clear": "Clear search",
 		"files.search.noMatches": "No matches",
 		"files.menu.root": "Folder path",
 		"files.menu.entry": "File actions",
@@ -269,10 +312,13 @@ export const COPY = {
 
 		// --- local display -------------------------------------------------
 		"localDisplay.title": "表示",
-		"localDisplay.desc": "この端末の本文・コード・ターミナルの文字サイズです。設定はこのブラウザだけに保存されます。",
+		"localDisplay.desc": "この端末の本文・コード・ターミナルの文字サイズと、ターミナルだけのダーク配色です。設定はこのブラウザだけに保存されます。",
 		"localDisplay.text": "本文",
 		"localDisplay.code": "コード",
 		"localDisplay.terminal": "ターミナル",
+		"localDisplay.subagent": "サブエージェント",
+		"localDisplay.terminalDark": "ターミナルだけダーク",
+		"localDisplay.terminalDark.note": "周囲の画面と共有テーマは変えず、ターミナルだけを暗い配色にします。このブラウザにだけ保存されます。",
 		"localDisplay.language": "表示言語",
 		"localDisplay.language.system": "システム",
 		"localDisplay.language.note": "この端末の DSH UI の表示言語だけを変更します。共有のホスト設定は変更しません。",
@@ -283,6 +329,22 @@ export const COPY = {
 		"localDisplay.reason.localeMissing": "ロケールサービスがありません。",
 		"localDisplay.reason.localeShape": "ロケールサービスが表示言語の変更に対応していません。",
 		"localDisplay.reason.noLocales": "表示言語が登録されていません。",
+
+		// --- terminal key row ----------------------------------------------
+		"terminalKeys.label": "ターミナルキー",
+		"terminalKeys.esc": "Esc",
+		"terminalKeys.escape": "エスケープ",
+		"terminalKeys.tab": "Tab",
+		"terminalKeys.up": "↑",
+		"terminalKeys.down": "↓",
+		"terminalKeys.left": "←",
+		"terminalKeys.right": "→",
+		"terminalKeys.arrowUp": "上矢印",
+		"terminalKeys.arrowDown": "下矢印",
+		"terminalKeys.arrowLeft": "左矢印",
+		"terminalKeys.arrowRight": "右矢印",
+		"terminalKeys.ctrl": "Ctrl",
+		"terminalKeys.control": "コントロール",
 
 		// --- PWA section ----------------------------------------------------
 		"pwa.install.promptable": "DSH をアプリとしてインストールできます",
@@ -336,6 +398,8 @@ export const COPY = {
 		"mux.stats.tokPerSec": "{speed} tok/s",
 		"mux.stats.cacheHit": "Cache hit {percent}%",
 		"mux.settingsRow": "Settings",
+		"mux.navMore": "その他",
+		"mux.navMore.menu": "その他の操作",
 		"mux.fab.open": "セッション一覧を開く",
 		"mux.fab.openWithCount": "セッション一覧を開く（未読・質問待ち {count}件）",
 		"mux.route.back": "戻る",
@@ -374,6 +438,27 @@ export const COPY = {
 		"mux.sound.drop": "ドロップ",
 		"mux.sound.tick": "タップ",
 		"mux.note.notifyScope": "回答終了時と質問時に通知します。メインエージェントのみ、このスマホから送ったターンだけが対象です。",
+
+		// --- この端末だけのチャット表示 ------------------------------------
+		"localChat.title": "チャット表示（この端末）",
+		"localChat.desc": "この端末にだけ適用します。ホストの設定は変更しません。",
+		"localChat.note": "変更していない項目はホストの設定に従います。",
+		"localChat.followHost": "ホスト設定に従う",
+		"localChat.unavailable": "この環境では変更できません（{reason}）",
+		"localChat.workDetails": "作業の詳細",
+		"localChat.workDetails.compact": "コンパクト",
+		"localChat.workDetails.standard": "標準",
+		"localChat.workDetails.detailed": "詳細",
+		"localChat.workDetails.verbose": "冗長",
+		"localChat.collapse": "完了ターンの折りたたみ",
+		"localChat.collapse.completion": "完了時",
+		"localChat.collapse.next-input": "次の入力時",
+		"localChat.busyEnter": "実行中の Enter",
+		"localChat.busyEnter.queue": "キューに追加",
+		"localChat.busyEnter.steer": "割り込み送信",
+		"localChat.performance": "性能表示",
+		"localChat.performance.compact": "コンパクト",
+		"localChat.performance.detailed": "詳細",
 		"mux.notify.deviceTurns": "このブラウザから送ったターンも通知する",
 		"localPermission.title": "権限の既定（この端末のみ）",
 		"localPermission.desc": "この端末で始める新しいセッションに適用します。共有の既定と他の端末は変わりません。",
@@ -471,6 +556,7 @@ export const COPY = {
 		"workspace.search.noMatches": "該当なし",
 		"files.search.placeholder": "このフォルダ内を検索",
 		"files.search.submit": "このフォルダ内を検索",
+		"files.search.clear": "検索をクリア",
 		"files.search.noMatches": "該当なし",
 		"files.menu.root": "フォルダのパス",
 		"files.menu.entry": "ファイルの操作",
@@ -499,37 +585,64 @@ export const COPY = {
  */
 export const PROBES = {
 	/** The account/menu button that opens Settings. */
-	accountMenu: ["Account menu", "設定"],
+	accountMenu: ["Account menu", "アカウントメニュー"],
 	/** The Settings row inside that menu. */
 	settingsMenu: ["Settings", "設定"],
+	/** Localized leaves of the phone's default hide list. The English names
+	 *  stay in client.js; these are the committed ja renderings of the same
+	 *  controls ("Open configuration file", "More actions", …). */
+	hideControls: [
+		"設定ファイルを開く",
+		"その他の操作",
+		"フィードバック",
+		"サインイン",
+		"キーボードショートカット",
+		"コーディングビューを表示",
+		"組み込みプラグイン",
+	],
+	/** Sidebar rows folded into the landscape More menu. */
+	navPlugins: ["Plugins", "插件", "プラグイン"],
+	navAutomation: ["Automation tasks", "自动化任务", "自動化タスク"],
 	/** The Automation-tasks detail's close control: the only way back to the list
 	 *  once upstream hides the list on a phone. */
-	closeTaskDetail: ["Close details", "关闭详情"],
+	closeTaskDetail: ["Close details", "关闭详情", "詳細を閉じる"],
 	/** A session row's own "..." trigger. */
 	actions: ["actions", "操作"],
 	/** A button that stops the running turn (must not mark a phone send). */
 	stop: ["stop", "停止"],
 	/** The activity chip: "3 turns" / "3 steps". */
 	turns: ["turns", "turn", "steps", "step", "ターン", "ステップ"],
-	/** The usage chip: "Cache hit 40%". */
-	cacheHit: ["cache hit", "キャッシュ"],
+	/** The usage chip: "Cache hit 40%" / "キャッシュヒット 40%". */
+	cacheHit: ["cache hit", "キャッシュヒット"],
 	/** The context chip: "40% context". */
 	context: ["context", "コンテキスト"],
 	/** A running activity chip: "3 background jobs running" / "3 subagents running".
-	 *  DSH 0.2.1 ships en and zh only; a ja shell adds its word here. */
-	activityRunning: ["running", "运行中", "正在运行"],
-	/** Count-chip nouns in the two upstream locales; a ja pack adds its own. */
-	activityChip: ["subagent", "subagents", "background job", "background jobs", "shell command", "shell commands", "个子智能体", "个后台任务"],
+	 *  The ja wording puts the counter before the noun ("3 件の…が実行中"). */
+	activityRunning: ["running", "运行中", "正在运行", "実行中"],
+	/** Count-first count chips: en, zh and the ja running/job forms attach the
+	 *  counter to the number ("3件のバックグラウンドジョブ"). */
+	activityChip: ["subagent", "subagents", "background job", "background jobs", "shell command", "shell commands", "个子智能体", "个后台任务", "件のサブエージェント", "件のバックグラウンドジョブ"],
+	/** Count-last nouns: the committed ja subagent total is noun-first
+	 *  ("サブエージェント 3 件"), so the number is not at the start. */
+	activityChipCountLast: ["サブエージェント", "バックグラウンドジョブ"],
+	/** The trailing counter that closes a noun-first ja count chip. */
+	activityChipCounter: ["件"],
 	/** The subagent noun inside a count chip, for choosing its glyph. */
-	activitySubagentChip: ["subagents", "subagent", "子智能体"],
+	activitySubagentChip: ["subagents", "subagent", "子智能体", "サブエージェント"],
 	/** Any aria-label that identifies the stats dock. */
 	stats: ["tok", "turns", "context", "ターン", "コンテキスト"],
 	/** A control that starts a new session (sidebar button, brand row, workspace "+"). */
-	newSession: ["new session", "新建会话", "中新建会话"],
+	newSession: ["new session", "新建会话", "中新建会话", "新しいセッション"],
 	/** Labels of a session that has no name yet. */
 	untitled: ["new session", "new chat", "untitled", "新しいセッション", "新しいチャット", "無題", "未命名", "新会话"],
 	/** The right panel's "make this pane fullscreen" control. */
-	fullscreen: ["Enter fullscreen", "Fullscreen", "全屏"],
+	fullscreen: ["Enter fullscreen", "Fullscreen", "全屏", "全画面表示"],
+	/** The same panel's "leave fullscreen" control, which a phone hides. */
+	fullscreenExit: ["Exit fullscreen", "全画面表示を終了"],
+	/** The dock's pane-split control, which a phone hides at every width. */
+	split: ["Split", "分割"],
+	/** The Conversation view tab that opens the Trajectory view (#75). */
+	trajectoryTab: ["Trajectory", "軌跡", "轨迹", "トラジェクトリ"],
 };
 
 /** Keys the service worker needs, picked out of {@link COPY}. */
@@ -572,110 +685,3 @@ export function serviceWorkerCopy(lang) {
 	const strings = copyFor(lang);
 	return Object.fromEntries(SW_KEYS.map((key) => [key, strings[key]]));
 }
-
-/**
- * Language-pack dictionaries for the shared DSH locale service (#64).
- *
- * These are not strings this package renders: they translate the upstream
- * `common`, `settings` and `settings.locale` namespaces so the mobile
- * display-language picker can offer Japanese. A namespace without an entry
- * here is left to the locale service's ja -> en fallback, which shows the
- * English copy rather than a guessed translation.
- *
- * Kept beside {@link COPY} because the repository rule is that UI copy lives
- * in this module; the host injects it as `__RDSH_PWA_LOCALES__`.
- */
-export const LOCALE_PACKS = {
-	ja: {
-		language: { id: "ja", label: "日本語", fallback: "en" },
-		dictionaries: {
-			common: {
-				"ok": "確定",
-				"cancel": "キャンセル",
-				"close": "閉じる",
-				"copy": "コピー",
-				"copied": "コピーしました",
-				"codeBlock.title": "コードブロック",
-				"codeBlock.wrap": "折り返す",
-				"codeBlock.unwrap": "折り返さない",
-				"copy.failed": "コピーに失敗しました",
-				"copy.value": "値をコピー",
-				"copy.json": "JSON をコピー",
-				"copy.path": "プロパティパスをコピー",
-				"copy.prettyJson": "整形した JSON をコピー",
-				"copy.compactJson": "圧縮した JSON をコピー",
-				"copy.optionsHint": "{action}。右クリックでコピー方法を選択",
-				"retry": "再試行",
-				"loading": "読み込み中…",
-				"load.failed": "読み込みに失敗しました",
-				"submit": "送信",
-				"submitting": "送信中…",
-				"next": "次へ",
-				"previous": "前へ",
-				"skip": "スキップ",
-				"delete": "削除",
-				"edit": "編集",
-				"save": "保存",
-				"search": "検索",
-				"more": "詳細",
-				"collapse": "折りたたむ",
-				"expand": "展開",
-				"back": "戻る",
-				"brand.localBuild": "DSH ローカルビルド",
-				"workspace.defaultName": "既定のワークスペース",
-				"unknown": "不明",
-				"none": "なし",
-				"truncated": "切り捨て済み",
-				"json.label": "JSON",
-				"markdown.footnotes": "脚注",
-				"markdown.truncatedCharacters": "… {total} 文字で切り捨て",
-				"number.thousand": "{value}K",
-				"number.million": "{value}M",
-			},
-			settings: {
-				"trigger": "設定",
-				"shortcut.open": "設定を開く",
-				"desktop.update.available": "更新",
-				"desktop.update.checking": "更新を確認中…",
-				"desktop.update.progress": "{percent}%",
-				"desktop.update.verifying": "更新ファイルを検証中…",
-				"desktop.update.installing": "再起動の準備中…",
-				"desktop.update.ready": "インストールして再起動",
-				"desktop.update.retry": "更新を再試行",
-				"desktop.update.versionDetail": "{label}: {version}",
-				"desktop.update.downloadDetail": "更新をダウンロード中: {percent}%\n対象バージョン: {version}",
-				"desktop.update.checkFailed": "更新を確認できませんでした。しばらくしてから再試行してください。",
-				"desktop.update.downloadFailed": "更新をダウンロードできませんでした。再試行してください。",
-				"desktop.update.installFailed": "更新をインストールできませんでした。しばらくしてから再試行してください。",
-				"desktop.update.checkNetworkFailed": "更新を確認できませんでした。接続を確認して再試行してください。",
-				"desktop.update.downloadNetworkFailed": "更新をダウンロードできませんでした。接続を確認して再試行してください。",
-				"desktop.update.installNetworkFailed": "更新をインストールできませんでした。接続を確認して再試行してください。",
-				"desktop.update.stopFailed": "タスクを安全に停止できませんでした。更新はインストールされていません。しばらくしてから再試行してください。",
-				"desktop.update.tasksChanged": "新しいタスクが開始されました。もう一度確認してタスクを停止し、更新してください。",
-				"desktop.update.tasksUnavailable": "タスクの状態を取得できません。ワークスペースの準備ができてから更新を再試行してください。",
-				"title": "設定",
-				"close": "閉じる",
-				"openDocument": "設定ファイルを開く",
-				"openDocument.error": "設定ファイルを開けませんでした",
-				"general.nav": "一般",
-				"general.currentVersion": "現在のバージョン: {version}",
-				"developerTools.title": "コーディングビューを表示",
-				"developerTools.error": "保存できませんでした。再試行してください。",
-				"developerTools.description": "軌跡・コード差分・すべてのエージェントプリセットを表示します",
-				"connection.error": "切断",
-				"connection.connecting": "再接続中",
-				"connection.connected": "接続済み",
-				"connection.reconnect": "切断されました。今すぐ再接続",
-				"connection.restart": "再接続中です。今すぐ再接続",
-				"hostRelease.title": "サービスのバージョンが変わりました",
-				"hostRelease.description": "サービスのバージョンが変わりました。このページはライブ更新を停止しました。再読み込みして新しいバージョンを読み込んでください。",
-				"hostRelease.service": "サービス",
-				"hostRelease.page": "ページ",
-				"hostRelease.unknown": "不明",
-				"hostRelease.reload": "再読み込みして新しいバージョンを読み込む",
-				"hostRelease.later": "後で",
-			},
-			"settings.locale": { "language.title": "言語" },
-		},
-	},
-};

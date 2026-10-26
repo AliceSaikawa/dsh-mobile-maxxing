@@ -49,7 +49,7 @@ function fixtureFor(mode) {
 	return {
 		head: `<meta name="viewport" content="width=device-width, initial-scale=1">`
 			+ `<style data-fixture="device">${deviceCss}</style>${phoneSheet}`,
-		body: `<div data-rdsh-frame style="display:grid;grid-template-columns:0 minmax(0,1fr) 0;height:100dvh">
+		body: `<div data-rdsh-frame data-rightbar-fullscreen style="display:grid;grid-template-columns:0 minmax(0,1fr) 0;height:100dvh">
   <div data-rdsh-center-col style="grid-column:2;display:flex;flex-direction:column;min-width:0">
     <header data-rdsh-header data-window-drag style="height:76px;flex:0 0 76px;background:#333"></header>
     <div style="flex:1 1 auto;background:#222">chat</div>
@@ -181,7 +181,10 @@ try {
 	const mobile390Rects = await toggleHeaderFrames(10);
 	assert.equal(mobile390Rects.length, 1, "the header rect moved while the panel opened and closed at 390");
 
-	// Same mobile fixture at 1024: mode, not width, keeps the phone surface.
+	// Same mobile fixture at 1024: this fixture is the fullscreen sheet (the
+	// frame carries data-rightbar-fullscreen, as upstream does), so #46 layering
+	// must hold there too. #72's dock at this width is a different presentation
+	// and is covered by boundary-issues.test.mjs, not by this geometry fixture.
 	await setViewport(1024, 900);
 	const mobile1024 = await measure();
 	assert.equal(mobile1024.mode, "mobile");

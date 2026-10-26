@@ -107,11 +107,24 @@ function storage(seed = {}) {
 
 /**
  * Boot the module against the stub DOM.
- * @param {object} options - theme service (or null), initial storage, width.
+ *
+ * `deferTheme` models the real client: `ctx.inject(["theme"], ...)` waits for
+ * the theme service, so a plugin that reads `ctx.get("theme")` during apply
+ * sees `undefined`. Resolve it with the returned `resolveTheme()`.
+ *
+ * @param {object} options - theme service (or null), initial storage, width,
+ *   and whether theme injection should wait for `resolveTheme()`.
  */
-function boot({ theme = null, seed = {}, narrow = true, mode = null } = {}) {
+function boot({ theme = null, seed = {}, narrow = true, mode = null, deferTheme = false } = {}) {
 	let definition;
 	const listeners = new Map();
+	const listenerCounts = new Map();
+	const disposers = [];
+	const pendingThemeInjections = [];
+	const mediaListeners = new Set();
+	const services = { theme };
+	const themeReady = () => services.theme !== null && services.theme !== undefined;
+	let resolveTheme = () => {};
 	const body = element();
 	const documentElement = element();
 	const sandbox = {
@@ -132,7 +145,11 @@ function boot({ theme = null, seed = {}, narrow = true, mode = null } = {}) {
 		location: stub(),
 		localStorage: storage(seed),
 		sessionStorage: storage(),
-		matchMedia: (query) => ({ matches: narrow && String(query).includes("max-width: 767px"), addEventListener() {}, removeEventListener() {} }),
+		matchMedia: (query) => ({
+			matches: narrow && String(query).includes("max-width: 767px"),
+			addEventListener(type, listener) { if (type === "change") mediaListeners.add(listener); },
+			removeEventListener(type, listener) { if (type === "change") mediaListeners.delete(listener); },
+		}),
 		addEventListener() {},
 		removeEventListener() {},
 		setTimeout: () => 0,
@@ -195,13 +212,32 @@ function boot({ theme = null, seed = {}, narrow = true, mode = null } = {}) {
 	vm.runInContext(CLIENT, sandbox, { filename: "client.js" });
 
 	const plugin = definition.factory((name) => stub());
+	const depsReady = (deps) => deps.every((dep) => {
+		if (dep === "theme") return themeReady();
+		if (dep === "locale") return services.locale !== null && services.locale !== undefined;
+		return true;
+	});
+	resolveTheme = (service) => {
+		services.theme = service;
+		for (const entry of pendingThemeInjections.splice(0)) {
+			if (depsReady(entry.deps)) entry.callback(ctx);
+			else pendingThemeInjections.push(entry);
+		}
+	};
 	const ctx = {
 		effect(fn) {
 			const dispose = fn();
-			return typeof dispose === "function" ? dispose : () => {};
+			const teardown = typeof dispose === "function" ? dispose : () => {};
+			disposers.push(teardown);
+			return teardown;
 		},
 		inject(deps, callback) {
-			return callback(ctx);
+			if (!deferTheme || depsReady(deps)) return callback(ctx);
+			pendingThemeInjections.push({ deps, callback });
+			return () => {
+				const index = pendingThemeInjections.findIndex((entry) => entry.callback === callback);
+				if (index !== -1) pendingThemeInjections.splice(index, 1);
+			};
 		},
 		slots: {
 			inject() {},
@@ -209,14 +245,31 @@ function boot({ theme = null, seed = {}, narrow = true, mode = null } = {}) {
 				return () => {};
 			},
 		},
-		get: (name) => (name === "theme" && theme !== null ? theme : undefined),
+		// The local display projection emits theme/change when a device-local
+		// font is active; only its listeners matter here.
+		emit() {},
+		get: (name) => (name === "theme" && themeReady() ? services.theme : undefined),
 		on(event, listener) {
 			listeners.set(event, listener);
-			return () => listeners.delete(event);
+			listenerCounts.set(event, (listenerCounts.get(event) ?? 0) + 1);
+			return () => {
+				if (listeners.get(event) === listener) listeners.delete(event);
+				listenerCounts.set(event, Math.max(0, (listenerCounts.get(event) ?? 1) - 1));
+			};
 		},
 	};
 	plugin.apply(ctx);
-	return { sandbox, body, documentElement, listeners, api: sandbox.__RDSH_MOBILE_UX__ };
+	return {
+		sandbox,
+		body,
+		documentElement,
+		listeners,
+		disposers,
+		resolveTheme,
+		listenerCount: (event) => listenerCounts.get(event) ?? 0,
+		mediaListenerCount: () => mediaListeners.size,
+		api: sandbox.__RDSH_MOBILE_UX__,
+	};
 }
 
 test("without a theme service nothing is painted and nothing throws", () => {
@@ -295,4 +348,99 @@ test("an empty store reads as the shared theme", () => {
 		theme: { getTheme: () => ({ preference: "light", active: { colorScheme: "light", tokens: {} } }) },
 	});
 	assert.equal(api.readDeviceTheme(), "");
+});
+
+const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+test("a stored choice is applied when the theme service arrives after apply (#73)", async () => {
+	// Reproduction: the plugin applies before the shared presenter, so the
+	// direct ctx.get("theme") read returned undefined and the stored choice was
+	// never painted. The service must be resolved through ctx.inject instead.
+	const shared = { preference: "dark", active: { colorScheme: "dark", tokens: {} } };
+	const { body, documentElement, resolveTheme, listenerCount } = boot({
+		theme: null,
+		deferTheme: true,
+		seed: { "dsh-mobile-maxxing:device-theme": "light" },
+	});
+	assert.equal(documentElement.getAttribute("data-rdsh-device-theme"), null,
+		"nothing is painted before the palette contract exists");
+
+	resolveTheme({ getTheme: () => shared });
+	await flush();
+	assert.equal(documentElement.getAttribute("data-rdsh-device-theme"), "light");
+	assert.equal(body.hasAttribute("data-ds-dark-theme"), false, "the stored light choice overrides shared dark");
+	assert.equal(documentElement.style.colorScheme, "light");
+	assert.equal(listenerCount("theme/change"), 1, "resolution registers exactly one device listener");
+});
+
+test("repeated font and shared theme changes keep the device palette and one listener", async () => {
+	const shared = {
+		preference: "dark",
+		active: { colorScheme: "dark", tokens: {} },
+		fontSizes: { text: 14, code: 11, terminal: 13 },
+		revision: 1,
+	};
+	const theme = { getTheme: () => shared, snapshot: shared };
+	const { api, body, documentElement, listeners, listenerCount } = boot({
+		theme,
+		seed: {
+			"dsh-mobile-maxxing:device-theme": "light",
+			"rdsh-mobile-ux:local-display": JSON.stringify({
+				fonts: { text: 15, code: 12, terminal: 14 },
+				language: "",
+			}),
+		},
+	});
+	await flush();
+	assert.equal(api.state.localDisplay.fonts.text, 15, "the device-local font is projected");
+	assert.equal(api.state.localDisplay.fontsLocal, true);
+	assert.equal(documentElement.getAttribute("data-rdsh-device-theme"), "light",
+		"a font-driven theme/change must not drop the device palette");
+	const registered = listenerCount("theme/change");
+
+	// Each local font change re-emits the shared snapshot, and the PC can also
+	// switch the shared theme repeatedly. One listener must serve all of them.
+	for (let index = 0; index < 5; index += 1) {
+		listeners.get("theme/change")({
+			...shared,
+			fontSizes: { text: 16 + index, code: 12, terminal: 14 },
+			revision: 2 + index,
+		});
+	}
+	await flush();
+	assert.equal(documentElement.getAttribute("data-rdsh-device-theme"), "light");
+	assert.equal(body.hasAttribute("data-ds-dark-theme"), false);
+	assert.equal(listenerCount("theme/change"), registered, "no duplicate listener was added");
+});
+
+test("a shell without the theme service stays untouched while injection waits", () => {
+	const { body, documentElement, listenerCount, api } = boot({
+		theme: null,
+		deferTheme: true,
+		seed: { "dsh-mobile-maxxing:device-theme": "dark" },
+	});
+	assert.ok(api !== undefined, "the rest of the page still boots");
+	assert.equal(body.hasAttribute("data-ds-dark-theme"), false);
+	assert.equal(documentElement.getAttribute("data-rdsh-device-theme"), null);
+	assert.equal(documentElement.style.colorScheme, undefined);
+	assert.equal(listenerCount("theme/change"), 0);
+});
+
+test("disposing the plugin releases the palette and stops listening", async () => {
+	const shared = { preference: "dark", active: { colorScheme: "dark", tokens: {} } };
+	const { body, documentElement, disposers, listenerCount, mediaListenerCount } = boot({
+		theme: { getTheme: () => shared },
+		seed: { "dsh-mobile-maxxing:device-theme": "light" },
+	});
+	assert.equal(documentElement.getAttribute("data-rdsh-device-theme"), "light");
+
+	for (const dispose of [...disposers].reverse()) dispose();
+	assert.equal(documentElement.getAttribute("data-rdsh-device-theme"), null, "the override was released");
+	assert.equal(body.hasAttribute("data-ds-dark-theme"), false);
+	assert.equal(documentElement.style.colorScheme, "");
+	assert.equal(listenerCount("theme/change"), 0, "the theme listener was removed");
+	assert.equal(mediaListenerCount(), 0, "the system scheme listener was removed");
+	await flush();
+	assert.equal(documentElement.getAttribute("data-rdsh-device-theme"), null,
+		"a frame queued before dispose cannot repaint");
 });

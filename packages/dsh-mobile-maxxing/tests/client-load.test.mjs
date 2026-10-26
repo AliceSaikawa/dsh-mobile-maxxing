@@ -18,7 +18,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import vm from "node:vm";
-import { COPY, LOCALE_PACKS, PROBES } from "../lib/copy.js";
+import { COPY, PROBES } from "../lib/copy.js";
 
 const CLIENT = readFileSync(new URL("../client.js", import.meta.url), "utf8");
 
@@ -151,6 +151,7 @@ function bootClient({
 	windowRemove = null,
 	lang = undefined,
 	copy = null,
+	config = null,
 	fetchImpl = null,
 	navigator = null,
 	computedStyle = () => stub(),
@@ -159,8 +160,8 @@ function bootClient({
 	requireImpl = null,
 	services = {},
 	globals = null,
+	slotsEntries = null,
 	log = console,
-	localePacks = LOCALE_PACKS,
 } = {}) {
 	let definition;
 	const disposers = [];
@@ -268,7 +269,7 @@ function bootClient({
 	sandbox.window.innerHeight = 844;
 	if (lang !== undefined) sandbox.__RDSH_PWA_LANG__ = lang;
 	if (copy !== null) sandbox.__RDSH_PWA_COPY__ = copy;
-	if (localePacks !== null) sandbox.__RDSH_PWA_LOCALES__ = localePacks;
+	if (config !== null) sandbox.__RDSH_MOBILE_UX_CONFIG__ = config;
 	// The canonical host bootstrap value. Null means "let the harness derive
 	// the legacy default"; contract tests pass it explicitly. `injectMode:
 	// false` models an old/absent bootstrap and must fail closed to desktop.
@@ -299,6 +300,9 @@ function bootClient({
 			inject(deps, callback) {
 				if (typeof callback === "function") return callback();
 				return undefined;
+			},
+			entries(name) {
+				return typeof slotsEntries === "function" ? slotsEntries(name) : undefined;
 			},
 			register() {
 				if (failFirstSlot) {
@@ -405,6 +409,9 @@ test("tapping a New session button on a phone closes the drawer", () => {
 	assert.equal(drawerClosedAfterTapping("New session in my-repo"), true, "workspace button");
 	assert.equal(drawerClosedAfterTapping("新建会话"), true, "zh sidebar button");
 	assert.equal(drawerClosedAfterTapping("在“my-repo”中新建会话"), true, "zh workspace button");
+	// Reviewed ja labels: the stock sidebar action and a workspace's "+".
+	assert.equal(drawerClosedAfterTapping("新しいセッションを作成"), true, "ja sidebar button");
+	assert.equal(drawerClosedAfterTapping("my-repo で新しいセッション"), true, "ja workspace button");
 });
 
 test("other buttons leave the drawer open, and so does a wide screen", () => {
@@ -594,6 +601,256 @@ test("the legacy hide list applies at phone width even with a fine pointer", () 
 	});
 	assert.equal(wideButton.hasAttribute("data-rdsh-hidden"), false, "a desktop hides nothing");
 	wide.disposeAll();
+});
+
+/** One committed ja namespace, as the full translation ships it. */
+function jaNamespace(name) {
+	return JSON.parse(readFileSync(new URL(`../../rdsh-locale-ja/locale/namespaces/ja/${name}.json`, import.meta.url), "utf8"));
+}
+
+test("#80 the default hide list matches the committed ja labels", () => {
+	// The visible ja renderings of HIDE_DEFAULT, read from the reviewed
+	// catalogue rather than written out here.
+	const settings = jaNamespace("settings");
+	const shortcuts = jaNamespace("shortcuts");
+	const account = jaNamespace("settings.account");
+	const plugins = jaNamespace("settings.plugins");
+	const command = jaNamespace("command");
+	const sessionLog = jaNamespace("session-log-download");
+	const labels = [
+		settings.openDocument,
+		sessionLog["header.more"],
+		command["label.feedback"],
+		account.signIn,
+		shortcuts.settings,
+		settings["developerTools.title"],
+		plugins.title,
+	];
+	const controls = labels.map((label) => {
+		const button = element();
+		button.setAttribute("aria-label", label);
+		return button;
+	});
+	const frames = [];
+	const config = {};
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		lang: "ja",
+		frames,
+		config,
+		configureDocument(doc) {
+			doc.querySelectorAll = (selector) => (selector === "button[aria-label], [role='menuitem']" ? controls : []);
+			doc.querySelector = () => null;
+		},
+	});
+	const flush = () => {
+		for (let index = 0; index < 10 && frames.length > 0; index += 1) frames.shift()();
+	};
+	flush();
+	for (const [index, control] of controls.entries()) {
+		assert.equal(control.hasAttribute("data-rdsh-hidden"), true, `${labels[index]} stayed visible on a phone`);
+	}
+	assert.equal(booted.sandbox.document.documentElement.hasAttribute("data-rdsh-hide-settings"), true);
+
+	// The console switch turns hiding off, and the same pass cleans every hook.
+	config.showHiddenControls = true;
+	booted.sandbox.__RDSH_MOBILE_UX__.decorate();
+	flush();
+	for (const control of controls) assert.equal(control.hasAttribute("data-rdsh-hidden"), false, "turning hiding off left a tag behind");
+	assert.equal(booted.sandbox.document.documentElement.hasAttribute("data-rdsh-hide-settings"), false);
+
+	// ...and back on: the ja entries are still in the default list.
+	config.showHiddenControls = false;
+	booted.sandbox.__RDSH_MOBILE_UX__.decorate();
+	flush();
+	for (const control of controls) assert.equal(control.hasAttribute("data-rdsh-hidden"), true, "the ja entries left the default list");
+	booted.disposeAll();
+
+	// A profile's own custom entries keep their exact/prefix semantics along
+	// with the localized defaults.
+	const custom = element();
+	custom.setAttribute("aria-label", "Custom control: keep out");
+	const customFrames = [];
+	const customBoot = bootClient({
+		mode: "mobile",
+		narrow: true,
+		frames: customFrames,
+		config: { hideLabels: ["Custom control"] },
+		configureDocument(doc) {
+			doc.querySelectorAll = (selector) => (selector === "button[aria-label], [role='menuitem']" ? [custom] : []);
+			doc.querySelector = () => null;
+		},
+	});
+	for (let index = 0; index < 10 && customFrames.length > 0; index += 1) customFrames.shift()();
+	assert.equal(custom.hasAttribute("data-rdsh-hidden"), true, "the profile hide entry stopped matching");
+	customBoot.disposeAll();
+
+	// A desktop with the same ja labels is a hard no-op.
+	const desktopControls = labels.map((label) => {
+		const button = element();
+		button.setAttribute("aria-label", label);
+		return button;
+	});
+	const desktop = bootClient({
+		mode: "desktop",
+		narrow: false,
+		lang: "ja",
+		frames: [],
+		configureDocument(doc) {
+			doc.querySelectorAll = () => desktopControls;
+			doc.querySelector = () => null;
+		},
+	});
+	for (const control of desktopControls) assert.equal(control.hasAttribute("data-rdsh-hidden"), false, "a desktop hid a ja control");
+	desktop.disposeAll();
+});
+
+/* ------------------------------------------------------------------ */
+/* #75: the Trajectory Conversation view tab on a phone                */
+/* ------------------------------------------------------------------ */
+
+/** The shipped Conversation tab strip: a marker div with plain tab buttons. */
+function conversationTabs(labels = ["Chat", "Trajectory", "Dashboard"], selected = "Chat") {
+	const tabs = [];
+	const strip = element();
+	for (const label of labels) {
+		const tab = element();
+		tab.tagName = "BUTTON";
+		tab.textContent = label;
+		tab.querySelector = () => null;
+		tab.setAttribute("role", "tab");
+		tab.setAttribute("aria-selected", String(label === selected));
+		tab.clicks = 0;
+		tab.focused = false;
+		tab.click = () => {
+			tab.clicks += 1;
+			for (const other of tabs) other.setAttribute("aria-selected", String(other === tab));
+		};
+		tab.focus = () => {
+			tab.focused = true;
+		};
+		tabs.push(tab);
+	}
+	strip.querySelectorAll = (selector) => (selector === '[role="tab"]' ? tabs : []);
+	return { strip, tabs };
+}
+
+/** Boot client.js against one Conversation tab strip and run a decorate pass. */
+function bootConversationTabs({ mode = "mobile", fixture = conversationTabs(), slotsEntries = null } = {}) {
+	const frames = [];
+	const booted = bootClient({
+		mode,
+		narrow: mode === "mobile",
+		frames,
+		slotsEntries,
+		configureDocument(doc) {
+			doc.querySelector = (selector) => (selector === "[data-conversation-tabs]" ? fixture.strip : null);
+			doc.querySelectorAll = (selector) => {
+				if (selector === "[data-conversation-tabs]") return [fixture.strip];
+				const exactAttribute = /^\[([\w-]+)\]$/.exec(selector);
+				return exactAttribute === null ? [] : fixture.tabs.filter((tab) => tab.hasAttribute(exactAttribute[1]));
+			};
+		},
+	});
+	for (let index = 0; index < 10 && frames.length > 0; index += 1) frames.shift()();
+	return { ...fixture, booted, frames };
+}
+
+test("#75 hides the Trajectory conversation tab on a phone and keeps every other tab", () => {
+	const { tabs, booted } = bootConversationTabs();
+	const [chat, trajectory, dashboard] = tabs;
+	assert.equal(trajectory.hasAttribute("data-rdsh-trajectory-tab-hidden"), true, "Trajectory was not hidden");
+	assert.equal(chat.hasAttribute("data-rdsh-trajectory-tab-hidden"), false, "Chat was hidden");
+	assert.equal(dashboard.hasAttribute("data-rdsh-trajectory-tab-hidden"), false, "Dashboard was hidden");
+	assert.equal(chat.clicks + dashboard.clicks, 0, "a non-active Trajectory pass changed the selection");
+	booted.disposeAll();
+});
+
+test("#75 the hide rule is in the phone sheet and not the desktop one", () => {
+	const phone = CLIENT.match(/const CSS_PHONE = `([\s\S]*?)`;/)[1];
+	const device = CLIENT.match(/const CSS_DEVICE = `([\s\S]*?)`;/)[1];
+	assert.match(
+		phone,
+		/html\[data-rdsh-hide-settings\] \[data-conversation-tabs\] \[data-rdsh-trajectory-tab-hidden\] \{ display: none !important; \}/,
+		"the hidden Trajectory tab has no phone rule",
+	);
+	assert.doesNotMatch(device, /trajectory-tab-hidden/, "the desktop sheet hides a phone tab");
+});
+
+test("#75 falls back to Chat before hiding an active Trajectory tab, and only once", () => {
+	const fixture = conversationTabs(["Chat", "Trajectory", "Dashboard"], "Trajectory");
+	const [chat, trajectory] = fixture.tabs;
+	let hiddenAtClick = null;
+	const click = chat.click;
+	chat.click = () => {
+		hiddenAtClick = trajectory.hasAttribute("data-rdsh-trajectory-tab-hidden");
+		click();
+	};
+	const { booted } = bootConversationTabs({ fixture });
+	assert.equal(chat.clicks, 1, "Chat was not selected");
+	assert.equal(chat.focused, true, "focus did not follow the fallback");
+	assert.equal(hiddenAtClick, false, "Trajectory was hidden before the fallback");
+	assert.equal(chat.getAttribute("aria-selected"), "true", "Chat is not selected");
+	assert.equal(trajectory.hasAttribute("data-rdsh-trajectory-tab-hidden"), true, "Trajectory is visible");
+	booted.sandbox.__RDSH_MOBILE_UX__.decorateNow();
+	assert.equal(chat.clicks, 1, "a second pass stole the selection again");
+	booted.disposeAll();
+});
+
+test("#75 leaves another active view selected while hiding Trajectory", () => {
+	const fixture = conversationTabs(["Chat", "Trajectory", "Dashboard"], "Dashboard");
+	const [chat, trajectory, dashboard] = fixture.tabs;
+	const { booted } = bootConversationTabs({ fixture });
+	assert.equal(trajectory.hasAttribute("data-rdsh-trajectory-tab-hidden"), true, "Trajectory was not hidden");
+	assert.equal(chat.clicks, 0, "Chat was selected over the active Dashboard");
+	assert.equal(dashboard.clicks, 0, "the active Dashboard tab was clicked");
+	assert.equal(dashboard.getAttribute("aria-selected"), "true", "the active Dashboard view was lost");
+	booted.disposeAll();
+});
+
+test("#75 is a no-op on a desktop", () => {
+	const fixture = conversationTabs(["Chat", "Trajectory"], "Trajectory");
+	const { tabs, booted } = bootConversationTabs({ mode: "desktop", fixture });
+	assert.equal(booted.sandbox.__RDSH_MOBILE_UX__, undefined, "the mobile half booted on a desktop");
+	assert.equal(tabs[1].hasAttribute("data-rdsh-trajectory-tab-hidden"), false, "a desktop hid Trajectory");
+	assert.equal(tabs[0].clicks, 0, "a desktop changed the selection");
+	assert.equal(tabs[1].getAttribute("aria-selected"), "true", "a desktop lost its active view");
+	booted.disposeAll();
+});
+
+test("#75 removes the tab hook on dispose", () => {
+	const fixture = conversationTabs();
+	const { tabs, booted } = bootConversationTabs({ fixture });
+	assert.equal(tabs[1].hasAttribute("data-rdsh-trajectory-tab-hidden"), true, "the phone hook is missing before dispose");
+	booted.disposeAll();
+	assert.equal(tabs[1].hasAttribute("data-rdsh-trajectory-tab-hidden"), false, "dispose left the tab hidden");
+});
+
+for (const label of ["Trajectory", "軌跡", "轨迹", "トラジェクトリ"]) {
+	test(`#75 recognizes the ${label} Trajectory label`, () => {
+		const fixture = conversationTabs(["Chat", label, "Dashboard"], "Chat");
+		const { tabs, booted } = bootConversationTabs({ fixture });
+		assert.equal(tabs[1].hasAttribute("data-rdsh-trajectory-tab-hidden"), true, `${label} was not hidden`);
+		assert.equal(tabs[0].hasAttribute("data-rdsh-trajectory-tab-hidden"), false, "Chat was hidden");
+		assert.equal(tabs[2].hasAttribute("data-rdsh-trajectory-tab-hidden"), false, "Dashboard was hidden");
+		booted.disposeAll();
+	});
+}
+
+test("#75 reads the localized label through the stable trajectory slot id", () => {
+	const fixture = conversationTabs(["Chat", "Parcours"], "Chat");
+	const entries = [
+		{ options: { id: "chat", order: 0, label: () => "Chat" } },
+		{ options: { id: "trajectory", order: 10, label: () => "Parcours" } },
+	];
+	const { tabs, booted } = bootConversationTabs({
+		fixture,
+		slotsEntries: (name) => (name === "conversation.view" ? entries : undefined),
+	});
+	assert.equal(tabs[1].hasAttribute("data-rdsh-trajectory-tab-hidden"), true, "the slot label did not identify Trajectory");
+	assert.equal(tabs[0].hasAttribute("data-rdsh-trajectory-tab-hidden"), false, "Chat was hidden");
+	booted.disposeAll();
 });
 
 test("the effect disposer tears down without a ReferenceError or a stale listener", () => {
@@ -891,8 +1148,8 @@ test("the four-row drawer survives decoration when the upstream nav exists", () 
 	};
 	nav.contains = (node) => node.parentElement === nav;
 	nav.querySelector = (selector) => {
-		if (selector === 'button[aria-label="Automation tasks"]') return auto;
-		if (selector === 'button[aria-label="Plugins"]') return plugins;
+		if (selector.includes('aria-label="Automation tasks"')) return auto;
+		if (selector.includes('aria-label="Plugins"')) return plugins;
 		if (selector === "[data-rdsh-settings-row]") return null;
 		return null;
 	};
@@ -969,8 +1226,8 @@ test("a localized Settings row is never mistaken for the account menu", () => {
 	};
 	nav.contains = (node) => node.parentElement === nav;
 	nav.querySelector = (selector) => {
-		if (selector === 'button[aria-label="Automation tasks"]') return auto;
-		if (selector === 'button[aria-label="Plugins"]') return plugins;
+		if (selector.includes('aria-label="Automation tasks"')) return auto;
+		if (selector.includes('aria-label="Plugins"')) return plugins;
 		if (selector === "[data-rdsh-settings-row]") return settingsRow();
 		return null;
 	};
@@ -1046,8 +1303,8 @@ test("re-applying the Settings row decoration never duplicates the row (#87)", (
 		nav.lastElementChild = node;
 	};
 	nav.querySelector = (selector) => {
-		if (selector === 'button[aria-label="Automation tasks"]') return auto;
-		if (selector === 'button[aria-label="Plugins"]') return plugins;
+		if (selector.includes('aria-label="Automation tasks"')) return auto;
+		if (selector.includes('aria-label="Plugins"')) return plugins;
 		return null;
 	};
 	auto.after = (node) => {
@@ -1125,6 +1382,11 @@ test("tapping Plugins or Automation tasks closes the phone drawer, never a deskt
 	assert.equal(drawerClosedAfterTapping("Automation tasks"), true, "Automation tasks left the drawer open");
 	assert.equal(drawerClosedAfterTapping("Plugins", { narrow: false, mode: "desktop" }), false, "a desktop sidebar was closed");
 	assert.equal(drawerClosedAfterTapping("Automation tasks", { narrow: false, mode: "desktop" }), false, "a desktop sidebar was closed");
+	// Reviewed ja labels for the same two folded rows.
+	assert.equal(drawerClosedAfterTapping("プラグイン"), true, "ja Plugins left the drawer open");
+	assert.equal(drawerClosedAfterTapping("自動化タスク"), true, "ja Automation tasks left the drawer open");
+	assert.equal(drawerClosedAfterTapping("プラグイン", { narrow: false, mode: "desktop" }), false, "a desktop ja sidebar was closed");
+	assert.equal(drawerClosedAfterTapping("自動化タスク", { narrow: false, mode: "desktop" }), false, "a desktop ja sidebar was closed");
 	// Existing rows keep their behaviour.
 	assert.equal(drawerClosedAfterTapping("New session"), true);
 	assert.equal(drawerClosedAfterTapping("Settings"), false);
@@ -1265,9 +1527,10 @@ test("a route heading is tagged for the FAB inset only on a phone route", () => 
  *
  * The stub records the nodes the client creates, so the back button is the
  * element whose class is `rdsh-mux-route-back` and its click runs the handler
- * the plugin registered (the plain stub swallows listeners).
+ * the plugin registered (the plain stub swallows listeners). `crumb` is the
+ * upstream plugin breadcrumb, found in the detail the same way the client does.
  */
-function detailBoot({ mode = "mobile", narrow = true, container = null, page = null } = {}) {
+function detailBoot({ mode = "mobile", narrow = true, container = null, page = null, crumb = null } = {}) {
 	const frames = [];
 	const created = [];
 	const booted = bootClient({
@@ -1284,8 +1547,11 @@ function detailBoot({ mode = "mobile", narrow = true, container = null, page = n
 				return node;
 			};
 			doc.querySelector = (selector) => (selector === '[data-testid="task-manager-page"]' ? page : null);
+			if (container !== null) {
+				container.querySelectorAll = (selector) => (selector === 'button[class*="_crumb"]' && crumb !== null ? [crumb] : []);
+			}
 			doc.querySelectorAll = (selector) => {
-				if (selector === "[data-plugin-detail], [data-plugin-item-detail]") return container === null ? [] : [container];
+				if (selector === "[data-plugin-detail], [data-plugin-item-detail], [data-plugin-row-detail]") return container === null ? [] : [container];
 				if (selector === "[data-rdsh-route-detail]") {
 					const marked = [container, page].filter((node) => node !== null && node.hasAttribute("data-rdsh-route-detail"));
 					return marked;
@@ -1305,7 +1571,11 @@ const laidOutRect = (x, y, width, height) => () => ({ x, y, top: y, left: x, wid
 test("a plugin detail retires the drawer button and leaves its breadcrumb free", () => {
 	const container = element();
 	container.getBoundingClientRect = laidOutRect(24, 0, 342, 667);
-	const { booted, back } = detailBoot({ container });
+	const crumb = element();
+	crumb.setAttribute("class", "X_2TxG_crumb");
+	crumb.setAttribute("aria-label", "Back to plugins");
+	crumb.getBoundingClientRect = laidOutRect(24, 28, 82, 20);
+	const { booted, back } = detailBoot({ container, crumb });
 	assert.equal(container.getAttribute("data-rdsh-route-detail"), "detail", "the plugin detail was not marked");
 	assert.equal(back?.hasAttribute("data-visible"), false, "a plugin detail got the task detail's back button");
 	booted.disposeAll();
@@ -1759,6 +2029,157 @@ test("device-local display projects font/locale and restores the Host snapshots"
 	assert.deepEqual(writes, [], "dispose wrote a shared setting");
 });
 
+test("device-local projections keep Host revisions so rows keep updating (#73/#64)", async () => {
+	const writes = [];
+	const hostTheme = {
+		preference: "system",
+		revision: 4,
+		fontSizes: { text: 14, code: 11, terminal: 13 },
+		fontFamilies: { text: "", code: "", terminal: "" },
+		active: { id: "light", colorScheme: "light", tokens: {} },
+		themes: [],
+	};
+	const theme = {
+		snapshot: hostTheme,
+		getTheme() { return this.snapshot; },
+		setTheme(id) { writes.push(["theme", id]); },
+		setFontSize(role, px) { writes.push(["font", role, px]); },
+	};
+	const listeners = new Set();
+	const hostLocale = {
+		active: "zh",
+		revision: 2,
+		locales: [
+			{ id: "zh", label: "中文", fallback: "en" },
+			{ id: "en", label: "English" },
+		],
+	};
+	const locale = {
+		snapshot: hostLocale,
+		listeners,
+		getSnapshot() { return this.snapshot; },
+		getLocale() { return this.snapshot; },
+		subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
+		setLocale(id) { writes.push(["locale", id]); },
+	};
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		theme,
+		locale,
+		configureDocument(doc) { doc.documentElement.lang = "zh-CN"; },
+	});
+	const api = booted.sandbox.__RDSH_MOBILE_UX__;
+	const state = api.state;
+	// Upstream Appearance/font and Language row stores mirror the Host snapshot
+	// and ignore a revision that is not newer than the one they stored.
+	const rows = {
+		themeRevision: hostTheme.revision,
+		fontSizes: hostTheme.fontSizes,
+		localeRevision: hostLocale.revision,
+		active: hostLocale.active,
+	};
+	booted.ctx.on("theme/change", (snapshot) => {
+		if (snapshot === null || snapshot === undefined || snapshot.revision <= rows.themeRevision) return;
+		rows.themeRevision = snapshot.revision;
+		rows.fontSizes = snapshot.fontSizes;
+	});
+	listeners.add(() => {
+		const snapshot = locale.getSnapshot();
+		if (snapshot === null || snapshot === undefined || snapshot.revision <= rows.localeRevision) return;
+		rows.localeRevision = snapshot.revision;
+		rows.active = snapshot.active;
+	});
+	// The mounted terminal reads theme.getTheme() through its snapshot
+	// subscription; locale consumers read LocaleFace getSnapshot().
+	const terminal = { rendered: theme.getTheme(), fonts: [] };
+	booted.ctx.on("theme/change", () => {
+		queueMicrotask(() => {
+			const snapshot = theme.getTheme();
+			if (snapshot === terminal.rendered) return;
+			terminal.rendered = snapshot;
+			terminal.fonts.push(snapshot.fontSizes.text);
+		});
+	});
+	const localeReads = [];
+	locale.subscribe(() => {
+		localeReads.push(locale.getSnapshot());
+	});
+
+	// Drive the same applyTheme/applyLocale path the local controls use.
+	state.localDisplay.fonts = { text: 19, code: 12, terminal: 16 };
+	state.localDisplay.fontsLocal = true;
+	booted.emit("theme/change", theme.getTheme());
+	state.localDisplay.language = "en";
+	booted.emit("locale/change", locale.getSnapshot());
+	await Promise.resolve();
+	await Promise.resolve();
+
+	assert.equal(theme.snapshot.fontSizes.text, 19, "the local font size was not projected");
+	assert.equal(theme.snapshot.revision, hostTheme.revision, "the font projection inflated the Host revision");
+	assert.notEqual(theme.snapshot, hostTheme, "the font projection reused the Host identity");
+	assert.equal(locale.snapshot.active, "en", "the local language was not projected");
+	// A projected locale view carries a boxed identity token whose numeric value
+	// is still the Host revision; row stores compare the number, reader caches
+	// compare the identity.
+	assert.equal(Number(locale.snapshot.revision), hostLocale.revision, "the locale projection inflated the Host revision");
+	assert.notEqual(locale.snapshot.revision, hostLocale.revision, "the locale projection kept the Host revision identity");
+	assert.notEqual(locale.snapshot, hostLocale, "the locale projection reused the Host identity");
+	assert.equal(booted.sandbox.document.documentElement.lang, "en");
+	assert.deepEqual(terminal.fonts, [19], "the local font projection did not reach the mounted terminal");
+	assert.equal(localeReads.at(-1)?.active, "en", "the local language did not reach locale readers");
+	assert.equal(rows.themeRevision, hostTheme.revision, "the font projection was adopted by the row stores");
+	assert.equal(rows.localeRevision, hostLocale.revision, "the locale projection was adopted by the row store");
+	assert.equal(rows.fontSizes.text, 14, "the shared font row stopped showing the Host value");
+	assert.equal(rows.active, "zh", "the shared language row stopped showing the Host value");
+
+	// A later Host theme and locale snapshot with ordinary revisions must land,
+	// while the device-local font and language survive.
+	const nextTheme = { ...hostTheme, revision: 5, fontSizes: { text: 20, code: 12, terminal: 14 } };
+	theme.snapshot = nextTheme;
+	booted.emit("theme/change", nextTheme);
+	const nextLocale = { ...hostLocale, revision: 3, active: "zh" };
+	locale.snapshot = nextLocale;
+	booted.emit("locale/change", nextLocale);
+	for (const listener of [...listeners]) listener();
+	await Promise.resolve();
+	await Promise.resolve();
+
+	assert.equal(rows.themeRevision, 5, "the font rows froze after a device-local projection");
+	assert.equal(rows.fontSizes.text, 20, "the font rows did not take the Host snapshot");
+	assert.equal(theme.snapshot.fontSizes.text, 19, "the Host theme change reverted the device-local font");
+	assert.equal(theme.snapshot.revision, 5, "the Host revision was left inflated");
+	assert.equal(rows.localeRevision, 3, "the language row froze after a device-local projection");
+	assert.equal(rows.active, "zh", "the language row did not take the Host snapshot");
+	assert.equal(locale.snapshot.active, "en", "the Host locale change reverted the device-local language");
+	assert.equal(Number(locale.snapshot.revision), 3, "the Host locale revision was left inflated");
+	assert.equal(localeReads.at(-1)?.active, "en", "locale readers lost the local language after a Host change");
+
+	// "System" restores the Host language.
+	state.localDisplay.language = "";
+	booted.emit("locale/change", nextLocale);
+	await Promise.resolve();
+	await Promise.resolve();
+	assert.equal(locale.snapshot, nextLocale, "resetting the local language did not restore the Host snapshot");
+	assert.equal(localeReads.at(-1)?.active, "zh", "locale readers kept the local language after reset");
+	assert.equal(booted.sandbox.document.documentElement.lang, "zh-CN");
+	assert.equal(rows.active, "zh");
+
+	// #79's terminal repaint must keep the device-local fonts and revision.
+	api.writeTerminalDark(true);
+	assert.equal(theme.snapshot.fontSizes.text, 19, "terminal dark reverted the device-local font");
+	assert.equal(theme.snapshot.revision, nextTheme.revision, "terminal dark inflated the Host revision");
+	api.writeTerminalDark(false);
+	assert.equal(theme.snapshot.fontSizes.text, 19, "terminal dark off reverted the device-local font");
+	assert.equal(theme.snapshot.revision, nextTheme.revision, "terminal dark off inflated the Host revision");
+
+	assert.deepEqual(writes, [], "a shared Host writer was called");
+	booted.disposeAll();
+	assert.equal(theme.snapshot, nextTheme, "dispose did not restore the latest Host theme");
+	assert.equal(locale.snapshot, nextLocale, "dispose did not restore the latest Host locale");
+	assert.deepEqual(writes, [], "dispose wrote a shared setting");
+});
+
 test("every accepted terminal size reaches theme/change (#66)", () => {
 	for (const terminal of [10, 13, 20]) {
 		const hostTheme = {
@@ -1795,70 +2216,1159 @@ test("every accepted terminal size reaches theme/change (#66)", () => {
 	}
 });
 
-/** A locale service with the public language-pack API, recording registrations. */
-function japaneseLocale() {
+test("terminal-only dark is off by default, device-local and asks for a terminal repaint (#79)", () => {
+	const writes = [];
+	const hostTheme = {
+		preference: "system",
+		revision: 4,
+		fontSizes: { text: 14, code: 11, terminal: 13 },
+		fontFamilies: { text: "", code: "", terminal: "" },
+		active: { id: "light", colorScheme: "light", tokens: {} },
+		themes: [],
+	};
+	const theme = {
+		snapshot: hostTheme,
+		getTheme() { return this.snapshot; },
+		setTheme(id) { writes.push(["theme", id]); },
+		setFontSize(role, px) { writes.push(["font", role, px]); },
+	};
+	const booted = bootClient({ mode: "mobile", narrow: true, theme, storage: {} });
+	const api = booted.sandbox.__RDSH_MOBILE_UX__;
+	const docEl = booted.sandbox.document.documentElement;
+	const key = "rdsh-mobile-ux:terminal-dark";
+	assert.equal(api.state.terminalDark, false, "the preference defaults to off");
+	assert.equal(docEl.hasAttribute("data-rdsh-terminal-dark"), false, "the scoped palette was painted by default");
+	assert.equal(booted.sandbox.localStorage.getItem(key), null, "a default boot wrote storage");
+
+	const observed = [];
+	booted.ctx.on("theme/change", (snapshot) => observed.push(snapshot));
+	api.writeTerminalDark(true);
+	assert.equal(api.state.terminalDark, true);
+	assert.equal(docEl.hasAttribute("data-rdsh-terminal-dark"), true, "the scoped palette was not painted");
+	assert.equal(booted.sandbox.localStorage.getItem(key), "1", "the choice was not stored locally");
+	assert.ok(observed.length > 0, "no theme/change was sent for the terminal to reread");
+	const repaint = observed[observed.length - 1];
+	assert.equal(repaint.active, hostTheme.active, "the repaint changed the shared tokens");
+	assert.equal(repaint.preference, hostTheme.preference, "the repaint changed the shared preference");
+	assert.deepEqual(repaint.fontSizes, hostTheme.fontSizes, "the repaint changed the shared fonts");
+	assert.equal(repaint.revision, hostTheme.revision,
+		"the repaint fabricated a revision the Appearance/font row stores would adopt");
+	assert.deepEqual(writes, [], "a shared theme writer was called");
+
+	api.writeTerminalDark(false);
+	assert.equal(api.state.terminalDark, false);
+	assert.equal(docEl.hasAttribute("data-rdsh-terminal-dark"), false, "turning off left the scoped palette");
+	assert.equal(booted.sandbox.localStorage.getItem(key), null, "turning off left the stored choice");
+	assert.equal(observed.length, 2, "turning off did not ask the terminal to reread");
+	assert.deepEqual(writes, [], "turning off called a shared theme writer");
+	booted.disposeAll();
+});
+
+test("a terminal-dark repaint keeps the device-local font projection (#79)", () => {
+	const hostTheme = {
+		preference: "light",
+		revision: 3,
+		fontSizes: { text: 14, code: 11, terminal: 13 },
+		fontFamilies: { text: "", code: "", terminal: "" },
+		active: { id: "light", colorScheme: "light", tokens: {} },
+		themes: [],
+	};
+	const theme = {
+		snapshot: hostTheme,
+		getTheme() { return this.snapshot; },
+		setFontSize() { throw new Error("the shared font writer was called"); },
+	};
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		theme,
+		storage: {
+			"rdsh-mobile-ux:local-display": JSON.stringify({
+				fonts: { text: 17, code: 13, terminal: 16 },
+				language: "",
+			}),
+		},
+	});
+	assert.equal(theme.snapshot.fontSizes.text, 17);
+	assert.equal(theme.snapshot.fontSizes.code, 13);
+	assert.equal(theme.snapshot.fontSizes.terminal, 16);
+	booted.sandbox.__RDSH_MOBILE_UX__.writeTerminalDark(true);
+	assert.equal(theme.snapshot.fontSizes.text, 17, "the terminal repaint dropped the device-local font sizes");
+	assert.equal(theme.snapshot.fontSizes.code, 13, "the terminal repaint dropped the device-local font sizes");
+	assert.equal(theme.snapshot.fontSizes.terminal, 16, "the terminal repaint dropped the device-local font sizes");
+	booted.sandbox.__RDSH_MOBILE_UX__.writeTerminalDark(false);
+	assert.equal(theme.snapshot.fontSizes.text, 17, "turning terminal dark off reverted the device-local font sizes");
+	assert.equal(theme.snapshot.fontSizes.code, 13, "turning terminal dark off reverted the device-local font sizes");
+	assert.equal(theme.snapshot.fontSizes.terminal, 16, "turning terminal dark off reverted the device-local font sizes");
+	booted.disposeAll();
+	assert.equal(theme.snapshot.fontSizes.text, 14, "dispose did not restore the Host font sizes");
+	assert.equal(theme.snapshot.fontSizes.code, 11, "dispose did not restore the Host font sizes");
+	assert.equal(theme.snapshot.fontSizes.terminal, 13, "dispose did not restore the Host font sizes");
+});
+
+test("terminal-dark repaints keep Host revisions so later rows still update (#79)", async () => {
+	const hostTheme = {
+		preference: "light",
+		revision: 4,
+		fontSizes: { text: 14, code: 11, terminal: 13 },
+		fontFamilies: { text: "", code: "", terminal: "" },
+		active: { id: "light", colorScheme: "light", tokens: {} },
+		themes: [],
+	};
+	const theme = {
+		snapshot: hostTheme,
+		getTheme() { return this.snapshot; },
+		setTheme(id) { throw new Error("the shared theme writer was called: " + id); },
+		setFontSize(role, px) { throw new Error("the shared font writer was called: " + role + " " + px); },
+	};
+	let documentElement;
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		theme,
+		computedStyle: () => ({
+			backgroundColor: documentElement.hasAttribute("data-rdsh-terminal-dark") ? "#151517" : "#f9fafb",
+			color: documentElement.hasAttribute("data-rdsh-terminal-dark") ? "#f9fafb" : "#1b1b1c",
+		}),
+		configureDocument(doc) {
+			documentElement = doc.documentElement;
+		},
+	});
+	const api = booted.sandbox.__RDSH_MOBILE_UX__;
+	// Upstream Appearance/font row stores mirror the Host snapshot and ignore a
+	// revision that is not newer than the one they stored.
+	const rows = {
+		revision: hostTheme.revision,
+		preference: hostTheme.preference,
+		fontSizes: hostTheme.fontSizes,
+	};
+	booted.ctx.on("theme/change", (snapshot) => {
+		if (snapshot === null || snapshot === undefined || snapshot.revision <= rows.revision) return;
+		rows.revision = snapshot.revision;
+		rows.preference = snapshot.preference;
+		rows.fontSizes = snapshot.fontSizes;
+	});
+	// A mounted terminal subscribes through the theme store's getSnapshot and
+	// reruns getComputedStyle only when the rendered snapshot object changed.
+	const terminal = { rendered: theme.getTheme(), repaints: 0, backgrounds: [] };
+	booted.ctx.on("theme/change", () => {
+		queueMicrotask(() => {
+			const snapshot = theme.getTheme();
+			if (snapshot === terminal.rendered) return;
+			terminal.rendered = snapshot;
+			terminal.repaints += 1;
+			terminal.backgrounds.push(booted.sandbox.getComputedStyle(documentElement).backgroundColor);
+		});
+	});
+
+	api.writeTerminalDark(true);
+	await Promise.resolve();
+	assert.equal(terminal.repaints, 1, "turning terminal dark on did not repaint the mounted terminal");
+	assert.deepEqual(terminal.backgrounds, ["#151517"], "the terminal did not reread the dark surface");
+	assert.equal(theme.snapshot.revision, hostTheme.revision, "the repaint inflated the Host revision");
+	assert.equal(rows.revision, hostTheme.revision, "the repaint was adopted by the row stores");
+
+	api.writeTerminalDark(false);
+	await Promise.resolve();
+	assert.equal(terminal.repaints, 2, "turning terminal dark off did not repaint the mounted terminal");
+	assert.deepEqual(terminal.backgrounds, ["#151517", "#f9fafb"], "the terminal did not reread the light surface");
+	assert.equal(theme.snapshot.revision, hostTheme.revision, "turning terminal dark off left an inflated revision");
+	assert.equal(rows.revision, hostTheme.revision, "the repaint was adopted by the row stores");
+
+	// A later Host theme change with an ordinary revision must still land.
+	const nextTheme = {
+		...hostTheme,
+		revision: hostTheme.revision + 1,
+		preference: "dark",
+		active: { id: "dark", colorScheme: "dark", tokens: {} },
+	};
+	theme.snapshot = nextTheme;
+	booted.emit("theme/change", nextTheme);
+	await Promise.resolve();
+	assert.equal(rows.revision, nextTheme.revision, "the Appearance row froze after a terminal-dark toggle");
+	assert.equal(rows.preference, "dark", "the Appearance row kept the stale preference");
+
+	// A later Host font snapshot must still reach the font row store.
+	const fontTheme = {
+		...nextTheme,
+		revision: nextTheme.revision + 1,
+		fontSizes: { text: 18, code: 12, terminal: 15 },
+	};
+	theme.snapshot = fontTheme;
+	booted.emit("theme/change", fontTheme);
+	await Promise.resolve();
+	assert.equal(rows.revision, fontTheme.revision, "the font rows froze after a terminal-dark toggle");
+	assert.deepEqual(rows.fontSizes, fontTheme.fontSizes, "the font rows kept the stale Host sizes");
+	assert.equal(theme.snapshot.revision, fontTheme.revision, "the Host revision stayed inflated");
+	assert.equal(theme.snapshot.fontSizes.text, 18, "the Host font snapshot did not land");
+	booted.disposeAll();
+});
+
+test("a saved terminal-dark choice survives reload and a Host theme change (#79)", async () => {
+	const hostTheme = {
+		preference: "light",
+		revision: 2,
+		fontSizes: { text: 14, code: 11, terminal: 13 },
+		fontFamilies: { text: "", code: "", terminal: "" },
+		active: { id: "light", colorScheme: "light", tokens: {} },
+		themes: [],
+	};
+	const theme = {
+		snapshot: hostTheme,
+		getTheme() { return this.snapshot; },
+		setTheme(id) { throw new Error(`shared theme writer called: ${id}`); },
+	};
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		theme,
+		storage: { "rdsh-mobile-ux:terminal-dark": "1" },
+	});
+	const api = booted.sandbox.__RDSH_MOBILE_UX__;
+	const docEl = booted.sandbox.document.documentElement;
+	assert.equal(api.state.terminalDark, true, "the stored choice was not read");
+	assert.equal(docEl.hasAttribute("data-rdsh-terminal-dark"), true, "the stored choice was not painted");
+	assert.notEqual(theme.snapshot, hostTheme, "the stored choice sent no repaint at boot");
+	assert.equal(theme.snapshot.active, hostTheme.active, "the boot repaint changed the shared tokens");
+	assert.equal(theme.snapshot.revision, hostTheme.revision, "the boot repaint inflated the Host revision");
+
+	const nextHost = {
+		...hostTheme,
+		revision: 20,
+		fontSizes: { text: 16, code: 12, terminal: 14 },
+		active: { id: "dark", colorScheme: "dark", tokens: {} },
+	};
+	booted.emit("theme/change", nextHost);
+	await Promise.resolve();
+	await Promise.resolve();
+	assert.equal(api.state.terminalDark, true, "a Host theme change dropped the local choice");
+	assert.equal(docEl.hasAttribute("data-rdsh-terminal-dark"), true, "a Host theme change removed the scoped palette");
+	assert.equal(theme.snapshot, nextHost, "the Host snapshot was not adopted after a shared theme change");
+	booted.disposeAll();
+});
+
+test("disposing terminal dark restores the Host snapshot and stops reapplying it (#79)", () => {
+	const hostTheme = {
+		preference: "light",
+		revision: 1,
+		fontSizes: { text: 14, code: 11, terminal: 13 },
+		fontFamilies: { text: "", code: "", terminal: "" },
+		active: { id: "light", colorScheme: "light", tokens: {} },
+		themes: [],
+	};
+	const theme = {
+		snapshot: hostTheme,
+		getTheme() { return this.snapshot; },
+	};
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		theme,
+		storage: { "rdsh-mobile-ux:terminal-dark": "1" },
+	});
+	const docEl = booted.sandbox.document.documentElement;
+	assert.equal(docEl.hasAttribute("data-rdsh-terminal-dark"), true);
+	assert.notEqual(theme.snapshot, hostTheme, "the test did not start from a projected snapshot");
+	booted.disposeAll();
+	assert.equal(docEl.hasAttribute("data-rdsh-terminal-dark"), false, "dispose left the scoped palette");
+	assert.equal(theme.snapshot, hostTheme, "dispose did not restore the Host snapshot");
+	booted.emit("theme/change", { ...hostTheme, revision: 99 });
+	assert.equal(docEl.hasAttribute("data-rdsh-terminal-dark"), false, "a later theme change repainted after dispose");
+});
+
+test("without a usable theme pathway the terminal is not half-painted (#79)", () => {
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		storage: { "rdsh-mobile-ux:terminal-dark": "1" },
+	});
+	const api = booted.sandbox.__RDSH_MOBILE_UX__;
+	const docEl = booted.sandbox.document.documentElement;
+	assert.equal(api.state.terminalDark, true, "the saved choice was not read");
+	assert.equal(docEl.hasAttribute("data-rdsh-terminal-dark"), false,
+		"the scoped background was painted without the theme repaint path");
+	api.writeTerminalDark(true);
+	assert.equal(docEl.hasAttribute("data-rdsh-terminal-dark"), false,
+		"turning on painted a terminal that cannot reread its palette");
+	booted.disposeAll();
+});
+
+test("a saved terminal-dark choice never wakes the desktop half (#79)", () => {
+	const booted = bootClient({
+		mode: "desktop",
+		storage: { "rdsh-mobile-ux:terminal-dark": "1" },
+	});
+	assert.equal(booted.sandbox.__RDSH_MOBILE_UX__, undefined, "the desktop built the mobile half");
+	assert.equal(booted.sandbox.document.documentElement.hasAttribute("data-rdsh-terminal-dark"), false,
+		"the desktop painted the mobile terminal palette");
+	assert.equal(booted.sandbox.localStorage.getItem("rdsh-mobile-ux:terminal-dark"), "1",
+		"the desktop rewrote the saved choice");
+});
+
+/**
+ * A locale service with the public language-pack API and a recording catalog.
+ *
+ * `addLanguage` and its disposer mirror `LocaleRuntime.publishCatalog`:
+ * they publish the *resolved* Host active (so a removed language falls back
+ * before the mobile reads the snapshot) and notify the LocaleFace listeners.
+ * The real runtime emits `locale/change` before those listeners for an
+ * active switch (same frozen snapshot object); this fake only notifies the
+ * listeners, and a test emits the event itself when the order matters.
+ * `register` mirrors the runtime republishing `this.snapshot.active`, which
+ * a device-local projection can have replaced.
+ *
+ * `hostSelect` is a Host switch that publishes (setLocale); `silentHostSelect`
+ * is the durable preference change `LocaleRuntime.adopt` makes without a
+ * publish when the resolved active already equals `snapshot.active` (the
+ * device projection), so no locale/change is emitted at all. `resolveActive`
+ * mirrors the runtime's pure durable-preference resolver; `withResolver:
+ * false` models an older runtime that does not expose it, while the catalog
+ * publish still uses the same internal resolution.
+ */
+function localeService({ locales = [
+	{ id: "zh", label: "中文", fallback: "en" },
+	{ id: "en", label: "English" },
+], active = "zh", withResolver = true } = {}) {
 	const registered = [];
 	const removed = [];
 	const listeners = new Set();
+	let catalog = [...locales];
+	/** The Host's own selection; catalog changes re-resolve to this value. */
+	let hostActive = active;
+	/** LocaleRuntime.resolveActive, also used by the catalog publish. */
+	const resolveHostActive = () => {
+		if (catalog.some((entry) => entry.id === hostActive)) return hostActive;
+		return catalog.some((entry) => entry.id === "en") ? "en" : (catalog[0]?.id ?? "");
+	};
+	/** Every Host-originated snapshot, kept to prove none carries a local token. */
+	const initial = Object.freeze({ active, revision: 2, locales: Object.freeze([...locales]) });
+	const hostSnapshots = [initial];
+	const publish = (localeActive) => {
+		// LocaleRuntime.publish: this.snapshot.revision + 1. A projected boxed
+		// token must coerce to the Host number and publish a primitive again.
+		const revision = service.snapshot.revision + 1;
+		const snapshot = Object.freeze({
+			active: localeActive,
+			revision,
+			locales: Object.freeze([...catalog]),
+		});
+		hostSnapshots.push(snapshot);
+		service.snapshot = snapshot;
+		for (const listener of [...listeners]) listener();
+	};
 	const service = {
-		snapshot: {
-			active: "zh",
-			revision: 2,
-			locales: [{ id: "zh", label: "中文", fallback: "en" }, { id: "en", label: "English" }],
-		},
+		snapshot: initial,
 		listeners,
 		getSnapshot() { return this.snapshot; },
+		subscribe(listener) {
+			listeners.add(listener);
+			return () => listeners.delete(listener);
+		},
+		/** LocaleRuntime.resolveActive: durable preference, else provisional. */
+		resolveActive() {
+			return resolveHostActive();
+		},
 		addLanguage(input) {
 			registered.push({ kind: "language", input: { ...input } });
-			this.snapshot = {
-				...this.snapshot,
-				revision: this.snapshot.revision + 1,
-				locales: [...this.snapshot.locales, input],
+			catalog = [...catalog, input];
+			publish(resolveHostActive());
+			return () => {
+				removed.push("language");
+				catalog = catalog.filter((entry) => entry.id !== input.id);
+				publish(resolveHostActive());
 			};
-			return () => { removed.push("language"); };
+		},
+		/** Test-only Host selection that publishes: the caller emits locale/change. */
+		hostSelect(id) {
+			hostActive = id;
+			publish(id);
+		},
+		/** Test-only silent durable Host switch (`adopt` early return, no event). */
+		silentHostSelect(id) {
+			hostActive = id;
 		},
 		register(namespace, lang, dictionary) {
 			registered.push({ kind: "dictionary", namespace, lang, keys: Object.keys(dictionary).length });
-			return () => { removed.push(`${namespace}:${lang}`); };
+			publish(service.snapshot.active);
+			return () => {
+				removed.push(`${namespace}:${lang}`);
+				publish(service.snapshot.active);
+			};
 		},
 		setLocale() { throw new Error("the shared locale writer was called"); },
 	};
-	return { service, registered, removed };
+	if (!withResolver) delete service.resolveActive;
+	return { service, registered, removed, hostSnapshots };
 }
 
-test("a phone gains ja in the display-language picker from the injected pack (#64)", () => {
-	const { service, registered, removed } = japaneseLocale();
-	const booted = bootClient({ mode: "mobile", narrow: true, locale: service });
+test("a phone lists only the shared catalog and never adds ja itself (#64/#80)", () => {
+	const { service, registered, removed } = localeService();
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		locale: service,
+		storage: { "rdsh-mobile-ux:local-display": JSON.stringify({ language: "ja" }) },
+	});
 	const state = booted.sandbox.__RDSH_MOBILE_UX__.state;
 	assert.equal(state.localDisplay.available.language, true);
-	assert.deepEqual(state.localDisplay.languages.map((entry) => entry.id), ["zh", "en", "ja"],
-		"ja did not join the registered catalog");
-	const language = registered.find((entry) => entry.kind === "language");
-	assert.ok(language, "addLanguage was not called");
-	assert.deepEqual(language.input, { id: "ja", label: "日本語", fallback: "en" });
-	assert.deepEqual(
-		registered.filter((entry) => entry.kind === "dictionary").map((entry) => entry.namespace),
-		["common", "settings", "settings.locale"],
-		"the pack translated the wrong namespaces",
-	);
-	assert.ok(registered.find((entry) => entry.namespace === "common").keys >= 40, "common is incomplete");
+	assert.deepEqual(state.localDisplay.languages.map((entry) => entry.id), ["zh", "en"],
+		"the picker invented a language the catalog does not have");
+	assert.equal(state.localDisplay.language, "", "a stored ja was accepted without an owner");
+	assert.deepEqual(registered, [], "the mobile package registered a locale definition");
 	booted.disposeAll();
-	assert.ok(removed.includes("language"), "the language definition was not released");
-	assert.ok(removed.includes("common:ja"), "a dictionary was not released");
+	assert.deepEqual(removed, [], "the mobile package removed a locale definition it never owned");
+	assert.deepEqual(service.snapshot.locales.map((entry) => entry.id), ["zh", "en"]);
 });
 
-test("a desktop never registers the ja pack (#44)", () => {
-	const { service, registered } = japaneseLocale();
-	bootClient({ mode: "desktop", locale: service });
+test("a separately installed ja owner appears in the picker and survives mobile dispose (#80)", () => {
+	const ja = { id: "ja", label: "日本語", fallback: "en" };
+	const { service, registered, removed } = localeService({
+		locales: [
+			{ id: "zh", label: "中文", fallback: "en" },
+			{ id: "en", label: "English" },
+			ja,
+		],
+	});
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		locale: service,
+		storage: { "rdsh-mobile-ux:local-display": JSON.stringify({ language: "ja" }) },
+	});
+	const state = booted.sandbox.__RDSH_MOBILE_UX__.state;
+	assert.deepEqual(state.localDisplay.languages.map((entry) => entry.id), ["zh", "en", "ja"],
+		"an owner-registered ja is missing from the picker");
+	assert.equal(state.localDisplay.language, "ja", "the stored choice was not accepted from the catalog");
+	assert.deepEqual(registered, [], "mobile must not duplicate the separate owner's registration");
+	assert.equal(service.snapshot.active, "ja", "the device-local projection was not applied");
+	const hostLocales = service.snapshot.locales;
+	booted.disposeAll();
+	assert.equal(service.snapshot.active, "zh", "dispose did not restore the Host language");
+	assert.deepEqual(service.snapshot.locales, hostLocales, "mobile dispose removed the separate owner's ja");
+	assert.deepEqual(removed, [], "mobile disposed a definition owned by the separate package");
+});
+
+/** Drain the projection microtasks the locale listeners queue. */
+async function settleLocale() {
+	for (let index = 0; index < 4; index += 1) await Promise.resolve();
+}
+
+test("#80 mounted text and slot labels refresh on the device language without a revision bump", async () => {
+	const ja = { id: "ja", label: "日本語", fallback: "en" };
+	const { service } = localeService({
+		locales: [
+			{ id: "zh", label: "中文", fallback: "en" },
+			{ id: "en", label: "English" },
+			ja,
+		],
+	});
+	const hostRevision = Number(service.snapshot.revision);
+	// Copy the upstream modules actually consult: the renderer's t seat is
+	// keyed by the LocaleFace revision identity and outlets re-render through
+	// useSyncExternalStore; the Settings/Plugins ledgers rebuild their slot
+	// labels only when getSnapshot().revision changes. Both are mounted
+	// before the device language is selected, as the conversation is.
+	const copy = {
+		"hero.headline": { en: "Into the Unknown", ja: "未知の世界へ" },
+		"settings.general": { en: "General", ja: "一般" },
+		"settings.models": { en: "Models", ja: "モデル" },
+		"settings.agentPreset": { en: "Agent presets", ja: "エージェントプリセット" },
+		"tab.mobile": { en: "Mobile", ja: "モバイル" },
+	};
+	const translate = (key) => copy[key][service.getSnapshot().active] ?? copy[key].en;
+	const outlet = {
+		revision: service.getSnapshot().revision,
+		headline: translate("hero.headline"),
+	};
+	service.subscribe(() => {
+		const revision = service.getSnapshot().revision;
+		if (Object.is(revision, outlet.revision)) return;
+		outlet.revision = revision;
+		outlet.headline = translate("hero.headline");
+	});
+	let labels = ["Mobile", "General", "Models", "Agent presets"];
+	let labelsRevision = service.getSnapshot().revision;
+	let labelsSnapshot = labels;
+	const readLabels = () => {
+		const revision = service.getSnapshot().revision;
+		if (revision !== labelsRevision) {
+			labelsRevision = revision;
+			labels = ["tab.mobile", "settings.general", "settings.models", "settings.agentPreset"].map(translate);
+			labelsSnapshot = labels;
+		}
+		return labelsSnapshot;
+	};
+	const settings = { labels: labelsSnapshot };
+	service.subscribe(() => {
+		const next = readLabels();
+		if (next !== settings.labels) settings.labels = next;
+	});
+	// The shared Language row store adopts only a numerically newer revision;
+	// the #73/#64 high-water guard must not see the device projection.
+	const rows = { revision: hostRevision, active: service.getSnapshot().active };
+	service.subscribe(() => {
+		const snapshot = service.getSnapshot();
+		if (snapshot.revision <= rows.revision) return;
+		rows.revision = Number(snapshot.revision);
+		rows.active = snapshot.active;
+	});
+
+	assert.equal(outlet.headline, "Into the Unknown", "the test did not start mounted in English");
+	assert.deepEqual(settings.labels, ["Mobile", "General", "Models", "Agent presets"]);
+
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		locale: service,
+		configureDocument(doc) { doc.documentElement.lang = "zh-CN"; },
+	});
+	const api = booted.sandbox.__RDSH_MOBILE_UX__;
+	api.setLanguage("ja");
+	await settleLocale();
+
+	assert.equal(service.snapshot.active, "ja", "the device language was not projected");
+	assert.equal(outlet.headline, "未知の世界へ", "an already-mounted text outlet kept the English copy");
+	assert.deepEqual(settings.labels, ["モバイル", "一般", "モデル", "エージェントプリセット"],
+		"the settings slot labels were not re-resolved after the locale changed");
+	assert.equal(rows.active, "zh", "the device projection was adopted by the shared language row");
+	assert.equal(rows.revision, hostRevision, "the device projection moved the shared row high-water mark");
+	assert.equal(Number(service.snapshot.revision), hostRevision,
+		"the projection changed the Host numeric revision");
+	assert.notEqual(service.snapshot.revision, hostRevision,
+		"the projection reused the Host revision identity the reader caches key on");
+	assert.equal(service.snapshot.revision + 1, hostRevision + 1,
+		"the revision token broke numeric revision arithmetic");
+	assert.equal(JSON.stringify(service.snapshot.revision), String(hostRevision),
+		"the revision token changed the serialized Host revision");
+	assert.equal(booted.sandbox.document.documentElement.lang, "ja");
+	assert.equal(booted.emitted.some((entry) => entry.event === "locale/change"), false,
+		"a fake locale/change was emitted to local or native listeners");
+
+	// A real Host publish with an ordinary revision must still land: the token
+	// must not freeze the shared row store the way the +1000 synthetic bump did.
+	service.hostSelect("en");
+	const hostSwitch = service.snapshot;
+	booted.emit("locale/change", hostSwitch);
+	await settleLocale();
+	assert.equal(rows.revision, hostRevision + 1, "the row store froze after the device projection");
+	assert.equal(rows.active, "en", "the row store did not take the Host switch");
+	assert.equal(service.snapshot.active, "ja", "the Host switch dropped the device projection");
+	assert.equal(outlet.headline, "未知の世界へ", "the device text fell back to the Host language");
+
+	// System unprojects to the newest Host view and refreshes the same mounted
+	// consumers back, without restoring through a cached English seat.
+	api.setLanguage("");
+	await settleLocale();
+	assert.equal(service.snapshot, hostSwitch, "System did not restore the Host snapshot");
+	assert.equal(outlet.headline, "Into the Unknown", "System left the mounted text in the device language");
+	assert.deepEqual(settings.labels, ["Mobile", "General", "Models", "Agent presets"],
+		"System left the settings labels in the device language");
+	// The Host switched to en, so SEA-880's restoredDocumentLang() is en, not
+	// the attach-time zh-CN.
+	assert.equal(booted.sandbox.document.documentElement.lang, "en");
+
+	// Re-select, then dispose: the same mounted consumers must follow the
+	// restored Host baseline, and no shared writer may run.
+	api.setLanguage("ja");
+	await settleLocale();
+	assert.equal(outlet.headline, "未知の世界へ");
+	booted.disposeAll();
+	assert.equal(service.snapshot, hostSwitch, "dispose did not restore the latest Host locale");
+	assert.equal(outlet.headline, "Into the Unknown", "dispose left the mounted text in the device language");
+	assert.deepEqual(settings.labels, ["Mobile", "General", "Models", "Agent presets"],
+		"dispose left the settings labels in the device language");
+	assert.equal(rows.active, "en", "dispose wrote the device language into the shared row");
+});
+
+test("#80 the local revision token stays inside the rc.2 LocaleFace compatibility boundary", async () => {
+	const MARKER = Symbol.for("rdsh-mobile-ux:local-display-revision");
+	const PROJECTION = Symbol.for("rdsh-mobile-ux:local-display-projection");
+	const ja = { id: "ja", label: "日本語", fallback: "en" };
+	const { service, hostSnapshots } = localeService({
+		locales: [
+			{ id: "zh", label: "中文", fallback: "en" },
+			{ id: "en", label: "English" },
+			ja,
+		],
+	});
+	const originalHost = service.snapshot;
+	const hostRevision = originalHost.revision;
+	assert.equal(typeof hostRevision, "number", "the Host baseline did not start primitive");
+	assert.equal(hostRevision, 2);
+
+	// The actual rc.2 consumers only compare by identity, order by number, or
+	// do arithmetic. None performs a typeof/Number.isInteger type gate:
+	// - renderer localeSeat()/slots locale cache: cached.revision === revision
+	// - ui-settings-general/plugins ledgers: revision !== storedRevision
+	// - locale Language row store: revision <= d.revision (high-water guard)
+	// - LocaleRuntime.publish: revision + 1
+	let seatRevision = hostRevision;
+	let labelRevision = hostRevision;
+	let slotRevision = hostRevision;
+	const rows = { revision: hostRevision, active: originalHost.active };
+	service.subscribe(() => {
+		const snapshot = service.snapshot;
+		if (snapshot.revision !== seatRevision) seatRevision = snapshot.revision;
+		if (snapshot.revision !== labelRevision) labelRevision = snapshot.revision;
+		if (snapshot.revision !== slotRevision) slotRevision = snapshot.revision;
+		if (snapshot.revision <= rows.revision) return;
+		rows.revision = snapshot.revision;
+		rows.active = snapshot.active;
+	});
+
+	const booted = bootClient({ mode: "mobile", narrow: true, locale: service });
+	const api = booted.sandbox.__RDSH_MOBILE_UX__;
+	api.setLanguage("ja");
+	await settleLocale();
+
+	const projected = service.snapshot;
+	assert.equal(projected.active, "ja");
+	assert.equal(projected[PROJECTION], true, "the projection identity marker is missing");
+	assert.equal(typeof projected.revision, "object", "the projection did not mint an identity token");
+	assert.equal(projected.revision[MARKER], true, "the local revision token is not marked");
+	assert.equal(Number(projected.revision), hostRevision, "the token changed the Host numeric revision");
+	// Known limit: typeof number / Number.isInteger consumers would reject the
+	// token. rc.2 has none; the four operations above accepted it.
+	assert.equal(Number.isInteger(projected.revision), false);
+	assert.equal(projected.revision !== hostRevision, true, "the token did not change the reader identity");
+	assert.equal(seatRevision, projected.revision, "the renderer t-seat cache ignored the token");
+	assert.equal(labelRevision, projected.revision, "the settings label ledger ignored the token");
+	assert.equal(slotRevision, projected.revision, "the slots locale cache ignored the token");
+	assert.equal(rows.revision, hostRevision, "the language row adopted the projection");
+	assert.equal(rows.active, originalHost.active);
+
+	assert.equal(projected.revision + 1, hostRevision + 1, "publish arithmetic did not see the Host number");
+	assert.equal(typeof (projected.revision + 1), "number", "publish arithmetic stayed boxed");
+	assert.equal(JSON.stringify(projected.revision), String(hostRevision), "the serialized revision changed");
+
+	// LocaleRuntime.publish uses this.snapshot.revision + 1 and must mint a
+	// primitive Host snapshot again; the shared row then takes the new number.
+	service.hostSelect("en");
+	const nextHost = hostSnapshots.at(-1);
+	assert.equal(service.snapshot, nextHost, "the runtime did not replace the snapshot on publish");
+	assert.equal(nextHost.revision, hostRevision + 1);
+	assert.equal(typeof nextHost.revision, "number", "publish did not mint a primitive revision");
+	assert.equal(Number.isInteger(nextHost.revision), true);
+	assert.equal(nextHost[PROJECTION], undefined);
+	assert.equal(nextHost.revision[MARKER], undefined);
+	assert.equal(rows.revision, nextHost.revision, "the language row ignored the next Host revision");
+	assert.equal(rows.active, "en");
+	await settleLocale();
+	assert.equal(service.snapshot.active, "ja", "the Host switch dropped the device projection");
+	assert.equal(Number(service.snapshot.revision), hostRevision + 1);
+	assert.equal(typeof service.snapshot.revision, "object");
+
+	// Every Host-originated snapshot, including the original baseline, stays
+	// primitive and marker-free: no token ever enters a Host baseline.
+	for (const snapshot of hostSnapshots) {
+		assert.equal(typeof snapshot.revision, "number", "a Host snapshot held a local token");
+		assert.equal(Number.isInteger(snapshot.revision), true);
+		assert.equal(snapshot[PROJECTION], undefined, "a Host snapshot carried the projection marker");
+		assert.equal(snapshot.revision[MARKER], undefined, "a Host revision carried the token marker");
+	}
+	assert.equal(originalHost.revision, hostRevision, "the original Host baseline was mutated");
+
+	// System restores the exact Host object and its primitive revision.
+	api.setLanguage("");
+	await settleLocale();
+	assert.equal(service.snapshot, nextHost, "System did not restore the Host snapshot");
+	assert.equal(service.snapshot.revision, nextHost.revision);
+	assert.equal(typeof service.snapshot.revision, "number");
+	assert.equal(service.snapshot[PROJECTION], undefined);
+
+	// Re-project then dispose: unprojection restores the same primitive view.
+	api.setLanguage("ja");
+	await settleLocale();
+	assert.equal(typeof service.snapshot.revision, "object");
+	booted.disposeAll();
+	assert.equal(service.snapshot, nextHost, "dispose did not restore the Host snapshot");
+	assert.equal(service.snapshot.revision, hostRevision + 1);
+	assert.equal(typeof service.snapshot.revision, "number", "dispose left a token in the Host view");
+});
+
+test("#80 an owner that activates after the mobile attach reaches the picker and keeps the stored ja", async () => {
+	const ja = { id: "ja", label: "日本語", fallback: "en" };
+	const { service, registered, removed } = localeService();
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		locale: service,
+		storage: { "rdsh-mobile-ux:local-display": JSON.stringify({ language: "ja" }) },
+	});
+	const api = booted.sandbox.__RDSH_MOBILE_UX__;
+	assert.deepEqual(api.state.localDisplay.languages.map((entry) => entry.id), ["zh", "en"]);
+	assert.equal(api.state.localDisplay.language, "", "ja cannot be selected before its owner exists");
+
+	// rdsh-locale-ja activates late: addLanguage publishes the catalog through
+	// the LocaleFace listeners only, because the active locale stays zh.
+	const releaseJa = service.addLanguage(ja);
+	await settleLocale();
+
+	assert.deepEqual(api.state.localDisplay.languages.map((entry) => entry.id), ["zh", "en", "ja"],
+		"a catalog-only publish never reached the picker");
+	assert.equal(api.state.localDisplay.language, "ja",
+		"the stored choice was not restored when its owner arrived");
+	assert.equal(service.snapshot.active, "ja", "the late catalog was not projected");
+	assert.equal(Number(service.snapshot.revision), 3, "the projection inflated the Host revision");
+	assert.deepEqual(registered, [{ kind: "language", input: { ...ja } }],
+		"the mobile package registered a language of its own");
+
+	// The picker can move between the late language and System afterwards.
+	api.setLanguage("");
+	await settleLocale();
+	assert.equal(api.state.localDisplay.language, "", "System was not selectable after the late arrival");
+	assert.equal(service.snapshot.active, "zh");
+	api.setLanguage("ja");
+	await settleLocale();
+	assert.equal(api.state.localDisplay.language, "ja", "the late language was not selectable");
+	assert.equal(service.snapshot.active, "ja");
+
+	booted.disposeAll();
+	assert.equal(service.snapshot.active, "zh", "dispose did not restore the Host active locale");
+	assert.deepEqual(service.snapshot.locales.map((entry) => entry.id), ["zh", "en", "ja"],
+		"dispose dropped the externally owned ja from the restored snapshot");
+	assert.equal(service.snapshot.revision, 3, "dispose changed the Host revision");
+	assert.deepEqual(removed, [], "the mobile package withdrew a definition it does not own");
+});
+
+test("#80 a late owner's withdraw and re-add refresh already-mounted consumers", async () => {
+	const ja = { id: "ja", label: "日本語", fallback: "en" };
+	const { service } = localeService();
+	// The conversation is already mounted in the Host language when the owner
+	// activates, the device language is selected, withdrawn, and re-added.
+	const headline = () => (service.getSnapshot().active === "ja" ? "未知の世界へ" : "Into the Unknown");
+	const outlet = { revision: service.getSnapshot().revision, text: headline() };
+	service.subscribe(() => {
+		const revision = service.getSnapshot().revision;
+		if (Object.is(revision, outlet.revision)) return;
+		outlet.revision = revision;
+		outlet.text = headline();
+	});
+	let labelsRevision = service.getSnapshot().revision;
+	let labels = ["Mobile"];
+	service.subscribe(() => {
+		const revision = service.getSnapshot().revision;
+		if (revision === labelsRevision) return;
+		labelsRevision = revision;
+		labels = [service.getSnapshot().active === "ja" ? "モバイル" : "Mobile"];
+	});
+
+	const booted = bootClient({ mode: "mobile", narrow: true, locale: service });
+	const api = booted.sandbox.__RDSH_MOBILE_UX__;
+	assert.equal(api.state.localDisplay.language, "", "the test started with a selectable language");
+	assert.equal(outlet.text, "Into the Unknown");
+
+	const releaseJa = service.addLanguage(ja);
+	await settleLocale();
+	api.setLanguage("ja");
+	await settleLocale();
+	assert.equal(service.snapshot.active, "ja");
+	assert.equal(outlet.text, "未知の世界へ", "the late owner's language never reached the mounted text");
+	assert.deepEqual(labels, ["モバイル"], "the late owner's language never reached the slot labels");
+
+	releaseJa();
+	await settleLocale();
+	assert.equal(service.snapshot.active, "zh", "the withdrawn language was not unprojected");
+	assert.equal(outlet.text, "Into the Unknown", "the withdrawn language stayed on the mounted text");
+	assert.deepEqual(labels, ["Mobile"], "the withdrawn language stayed on the slot labels");
+
+	const releaseAgain = service.addLanguage(ja);
+	await settleLocale();
+	assert.equal(api.state.localDisplay.language, "ja", "the stored choice did not return with the owner");
+	assert.equal(outlet.text, "未知の世界へ", "the re-added language did not reach the mounted text");
+	assert.deepEqual(labels, ["モバイル"]);
+
+	booted.disposeAll();
+	assert.equal(service.snapshot.active, "zh", "dispose kept the device language projected");
+	assert.equal(outlet.text, "Into the Unknown", "dispose left the mounted text in the device language");
+	assert.deepEqual(labels, ["Mobile"]);
+	releaseAgain();
+});
+
+test("#80 a withdrawn ja is unprojected without forgetting the device choice, and re-adding restores it", async () => {
+	const ja = { id: "ja", label: "日本語", fallback: "en" };
+	const { service } = localeService();
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		locale: service,
+		storage: { "rdsh-mobile-ux:local-display": JSON.stringify({ language: "ja" }) },
+	});
+	const api = booted.sandbox.__RDSH_MOBILE_UX__;
+	const releaseJa = service.addLanguage(ja);
+	await settleLocale();
+	assert.equal(api.state.localDisplay.language, "ja");
+	assert.equal(service.snapshot.active, "ja", "the test did not start from a projection");
+
+	releaseJa();
+	await settleLocale();
+	assert.deepEqual(api.state.localDisplay.languages.map((entry) => entry.id), ["zh", "en"],
+		"the picker kept a language the catalog withdrew");
+	assert.equal(api.state.localDisplay.language, "", "a withdrawn language stayed selected");
+	assert.equal(service.snapshot.active, "zh", "the withdrawn language was not unprojected");
+	assert.equal(service.snapshot.locales.some((entry) => entry.id === "ja"), false);
+	assert.equal(
+		JSON.parse(booted.sandbox.localStorage.getItem("rdsh-mobile-ux:local-display")).language,
+		"ja",
+		"the stored device choice was discarded with the definition",
+	);
+
+	const reAdd = service.addLanguage(ja);
+	await settleLocale();
+	assert.equal(api.state.localDisplay.language, "ja", "the stored choice did not come back with the definition");
+	assert.equal(service.snapshot.active, "ja");
+
+	booted.disposeAll();
+	assert.deepEqual(service.snapshot.locales.map((entry) => entry.id), ["zh", "en", "ja"],
+		"dispose dropped the external definition");
+	assert.equal(service.snapshot.active, "zh");
+	reAdd();
+});
+
+test("#80 disposing after the external owner withdrew ja never resurrects it", async () => {
+	const ja = { id: "ja", label: "日本語", fallback: "en" };
+	const { service } = localeService();
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		locale: service,
+		storage: { "rdsh-mobile-ux:local-display": JSON.stringify({ language: "ja" }) },
+	});
+	const releaseJa = service.addLanguage(ja);
+	await settleLocale();
+	assert.equal(service.snapshot.active, "ja");
+	releaseJa();
+	await settleLocale();
+	assert.equal(service.snapshot.active, "zh");
+
+	booted.disposeAll();
+	assert.equal(service.snapshot.locales.some((entry) => entry.id === "ja"), false,
+		"dispose wrote a withdrawn ja back into the Host snapshot");
+	assert.equal(service.snapshot.active, "zh", "dispose restored a stale active locale");
+	assert.equal(service.snapshot.revision, 4, "dispose changed the Host revision");
+});
+
+test("#80 a later Host locale change keeps the device language and disposes to the newest Host view", async () => {
+	const ja = { id: "ja", label: "日本語", fallback: "en" };
+	const { service } = localeService({
+		locales: [
+			{ id: "zh", label: "中文", fallback: "en" },
+			{ id: "en", label: "English" },
+			ja,
+		],
+	});
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		locale: service,
+		storage: {
+			"rdsh-mobile-ux:local-display": JSON.stringify({
+				fonts: { text: 18, code: 13, terminal: 15 },
+				language: "ja",
+			}),
+		},
+		configureDocument(doc) { doc.documentElement.lang = "zh-CN"; },
+	});
+	const api = booted.sandbox.__RDSH_MOBILE_UX__;
+	const docEl = booted.sandbox.document.documentElement;
+	assert.equal(service.snapshot.active, "ja");
+
+	// The Host switches to en on its own: a normal locale/change with a newer
+	// revision. The device keeps ja and its font projection.
+	service.hostSelect("en");
+	const next = service.snapshot;
+	booted.emit("locale/change", next);
+	await settleLocale();
+	assert.equal(api.state.localDisplay.language, "ja", "the Host change won over the device choice");
+	assert.equal(service.snapshot.active, "ja", "the Host change dropped the device projection");
+	assert.equal(Number(service.snapshot.revision), 3, "the projection did not keep the new Host revision");
+	assert.deepEqual(service.snapshot.locales.map((entry) => entry.id), ["zh", "en", "ja"]);
+	assert.equal(docEl.lang, "ja", "the Host change dropped the device document language");
+
+	// "System" restores the newest Host view and forgets the remembered choice.
+	api.setLanguage("");
+	await settleLocale();
+	assert.equal(api.state.localDisplay.language, "", "System did not clear the device choice");
+	assert.equal(service.snapshot, next, "System did not restore the Host snapshot");
+	assert.equal(docEl.lang, "en", "System restored the boot document language over the Host change");
+
+	// A catalog publish after the explicit System choice must not bring ja back.
+	service.addLanguage({ id: "ko", label: "한국어", fallback: "en" });
+	await settleLocale();
+	assert.equal(api.state.localDisplay.language, "", "a catalog change revived a cleared choice");
+
+	booted.disposeAll();
+	assert.equal(service.snapshot.active, "en", "dispose restored an older Host active locale");
+	assert.deepEqual(service.snapshot.locales.map((entry) => entry.id), ["zh", "en", "ja", "ko"]);
+	assert.equal(docEl.lang, "en", "dispose restored the boot document language over the Host change");
+});
+
+test("#80 a dictionary republish while a device language is projected is not a Host active change", async () => {
+	const ja = { id: "ja", label: "日本語", fallback: "en" };
+	const { service } = localeService({
+		locales: [
+			{ id: "zh", label: "中文", fallback: "en" },
+			{ id: "en", label: "English" },
+			ja,
+		],
+	});
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		locale: service,
+		configureDocument(doc) { doc.documentElement.lang = "zh-CN"; },
+		storage: { "rdsh-mobile-ux:local-display": JSON.stringify({ language: "ja" }) },
+	});
+	const api = booted.sandbox.__RDSH_MOBILE_UX__;
+	const docEl = booted.sandbox.document.documentElement;
+	assert.equal(service.snapshot.active, "ja");
+
+	// LocaleRuntime.register republishes this.snapshot.active, which is the
+	// device projection here; adopting it as the Host active would both lose
+	// the shared locale and restore the device choice on dispose.
+	service.register("late", "ja", { hello: "こんにちは" });
+	await settleLocale();
+	assert.equal(api.state.localDisplay.language, "ja", "the device choice was dropped");
+	assert.equal(service.snapshot.active, "ja", "the projection was lost");
+	assert.equal(docEl.lang, "ja", "the store republish disturbed the document language");
+
+	booted.disposeAll();
+	assert.equal(service.snapshot.active, "zh", "the device choice was restored as the Host active locale");
+	assert.deepEqual(service.snapshot.locales.map((entry) => entry.id), ["zh", "en", "ja"]);
+	assert.equal(docEl.lang, "zh-CN",
+		"a normalised store republish was treated as a Host language change");
+});
+
+test("#80 a silent Host switch to the projected language survives System and dispose", async () => {
+	const ja = { id: "ja", label: "日本語", fallback: "en" };
+	const { service } = localeService({
+		locales: [
+			{ id: "zh", label: "中文", fallback: "en" },
+			{ id: "en", label: "English" },
+			ja,
+		],
+	});
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		locale: service,
+		configureDocument(doc) { doc.documentElement.lang = "zh-CN"; },
+		storage: { "rdsh-mobile-ux:local-display": JSON.stringify({ language: "ja" }) },
+	});
+	const api = booted.sandbox.__RDSH_MOBILE_UX__;
+	const docEl = booted.sandbox.document.documentElement;
+	assert.equal(service.snapshot.active, "ja", "the test did not start from a projection");
+	assert.equal(docEl.lang, "ja", "the device projection did not set the document language");
+
+	// LocaleRuntime.adopt returns early because the resolved Host active (ja)
+	// already equals the projected snapshot.active: no publish, no revision
+	// bump and no locale/change. Only the runtime's durable-preference
+	// resolver can see this Host switch.
+	service.silentHostSelect("ja");
+	await settleLocale();
+	assert.equal(api.state.localDisplay.language, "ja");
+	assert.equal(Number(service.snapshot.revision), 2, "a silent Host switch bumped the Host revision");
+
+	// System restores the Host's ja, not the previous zh baseline.
+	api.setLanguage("");
+	await settleLocale();
+	assert.equal(api.state.localDisplay.language, "", "System did not clear the device choice");
+	assert.equal(service.snapshot.active, "ja", "System restored a stale Host active locale");
+	assert.equal(service.snapshot.revision, 2, "System changed the Host revision");
+	assert.equal(docEl.lang, "ja", "System restored the boot document language over the Host switch");
+
+	// Re-selecting ja and disposing keeps the silent Host switch as baseline.
+	api.setLanguage("ja");
+	await settleLocale();
+	assert.equal(docEl.lang, "ja");
+	booted.disposeAll();
+	assert.equal(service.snapshot.active, "ja", "dispose reverted the silent Host switch");
+	assert.equal(service.snapshot.revision, 2, "dispose changed the Host revision");
+	assert.deepEqual(service.snapshot.locales.map((entry) => entry.id), ["zh", "en", "ja"]);
+	assert.equal(docEl.lang, "ja", "dispose restored the boot document language over the Host switch");
+});
+
+test("#80 an authoritative locale/change naming the projected language is not normalised", async () => {
+	const ja = { id: "ja", label: "日本語", fallback: "en" };
+	// No resolver: the store heuristic is the only source, so the event
+	// boundary is what keeps this authoritative switch.
+	const { service } = localeService({
+		locales: [
+			{ id: "zh", label: "中文", fallback: "en" },
+			{ id: "en", label: "English" },
+			ja,
+		],
+		withResolver: false,
+	});
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		locale: service,
+		configureDocument(doc) { doc.documentElement.lang = "zh-CN"; },
+		storage: { "rdsh-mobile-ux:local-display": JSON.stringify({ language: "ja" }) },
+	});
+	const api = booted.sandbox.__RDSH_MOBILE_UX__;
+	const docEl = booted.sandbox.document.documentElement;
+	assert.equal(service.snapshot.active, "ja");
+
+	// The Host switches to ja: the store notification republishes the
+	// projection's active, then publish(..., true) emits the authoritative
+	// locale/change with the same active and catalog.
+	service.hostSelect("ja");
+	const next = service.snapshot;
+	booted.emit("locale/change", next);
+	await settleLocale();
+	assert.equal(api.state.localDisplay.language, "ja");
+	assert.equal(service.snapshot.active, "ja");
+	assert.equal(Number(service.snapshot.revision), 3, "the projection inflated the Host revision");
+
+	api.setLanguage("");
+	await settleLocale();
+	assert.equal(service.snapshot.active, "ja", "System restored a stale Host active locale");
+	assert.equal(service.snapshot.revision, 3);
+	assert.equal(docEl.lang, "ja", "System restored the boot document language over the Host switch");
+
+	booted.disposeAll();
+	assert.equal(service.snapshot.active, "ja", "dispose reverted the authoritative Host switch");
+	assert.deepEqual(service.snapshot.locales.map((entry) => entry.id), ["zh", "en", "ja"]);
+	assert.equal(docEl.lang, "ja", "dispose restored the boot document language over the Host switch");
+});
+
+test("#80 without the Host-active resolver a silent switch falls back to the published baseline", async () => {
+	const ja = { id: "ja", label: "日本語", fallback: "en" };
+	const { service } = localeService({
+		locales: [
+			{ id: "zh", label: "中文", fallback: "en" },
+			{ id: "en", label: "English" },
+			ja,
+		],
+		withResolver: false,
+	});
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		locale: service,
+		configureDocument(doc) { doc.documentElement.lang = "zh-CN"; },
+		storage: { "rdsh-mobile-ux:local-display": JSON.stringify({ language: "ja" }) },
+	});
+	const api = booted.sandbox.__RDSH_MOBILE_UX__;
+	const docEl = booted.sandbox.document.documentElement;
+	assert.equal(service.snapshot.active, "ja");
+
+	// Documented limitation: without resolveActive the module cannot see a
+	// durable preference change that emitted no locale/change, so it restores
+	// the last published Host baseline (zh) rather than the silent ja. The
+	// document language stays the boot one because the Host active it belongs
+	// to did not observably change.
+	service.silentHostSelect("ja");
+	await settleLocale();
+	api.setLanguage("");
+	await settleLocale();
+	assert.equal(service.snapshot.active, "zh", "the published-baseline fallback changed its contract");
+	assert.equal(docEl.lang, "zh-CN");
+	booted.disposeAll();
+	assert.equal(service.snapshot.active, "zh");
+	assert.equal(docEl.lang, "zh-CN");
+});
+
+test("#80 an externally removed language follows the Host fallback document language", async () => {
+	const ja = { id: "ja", label: "日本語", fallback: "en" };
+	const { service } = localeService();
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		locale: service,
+		configureDocument(doc) { doc.documentElement.lang = "zh-CN"; },
+		storage: { "rdsh-mobile-ux:local-display": JSON.stringify({ language: "ja" }) },
+	});
+	const api = booted.sandbox.__RDSH_MOBILE_UX__;
+	const docEl = booted.sandbox.document.documentElement;
+	const releaseJa = service.addLanguage(ja);
+	await settleLocale();
+	assert.equal(service.snapshot.active, "ja");
+	assert.equal(docEl.lang, "ja");
+
+	// The Host preference had moved to ja; removing ja makes the runtime
+	// resolve its provisional language (en here) and publish that fallback.
+	service.silentHostSelect("ja");
+	await settleLocale();
+	releaseJa();
+	await settleLocale();
+	assert.equal(api.state.localDisplay.language, "");
+	assert.equal(service.snapshot.active, "en", "the Host fallback was not restored");
+	assert.equal(docEl.lang, "en", "the document language did not follow the Host fallback");
+
+	booted.disposeAll();
+	assert.equal(service.snapshot.active, "en");
+	assert.equal(docEl.lang, "en");
+});
+
+test("#80 a catalog publish leaves the device font projection untouched", async () => {
+	const ja = { id: "ja", label: "日本語", fallback: "en" };
+	const hostTheme = {
+		preference: "system",
+		revision: 4,
+		fontSizes: { text: 14, code: 11, terminal: 13 },
+		fontFamilies: { text: "", code: "", terminal: "" },
+		active: { id: "light", colorScheme: "light", tokens: {} },
+		themes: [],
+	};
+	const theme = {
+		snapshot: hostTheme,
+		getTheme() { return this.snapshot; },
+	};
+	const { service } = localeService();
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		theme,
+		locale: service,
+		storage: {
+			"rdsh-mobile-ux:local-display": JSON.stringify({
+				fonts: { text: 18, code: 13, terminal: 15 },
+				language: "",
+			}),
+		},
+	});
+	const api = booted.sandbox.__RDSH_MOBILE_UX__;
+	const docEl = booted.sandbox.document.documentElement;
+	assert.equal(theme.snapshot.fontSizes.text, 18);
+	assert.equal(api.state.localDisplay.fontsLocal, true);
+	api.writeTerminalDark(true);
+	assert.equal(docEl.hasAttribute("data-rdsh-terminal-dark"), true);
+
+	service.addLanguage(ja);
+	await settleLocale();
+	assert.equal(theme.snapshot.fontSizes.text, 18, "the catalog publish reverted the device font");
+	assert.equal(theme.snapshot.revision, hostTheme.revision, "the catalog publish inflated the theme revision");
+	assert.deepEqual(api.state.localDisplay.languages.map((entry) => entry.id), ["zh", "en", "ja"]);
+	assert.equal(api.state.localDisplay.language, "", "an untouched device stayed on System");
+	assert.equal(docEl.hasAttribute("data-rdsh-terminal-dark"), true,
+		"the catalog publish dropped the terminal-only palette");
+
+	// A font step while the language owner is inactive keeps the stored choice.
+	api.setFont("text", 1);
+	assert.equal(
+		JSON.parse(booted.sandbox.localStorage.getItem("rdsh-mobile-ux:local-display")).language,
+		"",
+		"a font step invented a language choice",
+	);
+	api.writeTerminalDark(false);
+	booted.disposeAll();
+	assert.equal(theme.snapshot, hostTheme);
+});
+
+test("a desktop never touches the locale catalog (#44/#80)", () => {
+	const { service, registered, removed } = localeService();
+	const booted = bootClient({ mode: "desktop", locale: service });
+	assert.equal(booted.sandbox.__RDSH_MOBILE_UX__, undefined, "the desktop built the mobile half");
 	assert.deepEqual(registered, [], "a desktop changed its locale catalog");
+	booted.disposeAll();
+	assert.deepEqual(removed, []);
+	assert.deepEqual(service.snapshot.locales.map((entry) => entry.id), ["zh", "en"]);
 });
 
-test("a shell without the injected pack or addLanguage offers no ja (#64)", () => {
-	const missingPack = japaneseLocale();
-	const withoutPack = bootClient({ mode: "mobile", narrow: true, locale: missingPack.service, localePacks: null });
-	assert.deepEqual(withoutPack.sandbox.__RDSH_MOBILE_UX__.state.localDisplay.languages.map((entry) => entry.id), ["zh", "en"]);
-	assert.deepEqual(missingPack.registered, [], "registrations ran without a pack");
-
+test("without a language-pack API the picker reads the catalog without inventing ja (#80)", () => {
 	const listeners = new Set();
 	const noApi = {
 		snapshot: {
@@ -1869,8 +3379,9 @@ test("a shell without the injected pack or addLanguage offers no ja (#64)", () =
 		listeners,
 		getSnapshot() { return this.snapshot; },
 	};
-	const withoutApi = bootClient({ mode: "mobile", narrow: true, locale: noApi });
-	assert.deepEqual(withoutApi.sandbox.__RDSH_MOBILE_UX__.state.localDisplay.languages.map((entry) => entry.id), ["en", "zh"]);
+	const booted = bootClient({ mode: "mobile", narrow: true, locale: noApi });
+	assert.deepEqual(booted.sandbox.__RDSH_MOBILE_UX__.state.localDisplay.languages.map((entry) => entry.id), ["en", "zh"]);
+	booted.disposeAll();
 });
 
 test("font and language availability are independent and fail soft", () => {
@@ -2122,4 +3633,376 @@ test("a new pending interaction raises a question banner once", () => {
 	notice.emitLocalNotices(asked, asked, byId);
 	assert.equal(rendered.length, 1, "an unchanged map raised another banner");
 	booted.disposeAll();
+});
+
+/* ---------------------------------------------------------------------- */
+/* #59: landscape drawer nav folds into one accessible More row           */
+/* ---------------------------------------------------------------------- */
+
+/** A small element with the event/children support the More menu needs. */
+function navNode(doc, tag = "div") {
+	const node = element();
+	const listeners = new Map();
+	node.tagName = String(tag).toUpperCase();
+	node.children = [];
+	node.parentElement = null;
+	node.className = "";
+	node.textContent = "";
+	node.addEventListener = (type, handler) => {
+		if (!listeners.has(type)) listeners.set(type, []);
+		listeners.get(type).push(handler);
+	};
+	node.removeEventListener = (type, handler) => {
+		const list = listeners.get(type);
+		if (list === undefined) return;
+		const at = list.indexOf(handler);
+		if (at >= 0) list.splice(at, 1);
+	};
+	node.dispatchNav = (type, props = {}) => {
+		const event = {
+			type,
+			target: node,
+			currentTarget: node,
+			defaultPrevented: false,
+			propagationStopped: false,
+			preventDefault() { this.defaultPrevented = true; },
+			stopPropagation() { this.propagationStopped = true; },
+			stopImmediatePropagation() { this.propagationStopped = true; },
+			...props,
+		};
+		for (const handler of [...(listeners.get(type) ?? [])]) handler.call(node, event);
+		return event;
+	};
+	node.click = () => node.dispatchNav("click");
+	node.focus = () => { doc.activeElement = node; };
+	node.appendChild = (child) => {
+		if (child.parentElement !== null) child.remove();
+		child.parentElement = node;
+		node.children.push(child);
+		return child;
+	};
+	node.append = (...children) => {
+		for (const child of children) node.appendChild(child);
+	};
+	node.insertBefore = (child, reference) => {
+		if (child.parentElement !== null) child.remove();
+		const at = node.children.indexOf(reference);
+		child.parentElement = node;
+		if (at < 0) node.children.push(child);
+		else node.children.splice(at, 0, child);
+		return child;
+	};
+	node.after = (sibling) => {
+		const parent = node.parentElement;
+		if (parent === null) return;
+		parent.insertBefore(sibling, node.nextElementSibling);
+	};
+	node.remove = () => {
+		const parent = node.parentElement;
+		if (parent === null) return;
+		const at = parent.children.indexOf(node);
+		if (at >= 0) parent.children.splice(at, 1);
+		node.parentElement = null;
+	};
+	node.contains = (target) => target === node || node.children.some((child) => child.contains(target));
+	node.querySelectorAll = (selector) => {
+		const found = [];
+		const walk = (current) => {
+			for (const child of current.children) {
+				if (navMatches(child, selector)) found.push(child);
+				walk(child);
+			}
+		};
+		walk(node);
+		return found;
+	};
+	node.querySelector = (selector) => node.querySelectorAll(selector)[0] ?? null;
+	Object.defineProperty(node, "nextElementSibling", {
+		get() {
+			if (node.parentElement === null) return null;
+			const siblings = node.parentElement.children;
+			return siblings[siblings.indexOf(node) + 1] ?? null;
+		},
+	});
+	Object.defineProperty(node, "lastElementChild", {
+		get() { return node.children[node.children.length - 1] ?? null; },
+	});
+	return node;
+}
+
+/** The tiny selector language the nav fixture and the menu use. */
+function navMatches(node, selector) {
+	for (const branch of selector.split(",")) {
+		const part = branch.trim();
+		if (part === "") continue;
+		const tag = (part.match(/^([A-Za-z][\w-]*)/) ?? [])[1];
+		if (tag !== undefined && node.tagName !== tag.toUpperCase()) continue;
+		const classMatch = part.match(/\.([A-Za-z0-9_-]+)/);
+		if (classMatch !== null && !String(node.className).split(/\s+/).includes(classMatch[1])) continue;
+		const attributes = [...part.matchAll(/\[([A-Za-z0-9_-]+)(?:=(?:"([^"]*)"|'([^']*)'))?\]/g)];
+		if (attributes.length === 0) {
+			if (tag !== undefined || classMatch !== null) return true;
+			continue;
+		}
+		if (attributes.every(([, name, doubleQuoted, singleQuoted]) => node.hasAttribute(name)
+			&& ((doubleQuoted ?? singleQuoted) === undefined || node.getAttribute(name) === (doubleQuoted ?? singleQuoted)))) return true;
+	}
+	return false;
+}
+
+function navBoot({ mode = "mobile", narrow = false, lang = undefined, labels = {} } = {}) {
+	const label = (name, fallback) => labels[name] ?? fallback;
+	const frames = [];
+	const docListeners = [];
+	const windowListeners = [];
+	const created = [];
+	const counts = { plugins: 0, automation: 0, settings: 0 };
+	let nav = null;
+	let body = null;
+	let newSession = null;
+	let plugins = null;
+	let automation = null;
+	const booted = bootClient({
+		mode,
+		narrow,
+		lang,
+		copy: COPY,
+		frames,
+		windowAdd(type, handler) { windowListeners.push({ type, handler }); },
+		windowRemove(type, handler) {
+			const at = windowListeners.findIndex((entry) => entry.type === type && entry.handler === handler);
+			if (at >= 0) windowListeners.splice(at, 1);
+		},
+		configureDocument(doc) {
+			body = navNode(doc, "body");
+			nav = navNode(doc, "nav");
+			nav.className = "hHd-Xa_panelList";
+			newSession = navNode(doc, "button");
+			plugins = navNode(doc, "button");
+			automation = navNode(doc, "button");
+			newSession.setAttribute("aria-label", label("newSession", "New Session"));
+			plugins.setAttribute("aria-label", label("plugins", "Plugins"));
+			automation.setAttribute("aria-label", label("automation", "Automation tasks"));
+			nav.append(newSession, plugins, automation);
+			body.append(nav);
+			doc.body = body;
+			doc.createElement = (tag) => {
+				const node = navNode(doc, tag);
+				created.push(node);
+				return node;
+			};
+			doc.querySelector = (selector) => {
+				if (selector === "nav.hHd-Xa_panelList") return nav;
+				if (selector === "[data-rdsh-settings-row]"
+					|| selector === "[data-rdsh-settings-row], .rdsh-mux-settings-row") return nav.querySelector("[data-rdsh-settings-row]");
+				if (selector === "[data-rdsh-nav-more]") return nav.querySelector("[data-rdsh-nav-more]");
+				return null;
+			};
+			doc.querySelectorAll = (selector) => {
+				if (selector === "[data-rdsh-settings-row], .rdsh-mux-settings-row"
+					|| selector === "[data-rdsh-nav-more]"
+					|| selector === "[data-rdsh-nav-more-hidden]"
+					|| selector === "[data-rdsh-more-row]") return nav.querySelectorAll(selector);
+				return [];
+			};
+			doc.addEventListener = (type, handler, options) => {
+				const capture = options === true || (options !== undefined && options !== null && options.capture === true);
+				docListeners.push({ type, handler, capture });
+			};
+			doc.removeEventListener = (type, handler, options) => {
+				const capture = options === true || (options !== undefined && options !== null && options.capture === true);
+				const at = docListeners.findIndex((entry) => entry.type === type && entry.handler === handler && entry.capture === capture);
+				if (at >= 0) docListeners.splice(at, 1);
+			};
+		},
+	});
+	const run = () => {
+		while (frames.length > 0) frames.shift()();
+	};
+	run();
+	return {
+		booted,
+		doc: booted.sandbox.document,
+		sandbox: booted.sandbox,
+		nav,
+		body,
+		newSession,
+		plugins,
+		automation,
+		created,
+		docListeners,
+		windowListeners,
+		counts,
+		run,
+		settingsRow: () => nav.querySelector("[data-rdsh-settings-row]"),
+		more: () => nav.querySelector("[data-rdsh-nav-more]"),
+		menus: () => body.querySelectorAll(".rdsh-mux-nav-more-menu"),
+		items: () => body.querySelectorAll("button[role='menuitem']"),
+	};
+}
+
+test("#59 landscape folds the three nav rows into one More row", () => {
+	const fixture = navBoot();
+	const more = fixture.more();
+	assert.ok(more, "the landscape More row was not created");
+	assert.equal(more.getAttribute("aria-haspopup"), "menu");
+	assert.equal(more.getAttribute("aria-expanded"), "false");
+	assert.equal(more.getAttribute("aria-label"), COPY.en["mux.navMore"]);
+	assert.equal(more.className.includes("rdsh-mux-nav-more"), true);
+	assert.equal(more.nextElementSibling, fixture.plugins, "More is not in the first folded row's slot");
+	for (const row of [fixture.plugins, fixture.automation, fixture.settingsRow()]) {
+		assert.equal(row.hasAttribute("data-rdsh-nav-more-hidden"), true, "a folded row is still visible");
+	}
+	assert.equal(fixture.nav.querySelectorAll("[data-rdsh-settings-row]").length, 1, "the Settings row was duplicated");
+
+	// Repainting must not duplicate the More row or the single #87 Settings row.
+	for (let pass = 0; pass < 3; pass += 1) fixture.booted.sandbox.__RDSH_MOBILE_UX__.decorateNow();
+	assert.equal(fixture.nav.querySelectorAll("[data-rdsh-nav-more]").length, 1);
+	assert.equal(fixture.nav.querySelectorAll("[data-rdsh-settings-row]").length, 1);
+	assert.equal(fixture.nav.querySelectorAll("[data-rdsh-nav-more-hidden]").length, 3);
+	fixture.booted.disposeAll();
+});
+
+test("#59 the More menu focuses and activates each folded row", () => {
+	const fixture = navBoot();
+	const settingsRow = fixture.settingsRow();
+	fixture.plugins.click = () => { fixture.counts.plugins += 1; };
+	fixture.automation.click = () => { fixture.counts.automation += 1; };
+	settingsRow.click = () => { fixture.counts.settings += 1; };
+	const more = fixture.more();
+
+	for (const [index, countKey] of [[0, "plugins"], [1, "automation"], [2, "settings"]]) {
+		more.click();
+		const menus = fixture.menus();
+		assert.equal(menus.length, 1, "More did not open exactly one menu");
+		const menu = menus[0];
+		assert.equal(menu.getAttribute("role"), "menu");
+		assert.equal(menu.getAttribute("aria-label"), COPY.en["mux.navMore.menu"]);
+		const items = fixture.items();
+		assert.deepEqual(items.map((item) => item.textContent), ["Plugins", "Automation tasks", "Settings"]);
+		assert.equal(fixture.doc.activeElement, items[0], "the first menu item did not receive focus");
+		// ArrowDown moves focus without leaving the menu.
+		items[0].dispatchNav("keydown", { key: "ArrowDown" });
+		assert.equal(fixture.doc.activeElement, items[1], "ArrowDown did not move focus");
+		items[1].dispatchNav("keydown", { key: "ArrowUp" });
+		assert.equal(fixture.doc.activeElement, items[0], "ArrowUp did not move focus");
+		assert.equal(more.getAttribute("aria-expanded"), "true");
+		items[index].click();
+		assert.equal(fixture.counts[countKey], 1, `the ${countKey} row did not run`);
+		assert.equal(menu.parentElement, null, "the menu stayed after item selection");
+		assert.equal(more.getAttribute("aria-expanded"), "false");
+		assert.equal(more.hasAttribute("aria-controls"), false);
+	}
+	fixture.booted.disposeAll();
+});
+
+test("#59 the More menu dismisses on Escape, outside press, Tab and resize", () => {
+	const fixture = navBoot();
+	const more = fixture.more();
+	const lastDoc = (type) => [...fixture.docListeners].reverse().find((entry) => entry.type === type && entry.capture);
+	const lastWindow = (type) => [...fixture.windowListeners].reverse().find((entry) => entry.type === type);
+
+	more.click();
+	let menu = fixture.menus()[0];
+	assert.ok(menu, "the menu did not open");
+	lastDoc("pointerdown").handler({ target: fixture.body });
+	assert.equal(menu.parentElement, null, "an outside press did not close the menu");
+	assert.equal(more.getAttribute("aria-expanded"), "false");
+
+	more.click();
+	menu = fixture.menus()[0];
+	const escape = { key: "Escape", prevented: 0, stopped: 0, preventDefault() { this.prevented += 1; }, stopPropagation() { this.stopped += 1; } };
+	lastDoc("keydown").handler(escape);
+	assert.equal(menu.parentElement, null, "Escape did not close the menu");
+	assert.equal(escape.prevented, 1, "Escape was not consumed");
+	assert.equal(fixture.doc.activeElement, more, "Escape did not restore focus to More");
+
+	more.click();
+	menu = fixture.menus()[0];
+	fixture.items()[0].dispatchNav("keydown", { key: "Tab" });
+	assert.equal(menu.parentElement, null, "Tab left the menu behind");
+
+	more.click();
+	menu = fixture.menus()[0];
+	lastWindow("resize").handler();
+	assert.equal(menu.parentElement, null, "a resize did not close the menu");
+	assert.equal(more.getAttribute("aria-expanded"), "false");
+
+	// Rotating back to portrait removes More and restores the stock rows.
+	fixture.sandbox.innerWidth = 390;
+	fixture.sandbox.window.innerWidth = 390;
+	fixture.booted.sandbox.__RDSH_MOBILE_UX__.decorateNow();
+	assert.equal(fixture.more(), null, "portrait kept the landscape More row");
+	for (const row of [fixture.plugins, fixture.automation, fixture.settingsRow()]) {
+		assert.equal(row.hasAttribute("data-rdsh-nav-more-hidden"), false, "portrait kept a folded row hidden");
+	}
+	assert.equal(fixture.nav.querySelectorAll("[data-rdsh-settings-row]").length, 1);
+	fixture.booted.disposeAll();
+});
+
+test("#59 the More row is mobile-landscape only and is removed on dispose", () => {
+	const portrait = navBoot({ narrow: true });
+	assert.equal(portrait.more(), null, "a portrait phone got the landscape More row");
+	assert.equal(portrait.nav.querySelectorAll("[data-rdsh-nav-more-hidden]").length, 0);
+	assert.ok(portrait.settingsRow(), "the portrait Settings row is missing");
+	portrait.booted.disposeAll();
+
+	const desktop = navBoot({ mode: "desktop", narrow: false });
+	assert.equal(desktop.more(), null, "a desktop got the landscape More row");
+	assert.equal(desktop.nav.querySelectorAll("[data-rdsh-nav-more-hidden]").length, 0);
+	assert.equal(desktop.newSession.hasAttribute("aria-label"), true, "the desktop nav was rewritten");
+	desktop.booted.disposeAll();
+
+	const landscape = navBoot();
+	const more = landscape.more();
+	more.click();
+	assert.equal(landscape.menus().length, 1);
+	landscape.booted.disposeAll();
+	assert.equal(landscape.more(), null, "dispose left the More row");
+	assert.equal(landscape.menus().length, 0, "dispose left the More menu");
+	assert.equal(landscape.nav.querySelectorAll("[data-rdsh-nav-more-hidden]").length, 0, "dispose left folded rows hidden");
+	assert.equal(landscape.nav.children.includes(landscape.plugins), true, "dispose removed a stock row");
+	assert.equal(landscape.nav.children.includes(landscape.automation), true, "dispose removed a stock row");
+	assert.equal(landscape.settingsRow(), null, "dispose kept the injected Settings row");
+});
+
+test("#80 a full ja shell folds the three rows and runs every More action", () => {
+	const labels = { newSession: "新しいセッションを作成", plugins: "プラグイン", automation: "自動化タスク" };
+	const fixture = navBoot({ lang: "ja", labels });
+	const more = fixture.more();
+	assert.ok(more, "the ja landscape More row was not created");
+	const settingsRow = fixture.settingsRow();
+	assert.ok(settingsRow, "the ja Settings row was not injected");
+	for (const row of [fixture.plugins, fixture.automation, settingsRow]) {
+		assert.equal(row.hasAttribute("data-rdsh-nav-more-hidden"), true, "a ja folded row is still visible");
+	}
+	// The injected row still follows Automation tasks when its label is ja.
+	assert.equal(fixture.automation.nextElementSibling, settingsRow, "the ja Settings row did not follow Automation tasks");
+
+	fixture.plugins.click = () => { fixture.counts.plugins += 1; };
+	fixture.automation.click = () => { fixture.counts.automation += 1; };
+	settingsRow.click = () => { fixture.counts.settings += 1; };
+
+	more.click();
+	const items = fixture.items();
+	assert.deepEqual(
+		items.map((item) => item.textContent),
+		["プラグイン", "自動化タスク", COPY.ja["mux.settingsRow"]],
+		"the ja More menu does not list the three folded rows",
+	);
+	for (const item of items) item.click();
+	assert.deepEqual(fixture.counts, { plugins: 1, automation: 1, settings: 1 }, "a ja More item did not run its stock row");
+	assert.equal(fixture.menus().length, 0, "the ja More menu stayed open");
+	fixture.booted.disposeAll();
+});
+
+test("#80 a full ja desktop keeps the stock nav and installs no phone controls", () => {
+	const labels = { newSession: "新しいセッションを作成", plugins: "プラグイン", automation: "自動化タスク" };
+	const fixture = navBoot({ mode: "desktop", narrow: false, lang: "ja", labels });
+	assert.equal(fixture.more(), null, "a ja desktop got the landscape More row");
+	assert.equal(fixture.settingsRow(), null, "a ja desktop got the injected Settings row");
+	assert.equal(fixture.nav.querySelectorAll("[data-rdsh-nav-more-hidden]").length, 0, "a ja desktop folded a row");
+	assert.equal(fixture.plugins.getAttribute("aria-label"), "プラグイン", "a ja desktop nav was rewritten");
+	assert.equal(fixture.docListeners.length, 0, "a ja desktop installed the mobile click listener");
+	fixture.booted.disposeAll();
 });

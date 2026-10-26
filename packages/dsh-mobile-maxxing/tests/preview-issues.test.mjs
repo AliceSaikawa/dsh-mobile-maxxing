@@ -1,5 +1,5 @@
 /**
- * Behavioural checks for #33 / #34 / #35.
+ * Behavioural checks for #33 / #34 / #35 / #81.
  *
  * The browser half is a single bundle with no exports, so this file boots it
  * against a small in-memory DOM and drives the same decoration pass the app
@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import vm from "node:vm";
-import { COPY, LOCALE_PACKS } from "../lib/copy.js";
+import { COPY } from "../lib/copy.js";
 
 const CLIENT = readFileSync(new URL("../client.js", import.meta.url), "utf8");
 
@@ -472,7 +472,6 @@ function boot({ storage = {}, mode = "mobile", width = 390 } = {}) {
 		performance: { now: () => 0 },
 		__RDSH_PWA_LANG__: "en",
 		__RDSH_PWA_COPY__: COPY,
-		__RDSH_PWA_LOCALES__: LOCALE_PACKS,
 		__RDSH_PWA_PROBES__: {},
 	};
 	window.__ModuleLoader__ = {
@@ -605,10 +604,52 @@ function makePreview(env, { secondary = ["Reload", "Save"], hidden = true } = {}
 	panel.append(collapse);
 	const boundary = document.createElement("div");
 	boundary.setAttribute("data-sidebar-right-panel", "");
+	// #72: upstream marks an expanded panel with this attribute, and the tablet
+	// tier uses it to tell an open dock from the collapsed chrome.
+	boundary.setAttribute("data-sidebar-right-open", "");
 	boundary.getBoundingClientRect = screenRect;
 	boundary.append(panel);
 	document.body.append(boundary);
 	return { panel, header, path, viewer, wrap, openTarget, openButton, actions };
+}
+
+/**
+ * A code preview inside a right panel.
+ *
+ * Upstream mirrors its wrap state onto the preview body as
+ * `data-textpreview-wrap` and the stock header toggle writes the same state,
+ * so the fixture wires the two together exactly like React does.
+ */
+function makeCodePreview(env, { wrap = true } = {}) {
+	const preview = makePreview(env);
+	const body = env.document.createElement("div");
+	body.setAttribute("data-textpreview-body", "");
+	const scroller = env.document.createElement("div");
+	const pre = env.document.createElement("pre");
+	const line = env.document.createElement("span");
+	line.setAttribute("class", "line");
+	line.textContent = "const longToken = 'https://example.test/' + 'x'.repeat(4096);";
+	pre.append(line);
+	scroller.append(pre);
+	body.append(scroller);
+	preview.panel.append(body);
+
+	// The in-memory DOM has no layout: report this one node as the scrollport.
+	const computed = env.sandbox.getComputedStyle;
+	env.sandbox.getComputedStyle = (node) => node === scroller
+		? { ...computed(node), overflowX: "auto" }
+		: computed(node);
+
+	const setWrap = (value) => {
+		preview.wrap.setAttribute("aria-pressed", value ? "true" : "false");
+		if (value) body.setAttribute("data-textpreview-wrap", "");
+		else body.removeAttribute("data-textpreview-wrap");
+	};
+	preview.wrap.addEventListener("click", () => {
+		setWrap(preview.wrap.getAttribute("aria-pressed") !== "true");
+	});
+	setWrap(wrap);
+	return { ...preview, body, scroller, pre, line, setWrap };
 }
 
 /** A review surface inside a dockkit pane. */
@@ -713,7 +754,7 @@ test("#35 adds the kebab and moves only secondary preview actions", () => {
 	const moved = preview.header.querySelectorAll("[data-rdsh-preview-secondary]");
 	assert.deepEqual(moved.map((button) => button.getAttribute("aria-label")), ["Reload", "Save"]);
 	assert.equal(preview.viewer.hasAttribute("data-rdsh-preview-secondary"), false, "the viewer picker was moved out");
-	assert.equal(preview.wrap.hasAttribute("data-rdsh-preview-secondary"), false, "the forced-wrap toggle was offered");
+	assert.equal(preview.wrap.hasAttribute("data-rdsh-preview-secondary"), false, "the stock wrap toggle was moved into the kebab");
 	assert.equal(preview.openButton.hasAttribute("data-rdsh-preview-secondary"), false, "#33 open target leaked into the kebab");
 	assert.equal(preview.header.querySelector('[data-textpreview-tool="auto-refresh"]').hasAttribute("data-rdsh-preview-secondary"), false, "the hidden auto-refresh was offered");
 	env.dispose();
@@ -1071,4 +1112,293 @@ test("#34 long-token CSS is scoped to the upstream wrap state, not forced global
 	assert.match(rule, /\[data-review-wrap\]/, "the rule is not gated on upstream's wrap state");
 	// The plugin must not make the split/unified choice for the user.
 	assert.doesNotMatch(CLIENT, /data-review-tool="split"\)[^;]*\.click\(\)/s, "the plugin clicks the split toggle");
+});
+
+test("#81 long-token wrapping is scoped to the upstream preview wrap state", () => {
+	const start = CLIENT.indexOf("[data-rdsh-rightpanel] [data-textpreview-body][data-textpreview-wrap] pre");
+	assert.notEqual(start, -1, "the preview long-token rule is missing");
+	const rule = CLIENT.slice(start, CLIENT.indexOf("}", start));
+	assert.match(rule, /white-space: pre-wrap !important/, "long tokens do not wrap");
+	assert.match(rule, /overflow-wrap: anywhere !important/, "an unbroken token can still overflow");
+	assert.match(rule, /\[data-textpreview-wrap\]/, "the rule is not gated on upstream's wrap state");
+	assert.equal(CLIENT.includes("[data-rdsh-rightpanel] [data-textpreview-body] pre,"), false, "an unconditional force-wrap rule is back");
+	const lockStart = CLIENT.indexOf("[data-textpreview-wrap] [data-rdsh-code-scroll]");
+	assert.notEqual(lockStart, -1, "the code-scroll lock is missing or not gated");
+	const lockRule = CLIENT.slice(lockStart, CLIENT.indexOf("}", lockStart));
+	assert.match(lockRule, /overflow-x: hidden !important/, "the code scroller is not locked while wrapped");
+	assert.doesNotMatch(CLIENT, /^\s*\[data-rdsh-code-scroll\]\s*\{/m, "an unconditional code-scroll lock is back");
+	// The stock toggle is the control that writes the state, so it must be
+	// reachable on a phone instead of hidden by the mobile sheet.
+	assert.doesNotMatch(CLIENT, /\[data-textpreview-tool="wrap"\]\s*\{[^}]*display:\s*none/, "the stock wrap toggle is hidden");
+});
+
+test("#81 a wrap toggle repaints without waiting for an unrelated mutation", () => {
+	// React writes upstream's wrap state onto the body; the observer has to
+	// watch that attribute or the OFF above could leave the lock in place.
+	assert.match(
+		CLIENT,
+		/observer\.observe\(document\.body, \{[^}]*"data-textpreview-wrap"/,
+		"the observer ignores upstream's wrap state",
+	);
+});
+
+test("#81 wrap ON keeps the code-scroll lock", () => {
+	const env = boot();
+	const code = makeCodePreview(env, { wrap: true });
+	env.api.decorateNow();
+	assert.equal(code.body.hasAttribute("data-textpreview-wrap"), true, "the fixture lost its wrap state");
+	assert.equal(code.pre.hasAttribute("data-rdsh-code-pre"), true, "the code preview was not tagged");
+	assert.equal(code.scroller.hasAttribute("data-rdsh-code-scroll"), true, "wrap ON did not lock the code scroller");
+	env.dispose();
+});
+
+test("#81 wrap OFF gives the stock horizontal scroll back", () => {
+	const env = boot();
+	const code = makeCodePreview(env, { wrap: true });
+	env.api.decorateNow();
+	assert.equal(code.scroller.hasAttribute("data-rdsh-code-scroll"), true);
+
+	code.wrap.click();
+	assert.equal(code.wrap.getAttribute("aria-pressed"), "false", "the stock toggle did not turn wrap off");
+	assert.equal(code.body.hasAttribute("data-textpreview-wrap"), false, "the fixture did not drop upstream's wrap state");
+	env.api.decorateNow();
+	assert.equal(code.scroller.hasAttribute("data-rdsh-code-scroll"), false, "wrap OFF still locked the horizontal scroll");
+
+	code.wrap.click();
+	env.api.decorateNow();
+	assert.equal(code.scroller.hasAttribute("data-rdsh-code-scroll"), true, "wrap ON did not restore the lock");
+	env.dispose();
+});
+
+test("#81 the stock wrap toggle keeps its state and stays out of the kebab", () => {
+	const env = boot();
+	const code = makeCodePreview(env, { wrap: true });
+	env.api.decorateNow();
+	code.wrap.click();
+	env.api.decorateNow();
+	assert.equal(code.wrap.getAttribute("aria-pressed"), "false", "the plugin changed the stock wrap state");
+	assert.equal(code.wrap.hasAttribute("data-rdsh-preview-secondary"), false, "the stock wrap toggle was moved into the kebab");
+
+	const kebab = code.header.querySelector("[data-rdsh-preview-kebab]");
+	assert.notEqual(kebab, null, "the kebab is missing");
+	kebab.click();
+	const labels = [...env.document.body.querySelectorAll('[data-rdsh-preview-menu] [role="menuitem"]')].map((item) => item.textContent);
+	assert.deepEqual(labels, ["Reload", "Save"], "the kebab duplicated the visible wrap toggle");
+	env.dispose();
+});
+
+test("#81 disposal removes the preview wrap hooks and the scroller lock", () => {
+	const env = boot();
+	const code = makeCodePreview(env, { wrap: true });
+	env.api.decorateNow();
+	assert.equal(code.pre.hasAttribute("data-rdsh-code-pre"), true);
+	assert.equal(code.scroller.hasAttribute("data-rdsh-code-scroll"), true);
+
+	env.dispose();
+	assert.equal(code.pre.hasAttribute("data-rdsh-code-pre"), false, "dispose left the code tag behind");
+	assert.equal(code.scroller.hasAttribute("data-rdsh-code-scroll"), false, "dispose left the horizontal lock behind");
+	assert.equal(code.header.hasAttribute("data-rdsh-preview-header"), false, "dispose left the preview header hook behind");
+	assert.equal(env.document.querySelectorAll("[data-rdsh-preview-kebab]").length, 0, "dispose left the kebab behind");
+});
+
+test("#81 a desktop leaves the wrap state and the code scroller alone", () => {
+	const env = boot({ mode: "desktop", width: 390 });
+	const code = makeCodePreview(env, { wrap: true });
+	assert.equal(env.api, undefined, "a desktop booted the mobile half");
+	assert.equal(code.pre.hasAttribute("data-rdsh-code-pre"), false, "a desktop tagged the code preview");
+	assert.equal(code.scroller.hasAttribute("data-rdsh-code-scroll"), false, "a desktop locked the code scroller");
+	assert.equal(code.wrap.getAttribute("aria-pressed"), "true", "a desktop changed the stock wrap state");
+	assert.equal(code.header.querySelector("[data-rdsh-preview-kebab]"), null, "a desktop got the kebab");
+	env.dispose();
+});
+
+/* ---------------------------------------------------------------------- */
+/* #82: the right panel names its kind on a phone                         */
+/* ---------------------------------------------------------------------- */
+
+const PANEL_KINDS = {
+	terminal: { tabId: "tab-terminal", chip: "Terminal 1", tag: "section", attribute: "data-sidebar-terminal" },
+	subagent: { tabId: "tab-chat", chip: "Fix the bug", tag: "div", attribute: "data-sidebar-chat" },
+};
+
+function sidebarHeadRect(env) {
+	return () => ({
+		x: 0,
+		y: 0,
+		top: 0,
+		left: 0,
+		right: env.window.innerWidth,
+		bottom: 844,
+		width: env.window.innerWidth,
+		height: 844,
+	});
+}
+
+/**
+ * A phone-sized right panel with dockkit's pane, strip, chips and one body.
+ * The collapse button sits in the strip, so the decorator tags the pane (the
+ * first ancestor that spans the screen) exactly as it does upstream.
+ */
+function makeSidebarPanel(env, { type = "terminal" } = {}) {
+	const { document } = env;
+	const full = sidebarHeadRect(env);
+	const boundary = document.createElement("div");
+	boundary.setAttribute("data-sidebar-right-panel", "");
+	const panel = document.createElement("div");
+	panel.setAttribute("data-sidebar-right-open", "");
+	const pane = document.createElement("div");
+	pane.setAttribute("data-dockkit-pane", "pane-1");
+	pane.setAttribute("data-dockkit-pane-active", "");
+	pane.getBoundingClientRect = full;
+	const strip = document.createElement("div");
+	strip.setAttribute("role", "tablist");
+	strip.getBoundingClientRect = () => ({ x: 0, y: 0, top: 0, left: 0, right: 390, bottom: 44, width: 390, height: 44 });
+	const chips = new Map();
+	for (const [name, kind] of Object.entries(PANEL_KINDS)) {
+		const chip = document.createElement("div");
+		chip.setAttribute("role", "tab");
+		chip.setAttribute("data-dockkit-tab", kind.tabId);
+		chip.setAttribute("aria-selected", name === type ? "true" : "false");
+		chip.textContent = kind.chip;
+		chips.set(name, chip);
+		strip.append(chip);
+	}
+	const collapse = document.createElement("button");
+	collapse.setAttribute("aria-label", "Collapse right sidebar");
+	collapse.getBoundingClientRect = () => ({ x: 0, y: 0, top: 0, left: 0, right: 30, bottom: 30, width: 30, height: 30 });
+	strip.append(collapse);
+	const body = document.createElement("div");
+	body.setAttribute("data-sidebar-right-tab", PANEL_KINDS[type].tabId);
+	const typeNode = document.createElement(PANEL_KINDS[type].tag);
+	typeNode.setAttribute(PANEL_KINDS[type].attribute, "");
+	body.append(typeNode);
+	pane.append(strip, body);
+	panel.append(pane);
+	boundary.append(panel);
+	document.body.append(boundary);
+	return { boundary, panel, pane, strip, collapse, body, chips, typeNode, full };
+}
+
+/** Swap the rendered tab body the way dockkit does when the user taps a chip. */
+function switchSidebarPanel(env, fixture, type) {
+	const kind = PANEL_KINDS[type];
+	for (const [name, chip] of fixture.chips) {
+		chip.setAttribute("aria-selected", name === type ? "true" : "false");
+	}
+	fixture.body.setAttribute("data-sidebar-right-tab", kind.tabId);
+	for (const old of fixture.body.querySelectorAll("[data-sidebar-terminal], [data-sidebar-chat]")) old.remove();
+	const typeNode = env.document.createElement(kind.tag);
+	typeNode.setAttribute(kind.attribute, "");
+	fixture.body.append(typeNode);
+	fixture.typeNode = typeNode;
+}
+
+function panelHeading(env) {
+	return env.document.querySelector("[data-rdsh-panel-heading]");
+}
+
+test("#82 the heading is generic, localised and follows the active tab", () => {
+	const env = boot();
+	const fixture = makeSidebarPanel(env);
+	env.api.decorateNow();
+	const heading = panelHeading(env);
+	assert.notEqual(heading, null, "a terminal panel got no heading");
+	assert.equal(heading.getAttribute("role"), "heading", "the heading has no semantic role");
+	assert.equal(heading.getAttribute("aria-level"), "2");
+	assert.equal(heading.textContent, "Terminal");
+	assert.equal(heading.parentElement, fixture.pane, "the heading is not at the top of the panel");
+	assert.equal(fixture.pane.children[0], heading, "the heading does not lead the panel");
+	assert.equal(fixture.strip.contains(heading), false, "the heading sits inside the tab strip");
+	assert.equal(heading.closest("[data-sidebar-terminal]"), null, "the heading is inside the terminal body");
+	// The chip names the instance; the heading names the kind.
+	assert.notEqual(heading.textContent, fixture.chips.get("terminal").textContent);
+
+	switchSidebarPanel(env, fixture, "subagent");
+	env.api.decorateNow();
+	assert.equal(heading.textContent, "Subagent", "the heading did not follow the active tab");
+	assert.equal(env.document.querySelectorAll("[data-rdsh-panel-heading]").length, 1, "the tab change added a second heading");
+	assert.notEqual(heading.textContent, fixture.chips.get("subagent").textContent);
+
+	// The chosen display language changes the same node on the next pass.
+	env.sandbox.__RDSH_PWA_LANG__ = "ja";
+	env.api.decorateNow();
+	assert.equal(heading.textContent, "サブエージェント");
+	switchSidebarPanel(env, fixture, "terminal");
+	env.api.decorateNow();
+	assert.equal(heading.textContent, "ターミナル");
+	env.dispose();
+});
+
+test("#82 a remounted panel gets exactly one fresh heading", () => {
+	const env = boot();
+	const first = makeSidebarPanel(env, { type: "terminal" });
+	env.api.decorateNow();
+	const oldHeading = panelHeading(env);
+	assert.notEqual(oldHeading, null);
+
+	first.boundary.remove();
+	const second = makeSidebarPanel(env, { type: "subagent" });
+	env.api.decorateNow();
+	const heading = panelHeading(env);
+	assert.notEqual(heading, null, "the remounted panel got no heading");
+	assert.equal(env.document.querySelectorAll("[data-rdsh-panel-heading]").length, 1, "the old heading survived the remount");
+	assert.equal(heading.textContent, "Subagent");
+	assert.equal(heading.parentElement, second.pane);
+	assert.equal(oldHeading.isConnected, false, "the detached panel kept its heading");
+	env.dispose();
+});
+
+test("#82 closing and disposing remove the heading; reopening adds it back", () => {
+	const env = boot();
+	const fixture = makeSidebarPanel(env, { type: "terminal" });
+	env.api.decorateNow();
+	assert.notEqual(panelHeading(env), null);
+
+	// The panel leaves the layout (its node no longer spans the screen).
+	fixture.pane.getBoundingClientRect = () => ({ x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0 });
+	env.api.decorateNow();
+	assert.equal(panelHeading(env), null, "closing the panel left the heading behind");
+	assert.equal(fixture.pane.hasAttribute("data-rdsh-rightpanel"), false, "the closed panel kept its mobile hook");
+
+	// Opening it again rebuilds the heading from the active tab.
+	fixture.pane.getBoundingClientRect = fixture.full;
+	env.api.decorateNow();
+	assert.notEqual(panelHeading(env), null, "reopening the panel did not restore the heading");
+
+	env.dispose();
+	assert.equal(panelHeading(env), null, "dispose left the heading in the document");
+});
+
+test("#82 a desktop never gets the heading", () => {
+	const desktop = boot({ mode: "desktop", width: 390 });
+	const fixture = makeSidebarPanel(desktop, { type: "terminal" });
+	assert.equal(desktop.api, undefined, "a desktop booted the mobile half");
+	assert.equal(desktop.document.querySelectorAll("[data-rdsh-panel-heading]").length, 0, "a desktop got a panel heading");
+	assert.equal(fixture.pane.hasAttribute("data-rdsh-rightpanel"), false, "a desktop got the right-panel hook");
+	desktop.dispose();
+});
+
+test("#82 a localised collapse control still tags the panel and names its kind", () => {
+	const env = boot();
+	const fixture = makeSidebarPanel(env);
+	// Upstream localises the aria-label and marks the toggle structurally; the
+	// English string lookup alone dropped every right-panel hook here.
+	fixture.collapse.setAttribute("aria-label", "右サイドバーを折りたたむ");
+	fixture.collapse.setAttribute("data-sidebar-right-toggle", "true");
+	env.api.decorateNow();
+	assert.equal(fixture.pane.hasAttribute("data-rdsh-rightpanel"), true, "the localised panel went untagged");
+	const heading = panelHeading(env);
+	assert.notEqual(heading, null, "the localised panel got no heading");
+	assert.equal(heading.textContent, "Terminal");
+	assert.equal(heading.parentElement, fixture.pane);
+	env.dispose();
+});
+
+test("#82 the heading rule stays in the safe-area-padded panel and cannot take gestures", () => {
+	const start = CLIENT.indexOf("[data-rdsh-rightpanel] [data-rdsh-panel-heading]");
+	assert.notEqual(start, -1, "the mobile heading rule is missing");
+	const rule = CLIENT.slice(start, CLIENT.indexOf("}", start));
+	assert.match(rule, /pointer-events:\s*none/, "the heading can take a tab gesture");
+	assert.doesNotMatch(rule, /position:\s*(?:fixed|absolute)/, "the heading is positioned over the panel");
+	assert.match(CLIENT, /\[data-rdsh-rightpanel\] \{[\s\S]*?padding-top: env\(safe-area-inset-top/, "the panel lost its safe-area top inset");
 });

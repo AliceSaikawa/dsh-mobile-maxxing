@@ -16,7 +16,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import vm from "node:vm";
-import { COPY, LOCALE_PACKS, PROBES } from "../lib/copy.js";
+import { COPY, PROBES } from "../lib/copy.js";
 
 const CLIENT = readFileSync(new URL("../client.js", import.meta.url), "utf8");
 
@@ -28,7 +28,18 @@ function cssTemplate(name) {
 	const tick = String.fromCharCode(96);
 	const match = CLIENT.match(new RegExp(`const ${name} = ${tick}([\\s\\S]*?)${tick};\\n`));
 	assert.ok(match, `${name} exists`);
-	return match[1].replace(/\$\{NARROW_QUERY\}/g, "(max-width: 767px)");
+	// The exit/split selectors are assembled from PROBES at runtime; render the
+	// same text here so the rule assertions still read ordinary CSS. The split
+	// selector is built from the live probe table, so a missing ja label fails
+	// the stylesheet assertion below.
+	const rightPanelExit = '[data-rdsh-rightpanel] [aria-label="Exit fullscreen"], [data-rdsh-rightpanel] [aria-label="全画面表示を終了"]';
+	const rightPanelSplit = PROBES.split
+		.map((label) => `[data-rdsh-rightpanel] [aria-label="${label}"]`)
+		.join(", ");
+	return match[1]
+		.replace(/\$\{NARROW_QUERY\}/g, "(max-width: 767px)")
+		.replace(/\$\{RIGHT_PANEL_EXIT\}/g, rightPanelExit)
+		.replace(/\$\{RIGHT_PANEL_SPLIT\}/g, rightPanelSplit);
 }
 
 function cssBlocks() {
@@ -359,7 +370,7 @@ function stub(depth = 0) {
  * are about the boundary path itself: `syncWidth()` is what the media listener
  * calls.
  */
-function bootBoundary({ mode = null, narrow = true, seed = {}, safeTop = 0, safeLeft = 0, safeRight = 0 } = {}) {
+function bootBoundary({ mode = null, narrow = true, seed = {}, safeTop = 0, safeLeft = 0, safeRight = 0, width = narrow ? 390 : 1024 } = {}) {
 	const viewport = { narrow };
 	const deviceMode = mode ?? (narrow ? "mobile" : "desktop");
 	const document = makeDocument();
@@ -374,7 +385,6 @@ function bootBoundary({ mode = null, narrow = true, seed = {}, safeTop = 0, safe
 	const windowListeners = new Map();
 	const sandbox = {
 		__RDSH_PWA_COPY__: COPY,
-		__RDSH_PWA_LOCALES__: LOCALE_PACKS,
 		__RDSH_PWA_PROBES__: PROBES,
 		window: {
 			__ModuleLoader__: { load(value) { definition = value; } },
@@ -430,7 +440,7 @@ function bootBoundary({ mode = null, narrow = true, seed = {}, safeTop = 0, safe
 		Notification: stub(),
 		AudioContext: class AudioContext {},
 		screen: stub(),
-		innerWidth: narrow ? 390 : 1024,
+		innerWidth: width,
 		innerHeight: 844,
 		devicePixelRatio: 3,
 		performance: { now: () => 0 },
@@ -686,4 +696,196 @@ test("a queued frame cannot resurrect the mobile surface after dispose", () => {
 	assert.equal(booted.html.hasAttribute("data-rdsh-anim"), false, "a stale frame re-added the animation attribute");
 	assert.equal(booted.html.hasAttribute("data-rdsh-drawer"), false, "a stale frame re-added the drawer state");
 	assert.equal(booted.body.querySelectorAll(".rdsh-mux-fab").length, 0, "a stale frame re-created the drawer button");
+});
+
+/* ------------------------------------------------------------------ */
+/* #72 iPad split view: the tablet tier inside the mobile surface      */
+/* ------------------------------------------------------------------ */
+
+/** A right-panel fixture shaped like upstream's frame/panel DOM. */
+function wireClosest(node) {
+	node.closest = function closest(selector) {
+		let current = this;
+		while (current !== null && current !== undefined) {
+			if (selector === "[data-sidebar-right-panel]" && current.hasAttribute("data-sidebar-right-panel")) return current;
+			if (selector === "[hidden]" && current.hasAttribute("hidden")) return current;
+			if (selector === "[data-rdsh-rightpanel]" && current.hasAttribute("data-rdsh-rightpanel")) return current;
+			current = current.parentElement ?? null;
+		}
+		return null;
+	};
+}
+
+function ipadFrame(booted) {
+	const root = new FakeNode("div");
+	const slot = new FakeNode("div");
+	const frame = new FakeNode("div");
+	const center = new FakeNode("div");
+	const rightbar = new FakeNode("div");
+	frame.className = "_frame";
+	center.className = "_centerCol";
+	rightbar.className = "_rightbarCol";
+	frame.append(center, rightbar);
+	slot.append(frame);
+	root.append(slot);
+	root.firstElementChild = slot;
+	slot.firstElementChild = frame;
+	booted.body.append(root);
+	booted.document.getElementById = (id) => (id === "root" ? root : null);
+	return { frame, center, rightbar };
+}
+
+function ipadPanel(booted, { viewportWidth, dockWidth, open = true, label = "Fullscreen" }) {
+	const boundary = new FakeNode("div");
+	boundary.setAttribute("data-sidebar-right-panel", "push");
+	if (open) boundary.setAttribute("data-sidebar-right-open", "");
+	const panel = new FakeNode("div");
+	panel.className = "_panel";
+	const collapse = new FakeNode("button");
+	collapse.setAttribute("aria-label", "Collapse right sidebar");
+	const fullscreen = new FakeNode("button");
+	fullscreen.setAttribute("aria-label", label);
+	const rect = (width) => () => ({ x: 0, y: 0, top: 0, left: 0, right: width, bottom: 844, width, height: 844 });
+	collapse.getBoundingClientRect = rect(30);
+	fullscreen.getBoundingClientRect = rect(30);
+	panel.getBoundingClientRect = rect(viewportWidth);
+	boundary.getBoundingClientRect = rect(dockWidth);
+	panel.append(collapse, fullscreen);
+	boundary.append(panel);
+	booted.body.append(boundary);
+	boundary.parentElement = booted.body;
+	panel.parentElement = boundary;
+	collapse.parentElement = panel;
+	fullscreen.parentElement = panel;
+	for (const node of [boundary, panel, collapse, fullscreen]) wireClosest(node);
+	let clicks = 0;
+	fullscreen.click = () => {
+		clicks += 1;
+	};
+	return { boundary, panel, fullscreen, clicks: () => clicks };
+}
+
+test("#72 the tablet tier reserves the measured dock and keeps safe-area padding", () => {
+	const phone = cssTemplate("CSS_PHONE");
+	const tabletStart = phone.indexOf("@media (min-width: 768px)");
+	assert.notEqual(tabletStart, -1, "the tablet tier is missing from the mobile sheet");
+	const tabletEnd = phone.indexOf("\n  [data-rdsh-sidebar] {", tabletStart);
+	assert.notEqual(tabletEnd, -1, "the tablet tier has no end marker");
+	const tablet = phone.slice(tabletStart, tabletEnd);
+	assert.match(
+		tablet,
+		/html\[data-rdsh-rightpanel-open\] \[data-rdsh-frame\]:not\(\[data-rightbar-fullscreen\]\) \{/,
+		"the open tablet dock does not target the frame outside fullscreen",
+	);
+	assert.match(
+		tablet,
+		/grid-template-columns: 0 minmax\(400px, 1fr\) minmax\(300px, var\(--rdsh-rightbar-width, 45%\)\) !important;/,
+		"the tablet dock does not keep the 400px conversation minimum or the 300px panel floor",
+	);
+	assert.match(
+		tablet,
+		/\[data-rdsh-rightpanel\] \[aria-label="Exit fullscreen"\], \[data-rdsh-rightpanel\] \[aria-label="全画面表示を終了"\] \{ display: inline-flex !important; \}/,
+		"the tablet cannot leave fullscreen in en or ja",
+	);
+	assert.match(phone, /\[data-rdsh-rightpanel\] \[aria-label="全画面表示を終了"\]/, "the ja phone still shows the duplicate exit control");
+	assert.match(
+		phone,
+		/\[data-rdsh-rightpanel\] \[aria-label="Split"\], \[data-rdsh-rightpanel\] \[aria-label="分割"\] \{ display: none !important; \}/,
+		"the ja phone still shows the dock split control",
+	);
+	assert.doesNotMatch(tablet, /\[aria-label="Split"\].*display: (?:inline-flex|block)/, "dockkit's pane split was restored");
+	assert.doesNotMatch(tablet, /padding-(?:top|right|bottom|left)/, "the tablet tier reset the panel's safe-area padding");
+
+	// The phone sheet stays the base rule; only the open tablet dock overrides it.
+	assert.match(phone, /\[data-rdsh-frame\] \{ grid-template-columns: 0 minmax\(0, 1fr\) 0 !important; \}/, "the phone sheet grid was lost");
+	assert.match(phone, /\[data-rdsh-frame\]\[data-rightbar-fullscreen\] \{ grid-template-columns: 0 minmax\(0, 1fr\) 0 !important; \}/, "the fullscreen sheet grid was lost");
+	// #59: the stable fullscreen surface owns the safe-area insets, and the
+	// full-width inner pane must not pad them a second time. #72 must preserve
+	// that split while it docks a pushed panel inside #root's padded frame.
+	const panelRule = phone.slice(phone.indexOf("[data-rdsh-rightpanel] {"), phone.indexOf("[data-rdsh-rightpanel] table"));
+	assert.doesNotMatch(panelRule, /padding-/, "the inner panel pane double-inset the stable safe-area surface");
+	const fullscreenStart = phone.indexOf('[data-sidebar-right-panel="fullscreen"] {');
+	assert.notEqual(fullscreenStart, -1, "the stable fullscreen safe-area surface is missing");
+	const fullscreenRule = phone.slice(fullscreenStart, phone.indexOf("\n  }", fullscreenStart) + 5);
+	assert.match(fullscreenRule, /right: calc\(-1 \* env\(safe-area-inset-right, 0px\)\) !important;/, "the fullscreen surface lost its notch offset");
+	assert.match(fullscreenRule, /padding-left: env\(safe-area-inset-left, 0px\) !important;/, "the fullscreen surface lost its left inset");
+	assert.match(fullscreenRule, /padding-right: env\(safe-area-inset-right, 0px\) !important;/, "the fullscreen surface lost its right inset");
+	// The tablet tier lives in the mobile sheet, so a desktop never receives it.
+	assert.doesNotMatch(cssTemplate("CSS_DEVICE"), /data-rdsh-rightpanel|rdsh-rightbar-width|min-width: 768px/, "the tablet dock leaked into the desktop sheet");
+});
+
+test("#72 1024px and 1180px mobile tag the upstream dock and never click Fullscreen", () => {
+	for (const [width, dockWidth] of [[1024, 460], [1180, 531]]) {
+		const booted = bootBoundary({ mode: "mobile", narrow: false, width });
+		const frame = ipadFrame(booted);
+		const panel = ipadPanel(booted, { viewportWidth: width, dockWidth });
+		booted.api.decorateNow();
+
+		assert.equal(panel.clicks(), 0, `the ${width}px tablet auto-clicked Fullscreen`);
+		assert.equal(panel.fullscreen.hasAttribute("data-rdsh-auto-fired"), false, `the ${width}px tablet marked Fullscreen as fired`);
+		assert.equal(booted.html.hasAttribute("data-rdsh-rightpanel-open"), true, `the ${width}px dock was not reported open`);
+		assert.equal(panel.boundary.hasAttribute("data-rdsh-rightpanel"), true, `the ${width}px tablet did not tag the dock root`);
+		assert.equal(panel.panel.hasAttribute("data-rdsh-rightpanel"), false, `the ${width}px tablet tagged the inner layer`);
+		assert.equal(booted.html.style.getPropertyValue("--rdsh-rightbar-width"), `${dockWidth}px`, `the ${width}px dock width was not published`);
+		assert.equal(frame.frame.hasAttribute("data-rdsh-frame"), true, `the ${width}px frame lost its mobile hook`);
+		assert.equal(frame.center.hasAttribute("data-rdsh-center-col"), true, `the ${width}px center column lost its pin`);
+		assert.equal(frame.rightbar.hasAttribute("data-rdsh-rightbar-col"), true, `the ${width}px right column lost its pin`);
+
+		assert.deepEqual(booted.dispose(), [], `the ${width}px tablet dispose threw`);
+		assert.equal(booted.html.hasAttribute("data-rdsh-rightpanel-open"), false, `the ${width}px open marker survived dispose`);
+		assert.equal(booted.html.style.getPropertyValue("--rdsh-rightbar-width"), "", `the ${width}px dock width survived dispose`);
+		assert.equal(panel.boundary.hasAttribute("data-rdsh-rightpanel"), false, `the ${width}px dock tag survived dispose`);
+	}
+});
+
+test("#72 below 768px the phone sheet keeps its fullscreen promotion", () => {
+	const booted = bootBoundary({ mode: "mobile", narrow: true, width: 390 });
+	const frame = ipadFrame(booted);
+	const panel = ipadPanel(booted, { viewportWidth: 390, dockWidth: 390 });
+	booted.api.decorateNow();
+
+	assert.equal(panel.clicks(), 1, "the phone no longer promotes its docked panel to the sheet");
+	assert.equal(panel.fullscreen.getAttribute("data-rdsh-auto-fired"), "1", "the phone promotion was not marked once");
+	assert.equal(panel.panel.hasAttribute("data-rdsh-rightpanel"), true, "the phone did not tag the fullscreen layer");
+	assert.equal(panel.boundary.hasAttribute("data-rdsh-rightpanel"), false, "the phone tagged the tablet dock root");
+	assert.equal(booted.html.style.getPropertyValue("--rdsh-rightbar-width"), "", "the phone wrote a tablet dock width");
+	assert.equal(frame.frame.hasAttribute("data-rdsh-frame"), true, "the phone frame lost its mobile hook");
+
+	// A second pass must not click the same button again.
+	booted.api.decorateNow();
+	assert.equal(panel.clicks(), 1, "the phone clicked Fullscreen twice");
+	booted.dispose();
+});
+
+test("#80 the reviewed ja fullscreen label is promoted, but its exit label is not", () => {
+	const booted = bootBoundary({ mode: "mobile", narrow: true, width: 390 });
+	ipadFrame(booted);
+	const panel = ipadPanel(booted, { viewportWidth: 390, dockWidth: 390, label: "全画面表示" });
+	booted.api.decorateNow();
+	assert.equal(panel.clicks(), 1, "the ja phone did not promote its docked panel");
+	assert.equal(panel.fullscreen.getAttribute("data-rdsh-auto-fired"), "1");
+	booted.dispose();
+
+	// "全画面表示を終了" is the exit control; it must never be auto-clicked as
+	// the enter control (an exact aria label, not a substring).
+	const closing = bootBoundary({ mode: "mobile", narrow: true, width: 390 });
+	ipadFrame(closing);
+	const exit = ipadPanel(closing, { viewportWidth: 390, dockWidth: 390, label: "全画面表示を終了" });
+	closing.api.decorateNow();
+	assert.equal(exit.clicks(), 0, "the ja exit control was clicked as if it entered fullscreen");
+	closing.dispose();
+});
+
+test("#72 a desktop at a tablet width stays untouched", () => {
+	const booted = bootBoundary({ mode: "desktop", narrow: false, width: 1024 });
+	assert.equal(booted.api, undefined, "a desktop built the mobile half");
+	ipadFrame(booted);
+	const panel = ipadPanel(booted, { viewportWidth: 1024, dockWidth: 460 });
+	booted.flushFrames();
+	assert.equal(panel.clicks(), 0, "a desktop clicked Fullscreen");
+	assert.equal(booted.html.hasAttribute("data-rdsh-rightpanel-open"), false, "a desktop got the dock open marker");
+	assert.equal(booted.html.style.getPropertyValue("--rdsh-rightbar-width"), "", "a desktop got a dock width");
+	assert.equal(panel.boundary.hasAttribute("data-rdsh-rightpanel"), false, "a desktop got the mobile panel tag");
+	assert.equal(booted.document.head.querySelectorAll('[data-rdsh-mux-style="phone"]').length, 0, "a desktop got the mobile stylesheet");
+	assert.deepEqual(booted.dispose(), [], "a desktop dispose threw");
 });

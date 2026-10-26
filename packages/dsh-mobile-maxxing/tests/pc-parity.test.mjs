@@ -238,8 +238,9 @@ test("the route detail's back affordance lives in the mobile stylesheet only", (
 	const device = cssBlock("CSS_DEVICE");
 	const phone = cssBlock("CSS_PHONE");
 	assert.ok(device !== null && phone !== null, "the split stylesheets are missing");
-	// #61 / #62: the drawer button steps aside on a route detail, the task
-	// detail keeps a top inset for the replacement, and that replacement is a
+	// #61 / #62: the drawer button steps aside on a route detail, the
+	// Automation route keeps its scroll area below the button, the task detail
+	// keeps the same inset for the replacement, and that replacement is a
 	// mobile-only node.
 	assert.match(
 		phone,
@@ -251,7 +252,19 @@ test("the route detail's back affordance lives in the mobile stylesheet only", (
 		/\[data-rdsh-route-detail="back"\] \{ padding-top: 56px !important; \}/,
 		"the task detail has no top inset for the back button",
 	);
+	assert.match(
+		phone,
+		/\[data-testid="task-manager-page"\] \{ box-sizing: border-box; padding-top: 56px !important; \}/,
+		"the Automation route keeps no clearance below the drawer button",
+	);
 	assert.match(phone, /\.rdsh-mux-route-back\[data-visible\] \{ display: flex; \}/, "the back button has no visible state");
+	// #59: the button sits in the drawer button's corner, so a landscape notch
+	// must move it exactly like the FAB.
+	assert.match(
+		phone,
+		/\.rdsh-mux-route-back \{[^}]*left: calc\(env\(safe-area-inset-left, 0px\) \+ 8px\); top: calc\(env\(safe-area-inset-top, 0px\) \+ 8px\);/,
+		"the back button still uses the fixed 8px gutter",
+	);
 	assert.doesNotMatch(device, /data-rdsh-route-detail|rdsh-mux-route-back/, "a route back rule leaked into the device sheet");
 
 	// The node is built in the same mobile-only branch as the drawer button.

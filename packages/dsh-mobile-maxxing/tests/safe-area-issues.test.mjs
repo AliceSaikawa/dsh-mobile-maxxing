@@ -50,6 +50,10 @@ test("every fixed layer pads the notch side itself", () => {
 	const phone = cssTemplate("CSS_PHONE");
 	const layers = [
 		[".rdsh-mux-fab", ["left: calc(env(safe-area-inset-left, 0px) + 8px)"]],
+		[".rdsh-mux-route-back", [
+			"left: calc(env(safe-area-inset-left, 0px) + 8px)",
+			"top: calc(env(safe-area-inset-top, 0px) + 8px)",
+		]],
 		["[data-rdsh-sidebar]", [
 			"padding-left: env(safe-area-inset-left, 0px)",
 			"padding-right: env(safe-area-inset-right, 0px)",
@@ -61,8 +65,10 @@ test("every fixed layer pads the notch side itself", () => {
 		["[data-shortcut-modal=\"settings\"] [data-rdsh-settings-close]", [
 			"right: calc(env(safe-area-inset-right, 0px) + 12px) !important",
 		]],
-		["[data-rdsh-rightpanel]", [
-			"padding-top: env(safe-area-inset-top, 0px) !important",
+		// #59: the stable upstream panel surface owns the horizontal insets,
+		// not the full-width pane this module tags inside it.
+		["[data-sidebar-right-panel=\"fullscreen\"]", [
+			"right: calc(-1 * env(safe-area-inset-right, 0px)) !important",
 			"padding-left: env(safe-area-inset-left, 0px) !important",
 			"padding-right: env(safe-area-inset-right, 0px) !important",
 		]],
@@ -73,6 +79,48 @@ test("every fixed layer pads the notch side itself", () => {
 			assert.ok(body.includes(declaration), `${selector} lost: ${declaration}`);
 		}
 	}
+});
+
+test("the drawer width adds the notch padding to its 280px content", () => {
+	const phone = cssTemplate("CSS_PHONE");
+	const body = ruleBody(phone, "[data-rdsh-sidebar]");
+	// Content = outer width - both paddings. The fixed 280px this replaced left
+	// 221px of content under a 59px landscape inset, so the 252px rows were
+	// clipped by the drawer's overflow: hidden.
+	assert.ok(
+		body.includes("width: calc(280px + env(safe-area-inset-left, 0px) + env(safe-area-inset-right, 0px)) !important"),
+		"the drawer width does not add both notch insets to its content width",
+	);
+	assert.ok(
+		body.includes("max-width: calc(86vw + env(safe-area-inset-left, 0px) + env(safe-area-inset-right, 0px))"),
+		"the 86vw cap does not include the notch padding, so it would crush the content again",
+	);
+	assert.equal(/width: 280px !important/.test(body), false, "the fixed 280px drawer width is back");
+	// Example arithmetic from the real-device report: 844x390, one 59px side.
+	const content = (viewport, left, right) => Math.min(280 + left + right, 0.86 * viewport + left + right) - left - right;
+	assert.equal(content(844, 59, 0), 280, "a left notch still leaves less than 280px of drawer content");
+	assert.equal(content(844, 0, 59), 280, "a right notch still leaves less than 280px of drawer content");
+	assert.equal(content(390, 0, 0), 280, "a portrait phone lost drawer content");
+	assert.equal(content(320, 0, 0), 275.2, "the narrow-phone 86vw cap changed");
+});
+
+test("the right panel pads upstream's stable surface, not the tagged pane", () => {
+	const phone = cssTemplate("CSS_PHONE");
+	const surface = ruleBody(phone, '[data-sidebar-right-panel="fullscreen"]');
+	// The root is right-anchored inside #root's padded frame. Pulling its far
+	// edge back to the viewport edge makes the horizontal insets line up
+	// instead of double-insetting a pushed panel.
+	assert.ok(surface.includes("box-sizing: border-box !important"), "the panel surface does not include its padding in 100vw");
+	assert.ok(surface.includes("right: calc(-1 * env(safe-area-inset-right, 0px)) !important"), "the fullscreen panel cannot reach the viewport edge on a right notch");
+	assert.ok(surface.includes("padding-left: env(safe-area-inset-left, 0px) !important"), "the fullscreen panel left edge is not cleared");
+	assert.ok(surface.includes("padding-right: env(safe-area-inset-right, 0px) !important"), "the fullscreen panel right edge is not cleared");
+	assert.equal(/padding-top|padding-bottom/.test(surface), false, "#root already pads the vertical edges; the panel would double them");
+
+	const tagged = ruleBody(phone, "[data-rdsh-rightpanel]");
+	assert.equal(/padding-(top|right|bottom|left):/.test(tagged), false, "the full-width pane still adds a second safe-area padding");
+	// The file tree lives inside this same surface (data-files-state=tree >
+	// data-files-body), so its own rule must not carry a competing inset.
+	assert.match(phone, /\[data-rdsh-files-tree\] \[data-files-entry\]/, "the file tree hook moved out of the panel surface");
 });
 
 test("the root pads the in-flow content on every side", () => {
@@ -92,6 +140,8 @@ test("the left/right insets never reach the desktop stylesheet", () => {
 		".rdsh-mux-fab",
 		"[data-shortcut-modal=\"settings\"]",
 		"[data-rdsh-rightpanel]",
+		"[data-sidebar-right-panel=\"fullscreen\"]",
+		".rdsh-mux-route-back",
 		"data-rdsh-safe-left",
 		"data-rdsh-safe-right",
 		"safe-area-inset-left",

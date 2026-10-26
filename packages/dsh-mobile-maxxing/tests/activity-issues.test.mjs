@@ -24,7 +24,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import vm from "node:vm";
-import { COPY, LOCALE_PACKS, PROBES } from "../lib/copy.js";
+import { COPY, PROBES } from "../lib/copy.js";
 
 const CLIENT = readFileSync(new URL("../client.js", import.meta.url), "utf8");
 
@@ -418,7 +418,6 @@ function boot({
 	const sandbox = {
 		__RDSH_PWA_PROBES__: PROBES,
 		__RDSH_PWA_COPY__: COPY,
-		__RDSH_PWA_LOCALES__: LOCALE_PACKS,
 		window: {
 			__ModuleLoader__: {
 				load(value) {
@@ -605,6 +604,17 @@ function chip(label, { expanded = null, children = [] } = {}) {
 	return button;
 }
 
+/** One count label from a committed namespace, rendered like the shell does. */
+const NAMESPACES = new Map();
+function countLabel(lang, name, key, count = 3) {
+	const id = `${lang}/${name}`;
+	if (!NAMESPACES.has(id)) {
+		const file = new URL(`../../rdsh-locale-ja/locale/namespaces/${id}.json`, import.meta.url);
+		NAMESPACES.set(id, JSON.parse(readFileSync(file, "utf8")));
+	}
+	return NAMESPACES.get(id)[key].replace("{count}", String(count));
+}
+
 function ringOf(button) {
 	return button.querySelector("[data-rdsh-activity-spinner]");
 }
@@ -641,15 +651,15 @@ function activityPolls(booted) {
 // ---------------------------------------------------------------------------
 
 /** Boot with a narrow dock carrying the upstream three stats buttons. */
-function bootWithDock({ services = {}, getOverride = null } = {}) {
+function bootWithDock({ services = {}, getOverride = null, labels = {} } = {}) {
 	const dock = node("div");
 	dock.setAttribute("data-rdsh-composer-dock", "");
 	const turns = node("button");
-	turns.setAttribute("aria-label", "3 turns · 42 tok/s");
+	turns.setAttribute("aria-label", labels.turns ?? "3 turns · 42 tok/s");
 	const usage = node("button");
-	usage.setAttribute("aria-label", "Cache hit 40%");
+	usage.setAttribute("aria-label", labels.usage ?? "Cache hit 40%");
 	const context = node("button");
-	context.setAttribute("aria-label", "49% of context used");
+	context.setAttribute("aria-label", labels.context ?? "49% of context used");
 	dock.append(turns, usage, context);
 	const booted = boot({
 		services,
@@ -694,6 +704,26 @@ test("#36 the dock reads contextPressure from the public Session list snapshot",
 	const buttons = dock.querySelectorAll("button");
 	assert.equal(buttons[0].getAttribute("data-rdsh-stat-text"), "3 turns · 42 tok/s");
 	assert.equal(buttons[1].getAttribute("data-rdsh-stat-text"), "Cache hit 40%");
+});
+
+test("#36 the reviewed ja stats labels are recognised", () => {
+	// chat:stats.counts, chat:stats.cacheHit and conversation:context.aria as the
+	// reviewed ja catalogue renders them. The rendered text itself still follows
+	// this package's own copy pack, so the probe match is what is pinned here.
+	const harness = createServices();
+	const { booted, dock, context } = bootWithDock({
+		services: harness.services,
+		labels: {
+			turns: "3 ターン 42 ステップ · 42 tok/s",
+			usage: "キャッシュヒット 40%",
+			context: "コンテキストの使用率 49%",
+		},
+	});
+	showSession(booted, "s1");
+	assert.equal(statText(booted, context), "49%", "the ja context chip lost its percentage");
+	const buttons = dock.querySelectorAll("button");
+	assert.equal(buttons[0].getAttribute("data-rdsh-stat-text"), "3 turns · 42 tok/s", "the ja turns chip was not found");
+	assert.equal(buttons[1].getAttribute("data-rdsh-stat-text"), "Cache hit 40%", "the ja cache chip was not found");
 });
 
 test("#36 missing or malformed projections keep the percentage and ask once", () => {
@@ -868,8 +898,9 @@ test("#40 a projection frame refreshes the chip and teardown releases every subs
 });
 
 test("#40 count chips are detected in every upstream locale (en, zh)", () => {
-	// Installed DSH 0.2.1-rc.2 ships en and zh only (locale/ dirs). A future ja
-	// shell adds its count nouns to PROBES.activityChip, not to client.js.
+	// Installed DSH 0.2.1-rc.2 ships en and zh only (locale/ dirs). The ja
+	// vocabulary lives in PROBES too (#80); the committed labels are pinned
+	// below against the full translation package.
 	const en = chip("2 subagents");
 	const zh = chip("2 个子智能体");
 	const zhJobs = chip("1 个后台任务运行中");
@@ -886,6 +917,82 @@ test("#40 count chips are detected in every upstream locale (en, zh)", () => {
 	assert.equal(zhJobs.getAttribute("data-rdsh-activity-chip"), "shell");
 	assert.equal(zhJobs.getAttribute("data-rdsh-activity-state"), "running", "the zh running word is probed");
 	assert.equal(zh.getAttribute("data-rdsh-activity-state"), "idle");
+});
+
+test("#80 the committed ja count chips are all decorated, idle included", () => {
+	// The full ja catalogue renders the subagent total noun-first
+	// ("サブエージェント 3 件"); the old leading-number regex left that chip
+	// bare, so no ring, icon or second-tap close was installed.
+	const idleSubagents = chip(countLabel("ja", "subagent", "count.total.other"), { expanded: true });
+	const runningSubagents = chip(countLabel("ja", "subagent", "count.running.other"));
+	const idleJobs = chip(countLabel("ja", "job", "count.idle.other"));
+	const runningJobs = chip(countLabel("ja", "job", "count.live.other"));
+	const escapes = [];
+	idleSubagents.dispatchEvent = (event) => {
+		escapes.push(event);
+		return true;
+	};
+	const booted = boot({
+		services: {},
+		configureDocument(doc) {
+			doc.headerButtons = [idleSubagents, runningSubagents, idleJobs, runningJobs];
+		},
+	});
+	booted.api.decorate();
+	booted.runFrames();
+
+	assert.equal(idleSubagents.getAttribute("data-rdsh-activity-chip"), "subagent");
+	assert.equal(idleSubagents.getAttribute("data-rdsh-activity-state"), "idle");
+	assert.ok(ringOf(idleSubagents) !== null, "the idle ja subagent chip has no ring");
+	assert.ok(idleSubagents.querySelector("[data-rdsh-activity-icon]") !== null, "the idle ja subagent chip has no icon");
+	assert.equal(runningSubagents.getAttribute("data-rdsh-activity-chip"), "subagent");
+	assert.equal(runningSubagents.getAttribute("data-rdsh-activity-state"), "running");
+	assert.equal(idleJobs.getAttribute("data-rdsh-activity-chip"), "shell");
+	assert.equal(idleJobs.getAttribute("data-rdsh-activity-state"), "idle");
+	assert.ok(ringOf(idleJobs) !== null, "the idle ja jobs chip has no ring");
+	assert.equal(runningJobs.getAttribute("data-rdsh-activity-chip"), "shell");
+	assert.equal(runningJobs.getAttribute("data-rdsh-activity-state"), "running");
+
+	// The second tap closes the open panel through the root's Escape path.
+	const event = documentClick(booted, ringOf(idleSubagents));
+	assert.equal(event.prevented, true, "the ja idle chip never reaches the upstream opener");
+	assert.equal(event.stopped, true);
+	assert.equal(escapes.length, 1, "the ja idle chip has no second-tap close");
+	assert.equal(escapes[0].key, "Escape");
+});
+
+test("#80 the noun-first ja match is anchored to a real count label", () => {
+	// Negative controls built from the committed label: a bare noun, a verb
+	// phrase, a number without its counter, and the label with a suffix must
+	// all stay ordinary buttons.
+	const idle = countLabel("ja", "subagent", "count.total.other");
+	const noun = PROBES.activityChipCountLast.find((value) => idle.startsWith(`${value} `));
+	assert.ok(noun !== undefined, "the committed noun-first label has no noun probe");
+	const controls = [chip(noun), chip(`${noun}を開く`), chip(`${noun} 3`), chip(`${idle}の履歴`)];
+	const booted = boot({ services: {} });
+	decorateChips(booted, controls);
+	for (const control of controls) {
+		assert.equal(control.hasAttribute("data-rdsh-activity-chip"), false, `${control.getAttribute("aria-label")} was mistaken for a count chip`);
+		assert.equal(ringOf(control), null, `${control.getAttribute("aria-label")} got a ring`);
+		assert.equal(control.querySelector("[data-rdsh-activity-icon]"), null, `${control.getAttribute("aria-label")} got an icon`);
+	}
+});
+
+test("#80 the committed en count labels keep their classification", () => {
+	const idleSubagents = chip(countLabel("en", "subagent", "count.total.other"));
+	const runningSubagents = chip(countLabel("en", "subagent", "count.running.other"));
+	const idleJobs = chip(countLabel("en", "job", "count.idle.other"));
+	const runningJobs = chip(countLabel("en", "job", "count.live.other"));
+	const booted = boot({ services: {} });
+	decorateChips(booted, [idleSubagents, runningSubagents, idleJobs, runningJobs]);
+	assert.equal(idleSubagents.getAttribute("data-rdsh-activity-chip"), "subagent");
+	assert.equal(idleSubagents.getAttribute("data-rdsh-activity-state"), "idle");
+	assert.equal(runningSubagents.getAttribute("data-rdsh-activity-state"), "running");
+	assert.equal(idleJobs.getAttribute("data-rdsh-activity-chip"), "shell");
+	assert.equal(runningJobs.getAttribute("data-rdsh-activity-state"), "running");
+	for (const control of [idleSubagents, runningSubagents, idleJobs, runningJobs]) {
+		assert.ok(ringOf(control) !== null, "an en count chip lost its ring");
+	}
 });
 
 test("#40 a width change keeps the mobile sources and nodes; desktop mode never subscribes", () => {
@@ -1032,6 +1139,24 @@ test("#40 the actual zh subagent running label is recognised", () => {
 	decorateChips(booted, [running, idle]);
 	assert.equal(running.getAttribute("data-rdsh-activity-state"), "running", "正在运行 is a running word too");
 	assert.equal(idle.getAttribute("data-rdsh-activity-state"), "idle");
+});
+
+test("#40 the reviewed ja count labels are recognised", () => {
+	// subagent:count.running.other / job:count.live.other and their idle forms.
+	const booted = boot({ services: {} });
+	const subagentRunning = chip("3 件のサブエージェントが実行中");
+	const subagentIdle = chip("3 件のサブエージェント");
+	const jobRunning = chip("1件のバックグラウンドジョブが実行中");
+	const jobIdle = chip("1件のバックグラウンドジョブ");
+	decorateChips(booted, [subagentRunning, subagentIdle, jobRunning, jobIdle]);
+	assert.equal(subagentRunning.getAttribute("data-rdsh-activity-chip"), "subagent", "the ja subagent noun did not pick the subagent glyph");
+	assert.equal(subagentIdle.getAttribute("data-rdsh-activity-chip"), "subagent");
+	assert.equal(jobRunning.getAttribute("data-rdsh-activity-chip"), "shell", "the ja job noun did not pick the shell glyph");
+	assert.equal(jobIdle.getAttribute("data-rdsh-activity-chip"), "shell");
+	assert.equal(subagentRunning.getAttribute("data-rdsh-activity-state"), "running", "the ja running word is not probed");
+	assert.equal(jobRunning.getAttribute("data-rdsh-activity-state"), "running");
+	assert.equal(subagentIdle.getAttribute("data-rdsh-activity-state"), "idle");
+	assert.equal(jobIdle.getAttribute("data-rdsh-activity-state"), "idle");
 });
 
 test("#40 only count chips are decorated; the child breadcrumb switcher keeps stock paint", () => {

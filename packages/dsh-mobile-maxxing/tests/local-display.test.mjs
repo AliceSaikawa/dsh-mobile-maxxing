@@ -12,6 +12,7 @@ import test from "node:test";
 
 const CLIENT = readFileSync(new URL("../client.js", import.meta.url), "utf8");
 const COPY = readFileSync(new URL("../lib/copy.js", import.meta.url), "utf8");
+const HOST = readFileSync(new URL("../index.js", import.meta.url), "utf8");
 
 function block(start, end) {
 	const at = CLIENT.indexOf(start);
@@ -81,27 +82,61 @@ test("font sizes use the published theme variables and exact roles", () => {
 	assert.match(body, /locale\.getSnapshot\(\)|localeService\?\.getSnapshot\(\)/);
 	assert.match(body, /themeService\.snapshot = hostTheme/, "the Host theme is not restored");
 	assert.match(body, /localeService\.snapshot = hostLocale/, "the Host locale is not restored");
+	assert.doesNotMatch(body, /revision\s*\+\s*1000/, "a projection fabricated a revision upstream row stores would adopt");
+	assert.doesNotMatch(body, /themeEpoch|localeEpoch/, "an unused projection epoch survived");
 	assert.doesNotMatch(body, /\.setFontSize\(|\.setLocale\(/, "a shared writer is called");
+	// A Host active change (authoritative, silent or catalog fallback) must
+	// move the restored document language; an unchanged Host keeps the boot one.
+	assert.match(body, /restoredDocumentLang/, "the document language restore ignores Host changes");
 });
 
-test("the ja pack is registered through the locale API, not guessed into the list (#64)", () => {
-	assert.match(COPY, /export const LOCALE_PACKS = \{/);
-	assert.match(COPY, /language: \{ id: "ja", label: "日本語", fallback: "en" \}/,
-		"the pack must declare its own id, label and fallback");
-	for (const namespace of ["common", "settings", "settings.locale"]) {
-		const key = namespace.replace(".", "\\.");
-		assert.match(COPY, new RegExp(`\\n\\t\\t\\t"?${key}"?: \\{`),
-			`${namespace} has no ja dictionary`);
-	}
-	const installer = block(
-		"function installJapaneseLocale(localeService) {",
-		"    /** Read only this browser's display choices",
-	);
-	assert.match(installer, /addLanguage\(pack\.language\)/, "addLanguage was not used");
-	assert.match(installer, /register\(namespace, "ja", dictionary\)/, "the dictionaries were not registered");
-	assert.match(installer, /if \(!phone\(\)/, "the pack is not gated to the mobile surface");
-	assert.doesNotMatch(installer, /"zh"|"en"/, "the pack touched a shipped locale");
-	assert.match(CLIENT, /const JA_LOCALE_PACK = globalThis\.__RDSH_PWA_LOCALES__\?\.ja \?\? null;/);
+test("catalog publishes ride the public LocaleFace subscription, not locale/change alone (#80)", () => {
+	const body = block("function attachLocalDisplay(ctx) {", "function localeOptions(");
+	// LocaleRuntime.publish emits locale/change only for an active switch;
+	// addLanguage/removeLanguage reach public subscribers only.
+	assert.match(body, /localeService\.subscribe\(/, "the language catalog is not subscribed");
+	assert.match(body, /LOCAL_DISPLAY_PROJECTION/, "the device projection carries no identity marker");
+	assert.match(body, /applyingLocale/, "the local notify can re-enter applyLocale");
+	assert.match(body, /localDisplayStoredLanguage/, "the stored device choice is not remembered separately");
+	assert.doesNotMatch(body, /removeLanguage\(/, "the mobile package unregisters an external language");
+	// A Host switch to the projected language emits no locale/change (`adopt`
+	// returns early), so the runtime's durable resolver is read instead. It is
+	// read-only and has an explicit fallback for runtimes without it.
+	assert.match(body, /typeof localeService\.resolveActive !== "function"/, "the resolver has no shape guard");
+	assert.match(body, /localeService\.resolveActive\(\)/, "the Host active is never re-read from the runtime");
+	assert.match(body, /refreshHostActive/, "a silent Host switch is not folded into the baseline");
+});
+
+test("the locale projection refreshes revision-identity readers without inflating the Host revision (#80)", () => {
+	const body = block("function attachLocalDisplay(ctx) {", "function localeOptions(");
+	// The renderer's t seat cache, the Settings section ledger and the Plugins
+	// ledgers compare getSnapshot().revision by identity: object identity alone
+	// leaves their cached English copy. The projection therefore carries a
+	// local revision token whose numeric value is the Host revision.
+	assert.match(body, /LOCAL_DISPLAY_REVISION/, "the local revision token is not marked");
+	assert.match(body, /const localLocaleRevision = \(revision\) => \{/, "the local revision token is missing");
+	assert.match(body, /Object\(revision\)/, "the token does not preserve the Host numeric value");
+	assert.match(body, /revision: localLocaleRevision\(hostLocale\.revision\)/, "the projection does not carry the token");
+	assert.match(body, /Number\(projectedLocale\.revision\) === Number\(hostLocale\.revision\)/,
+		"an unchanged projection is not reused");
+	assert.match(body, /SHORTCUT\(#80\)/, "the typeof-number compatibility limit is not documented");
+	// A numeric bump freezes the shared row stores (#73/#64); never reintroduce it.
+	assert.doesNotMatch(body, /revision\s*\+\s*1000/);
+	assert.doesNotMatch(body, /revision:\s*hostLocale\.revision\s*[+-]/);
+	assert.doesNotMatch(body, /ctx\.emit\("locale\/change"/,
+		"a fake Host event would reach the native bridge");
+});
+
+test("the mobile package no longer owns a ja language pack (#80)", () => {
+	assert.doesNotMatch(COPY, /LOCALE_PACKS/, "the mobile copy module still exports a locale pack");
+	assert.doesNotMatch(CLIENT, /addLanguage\(|JA_LOCALE_PACK|__RDSH_PWA_LOCALES__/,
+		"the mobile client still registers a ja language");
+	assert.doesNotMatch(CLIENT, /register\(namespace, "ja"/, "the mobile client still registers a ja dictionary");
+	assert.doesNotMatch(CLIENT, /installJapaneseLocale/, "the mobile ja installer is still present");
+	assert.doesNotMatch(HOST, /__RDSH_PWA_LOCALES__|LOCALE_PACKS/,
+		"the host still injects a ja pack");
+	// rdsh-locale-ja is the sole owner; the mobile picker consumes the catalog.
+	assert.match(CLIENT, /function localeOptionsFrom\(snapshot\) \{/);
 });
 
 test("language options are the locale service's registered list, never a guessed ja", () => {

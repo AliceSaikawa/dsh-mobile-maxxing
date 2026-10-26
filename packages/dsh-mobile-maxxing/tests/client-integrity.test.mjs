@@ -449,6 +449,40 @@ test("resize only drops gestures on a real width change or a rotation", () => {
 	assert.match(CLIENT, /attributeFilter: \[[^\]]*"data-rightbar-collapsed"/, "panel changes are not observed");
 });
 
+test("#76 keyboard-hide recovery only re-runs the existing layout pass", () => {
+	// iPadOS can hide the keyboard with the composer focused and no
+	// visualViewport resize. The recovery must be measurement + decorate + fit
+	// from lifecycle signals, not a fake reflow, a document scroll or a blur:
+	// the native blank strip belongs to WebKit and the composer to upstream.
+	const at = CLIENT.indexOf("const applyKeyboardRecovery =");
+	assert.ok(at >= 0, "no keyboard-hide recovery");
+	const end = CLIENT.indexOf("const scheduleKeyboardRecovery", at);
+	assert.ok(end > at, "the recovery body is unterminated");
+	const body = CLIENT.slice(at, end);
+	assert.match(body, /measureSafeArea()/, "the recovery does not re-measure");
+	assert.match(body, /scheduleDecorate()/, "the recovery does not redecorate");
+	assert.match(body, /scheduleTerminalFit()/, "the recovery does not refit the terminal");
+	assert.doesNotMatch(body, /scrollTo|scrollTop|style\.(?:height|display|transform)|offsetHeight|blur\(|\.focus\(/, "the recovery fakes a reflow, scrolls or moves focus");
+	// A keyboard-shrunk layout height must not become a published native gap.
+	assert.match(body, /keyboardSettled\(\)/, "the recovery ignores whether the keyboard has gone");
+	assert.match(CLIENT, /layoutHeightMax - window\.innerHeight > LAYOUT_SHRINK_MAX_PX/, "a keyboard-sized layout height can be published as a native gap");
+	const installAt = CLIENT.indexOf("if (phone()) {\n          document.addEventListener(\"focusout\", onKeyboardFocusOut, true);", at);
+	assert.ok(installAt > at, "the recovery listeners are not mobile-only");
+});
+
+test("#76 the keyboard-hide listeners and pending work are torn down", () => {
+	for (const line of [
+		'document.removeEventListener("focusout", onKeyboardFocusOut, true)',
+		'document.removeEventListener("visibilitychange", onKeyboardVisibility)',
+		'window.removeEventListener("blur", scheduleKeyboardRecovery)',
+		'window.removeEventListener("focus", scheduleKeyboardRecovery)',
+	]) {
+		assert.ok(CLIENT.includes(line), `teardown lost: ${line}`);
+	}
+	assert.match(CLIENT, /if \(keyboardRecoveryFrame !== 0\) \{\s*cancelAnimationFrame\(keyboardRecoveryFrame\)/, "a queued recovery frame survives teardown");
+	assert.match(CLIENT, /clearTimeout\(keyboardRecoveryTimer\)/, "a pending recovery timer survives teardown");
+});
+
 test("the right panel is only looked for inside its own subtree", () => {
 	// A hidden route keeps a 0x0 copy of the collapse button; walking up from
 	// it without a boundary tagged the app frame as the panel, which then hid
@@ -474,6 +508,21 @@ test("a finger drag in the terminal becomes a wheel event", () => {
 	// ...and the overscroll guard must stop cancelling the drags the bridge wants.
 	assert.match(CLIENT, /target\.closest\("textarea, input, \.xterm"\)\) return;/, "the overscroll guard still cancels terminal drags");
 	assert.match(CLIENT, /target\.closest\("input, textarea, \[contenteditable=true\], \.xterm/, "the back-swipe still claims terminal drags");
+});
+
+test("#59 landscape nav More is a mobile-sheet control", () => {
+	const phone = cssTemplate("CSS_PHONE");
+	const device = cssTemplate("CSS_DEVICE");
+	assert.match(phone, /\[data-rdsh-nav-more-hidden\] \{ display: none !important; \}/, "the folded rows have no hide rule");
+	assert.match(phone, /\.rdsh-mux-nav-more-menu/, "the More menu has no phone styling");
+	assert.doesNotMatch(device, /rdsh-nav-more|data-rdsh-nav-more/, "a landscape nav rule leaked into the device sheet");
+	// The gate is phone mode AND landscape geometry, not a width breakpoint.
+	assert.match(
+		CLIENT,
+		/function navMoreLandscape\(\) \{\s*return phone\(\) && window\.innerWidth > window\.innerHeight;\s*\}/,
+		"the More gate is not mobile-landscape",
+	);
+	assert.match(CLIENT, /function clearSidebarNavMore\(\)/, "the injected More row has no cleanup path");
 });
 
 test("the right panel keeps upstream tab dimensions but its tap replay", () => {
@@ -606,6 +655,9 @@ test("upstream label probes cover English and Japanese", () => {
 	}
 	assert.ok(PROBES.untitled.includes("new session"));
 	assert.ok(PROBES.untitled.includes("新しいセッション"));
+	// #59: the landscape More menu and the drawer route-close both use these.
+	assert.ok(PROBES.navPlugins.includes("Plugins"));
+	assert.ok(PROBES.navAutomation.includes("Automation tasks"));
 });
 
 test("representative Japanese copy matches the reference wording", () => {
@@ -667,7 +719,7 @@ test("the retired diagnostics and custom hide are gone", () => {
 	// The standard hide list and the console option survive; the browser-side
 	// overrides do not.
 	assert.match(CLIENT, /const HIDE_DEFAULT = \[/, "the standard hide list is gone");
-	assert.match(CLIENT, /function hideLabels\(\) \{\s*\n\s*return \[\.\.\.HIDE_DEFAULT, \.\.\.\(Array\.isArray\(CONFIG\.hideLabels\)/, "the profile hide list is gone");
+	assert.match(CLIENT, /function hideLabels\(\) \{[\s\S]*?\.\.\.HIDE_DEFAULT,[\s\S]*?\.\.\.probeValues\("hideControls"\),[\s\S]*?Array\.isArray\(CONFIG\.hideLabels\)/, "the localized defaults or the profile hide list are gone");
 	assert.match(CLIENT, /function hideDisabled\(\) \{\s*\n\s*return CONFIG\.showHiddenControls === true;/, "the console option is gone");
 });
 
@@ -778,14 +830,49 @@ test("the queue joins only at its lower corners and leaves the composer unchange
 		assert.ok(rules.some((entry) => entry.head === head), `${head} is missing from the mobile sheet`);
 	}
 });
-test("the workspace picker caps its list and keeps Add workspace outside it", () => {
-	assert.match(CLIENT, /\[data-rdsh-workspace-menu\] \{[^}]*max-height: min\(70vh, 520px\) !important;/, "the workspace menu is not height-bounded");
-	assert.match(CLIENT, /\[data-rdsh-workspace-menu\] \[data-rdsh-workspace-viewport\] \{[^}]*max-height: min\(40vh, 320px\) !important;[^}]*overflow-y: auto !important;/, "the workspace list is not the scroll viewport");
-	assert.match(CLIENT, /\[data-rdsh-workspace-menu\] \[data-rdsh-workspace-hidden\] \{ display: none !important; \}/, "filtered rows are still visible");
-	assert.match(CLIENT, /\.rdsh-mux-workspace-search input \{[^}]*font-size: 16px;/, "the search field can trigger iOS zoom");
-	assert.match(CLIENT, /\.rdsh-mux-workspace-empty \{[^}]*font-size: 13px;/, "the no-match row has no style");
-	const rules = cssRules(cssTemplate("CSS_PHONE"));
-	for (const head of ["[data-rdsh-workspace-menu]", "[data-rdsh-workspace-menu] [data-rdsh-workspace-viewport]", ".rdsh-mux-workspace-search", ".rdsh-mux-workspace-empty"]) {
+test("the workspace picker reserves its search band before the first placement", () => {
+	const phone = cssTemplate("CSS_PHONE");
+	// #39: upstream's Menu reads offsetWidth/offsetHeight in the layout effect
+	// of the commit that mounts it, before the plugin can tag the portal. The
+	// armed selector (set by the opening click) and the tagged selector must
+	// describe the same box, or the first place() and the decorated panel
+	// disagree and the menu jumps.
+	const menuRule = /html\[data-rdsh-workspace-picking\] \[role="menu"\]\[data-menu-material\],\s*\[data-rdsh-workspace-menu\] \{([^}]*)\}/.exec(phone);
+	assert.ok(menuRule, "the picker menu has no pre-tag geometry rule");
+	const menuBody = menuRule[1];
+	assert.match(menuBody, /--rdsh-workspace-search-block: 44\.5px;/, "the reserved band has no single size");
+	assert.match(menuBody, /padding-top: calc\(4px \+ var\(--rdsh-workspace-search-block\)\) !important;/, "the reserved band is not part of the menu box");
+	assert.match(menuBody, /max-height: min\(70vh, 520px\) !important;/, "the pre-tag menu is not height-bounded");
+	assert.match(menuBody, /overflow: hidden !important;/, "the pre-tag menu does not clip");
+
+	// The list cap is part of the same pre-tag contract; without it a long
+	// picker shrinks when the viewport is tagged.
+	const viewportRule = /html\[data-rdsh-workspace-picking\] \[role="menu"\]\[data-menu-material\] > div\[aria-hidden="true"\] \+ \[role="presentation"\],\s*\[data-rdsh-workspace-menu\] \[data-rdsh-workspace-viewport\] \{([^}]*)\}/.exec(phone);
+	assert.ok(viewportRule, "the list viewport has no pre-tag cap");
+	assert.match(viewportRule[1], /max-height: min\(40vh, 320px\) !important;/, "the pre-tag list is not capped");
+	assert.match(viewportRule[1], /overflow-y: auto !important;/, "the pre-tag list is not the scroller");
+
+	// The row is absolutely positioned inside that band, so inserting it adds
+	// neither height nor width to the box upstream measured. A width here
+	// would re-place the panel horizontally on decoration.
+	const rowRule = /\.rdsh-mux-workspace-search \{([^}]*)\}/.exec(phone);
+	assert.ok(rowRule, "the search row has no style");
+	const rowBody = rowRule[1];
+	assert.match(rowBody, /position: absolute; top: 4px; left: 4px; right: 4px;/, "the search row still takes flow space");
+	assert.match(rowBody, /height: var\(--rdsh-workspace-search-block, 44\.5px\);/, "the row does not fill exactly the reserved band");
+	assert.doesNotMatch(rowBody, /(?:^|[;\s])width:/, "the search row changes the menu width");
+	assert.match(phone, /\.rdsh-mux-workspace-search input \{[^}]*width: 100%; min-width: 0;/, "the input's intrinsic width can widen the menu");
+	assert.match(phone, /\.rdsh-mux-workspace-search input \{[^}]*font-size: 16px;/, "the search field can trigger iOS zoom");
+
+	assert.match(phone, /\[data-rdsh-workspace-menu\] \[data-rdsh-workspace-hidden\] \{ display: none !important; \}/, "filtered rows are still visible");
+	assert.match(phone, /\.rdsh-mux-workspace-empty \{[^}]*font-size: 13px;/, "the no-match row has no style");
+
+	const rules = cssRules(phone);
+	assert.ok(rules.some((entry) => entry.head.includes("[data-rdsh-workspace-menu]")), "the tagged menu geometry is missing from the mobile sheet");
+	assert.ok(rules.some((entry) => entry.head.includes("[data-rdsh-workspace-menu] [data-rdsh-workspace-viewport]")), "the tagged viewport rules are missing from the mobile sheet");
+	for (const head of [".rdsh-mux-workspace-search", ".rdsh-mux-workspace-empty"]) {
 		assert.ok(rules.some((entry) => entry.head === head), `${head} is missing from the mobile sheet`);
 	}
+	const device = CLIENT.slice(CLIENT.indexOf("const CSS_DEVICE"), CLIENT.indexOf("const CSS_PHONE"));
+	assert.doesNotMatch(device, /data-rdsh-workspace-picking/, "the pre-tag reservation leaked into the device sheet");
 });

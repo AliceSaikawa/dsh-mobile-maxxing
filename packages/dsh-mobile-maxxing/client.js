@@ -38,6 +38,14 @@ window.__ModuleLoader__.load({
      * mobile half; the copy lookup above must see it before the host global.
      */
     let localDisplayLanguage = "";
+    /**
+     * The language this browser has chosen, independent of whether a language
+     * pack currently publishes it. A owner that activates late (or withdraws
+     * and re-adds) must not silently discard the stored choice: the picker
+     * shows "System" while the definition is missing and this value restores
+     * the choice when the catalog offers it again (#80).
+     */
+    let localDisplayStoredLanguage = "";
     /** The shared DSH locale, tracked so "System" copy follows the shell. */
     let localDisplayHostLanguage = "";
 
@@ -188,6 +196,263 @@ window.__ModuleLoader__.load({
       }
     } catch (error) {
       /* a document without documentElement only affects the CSS hook */
+    }
+
+    // ---------------------------------------------------------------------
+    // Device-local chat policy (this device only)
+    //
+    // Four General preferences live in upstream client snapshot stores:
+    // work-details verbosity and collapse timing (ui-chat
+    // TranscriptViewPolicy), performance detail (PerformanceUsagePolicy) and
+    // busy-Enter queue/steer (ui-conversation ComposerSubmissionPolicy).
+    // Upstream's own Settings rows receive those stores as
+    // `settings.general.item` hooks, and only upstream's `set*` functions
+    // write the shared configuration form.
+    //
+    // A StoredEntry keeps its inject face at the top level (`entry.inject`),
+    // not on `entry.options`. This bundle calls that face and writes the
+    // device value into the live store only: it never calls a `set*` function
+    // and never reaches the shared configuration transport. The latest
+    // Host-accepted value stays as the baseline, so "follow Host", reset and
+    // teardown put it back.
+    //
+    // A missing entry, inject face or hook renders the row unavailable with a
+    // reason instead of looking saved.
+    // ---------------------------------------------------------------------
+    const LOCAL_CHAT_KEY = "rdsh-mobile-ux:local-chat";
+    const LOCAL_CHAT_SPECS = [
+      { id: "workDetails", entry: "transcript-view", hook: "transcriptView", values: ["compact", "standard", "detailed", "verbose"], fallback: "detailed" },
+      { id: "collapse", entry: "transcript-view", hook: "collapseTiming", values: ["completion", "next-input"], fallback: "completion" },
+      { id: "busyEnter", entry: "composer-enter", hook: "busyEnter", values: ["queue", "steer"], fallback: "queue" },
+      { id: "performance", entry: "performance-usage", hook: "performanceUsage", values: ["compact", "detailed"], fallback: "detailed" },
+    ];
+    /** spec id -> binding; a binding without a store is an unavailable row. */
+    const localChatBindings = new Map();
+    const localChatListeners = new Set();
+    let localChatStatus = { local: {}, host: {}, available: {}, reason: {} };
+
+    function readLocalChatChoices() {
+      let raw;
+      try {
+        raw = JSON.parse(localStorage.getItem(LOCAL_CHAT_KEY) || "{}");
+      } catch (error) {
+        return {};
+      }
+      const saved = raw !== null && typeof raw === "object" ? raw : {};
+      const values = {};
+      for (const spec of LOCAL_CHAT_SPECS) {
+        const value = saved[spec.id];
+        if (typeof value === "string" && spec.values.includes(value)) values[spec.id] = value;
+      }
+      return values;
+    }
+
+    function writeLocalChatChoices(choices) {
+      try {
+        localStorage.setItem(LOCAL_CHAT_KEY, JSON.stringify(choices));
+      } catch (error) {
+        /* private mode: the choice lives for this page only */
+      }
+    }
+
+    /** Publish the local/store state the Settings rows render. */
+    function publishLocalChat() {
+      const saved = readLocalChatChoices();
+      const local = {};
+      const host = {};
+      const available = {};
+      const reason = {};
+      for (const spec of LOCAL_CHAT_SPECS) {
+        const binding = localChatBindings.get(spec.id);
+        const usable = binding?.store !== undefined && binding?.store !== null;
+        available[spec.id] = usable;
+        if (!usable) {
+          reason[spec.id] = binding?.reason ?? "not-bound";
+          continue;
+        }
+        if (saved[spec.id] !== undefined) local[spec.id] = saved[spec.id];
+        const value = binding.store.getSnapshot();
+        host[spec.id] = typeof value === "string" ? value : spec.fallback;
+      }
+      localChatStatus = { local, host, available, reason };
+      for (const notify of [...localChatListeners]) notify();
+    }
+
+    function subscribeLocalChatStatus(listener) {
+      localChatListeners.add(listener);
+      return () => localChatListeners.delete(listener);
+    }
+
+    /** Find the upstream settings entry that owns one preference. */
+    function localChatEntry(ctx, spec) {
+      let entries;
+      try {
+        entries = typeof ctx.slots?.entries === "function" ? ctx.slots.entries("settings.general.item") : undefined;
+      } catch (error) {
+        return { reason: "entries-failed" };
+      }
+      if (!Array.isArray(entries)) return { reason: "entries-missing" };
+      const entry = entries.find((candidate) => candidate?.options?.id === spec.entry);
+      return entry === undefined ? { reason: "entry-missing" } : { entry };
+    }
+
+    /** Resolve the live store for one preference, or the reason it is absent. */
+    function localChatStore(ctx, spec) {
+      const found = localChatEntry(ctx, spec);
+      if (found.entry === undefined) return { reason: found.reason };
+      // Corrected ABI: the renderer forwards the core StoredEntry, which keeps
+      // its inject face at the top level. `options` carries only id/order.
+      const inject = found.entry.inject;
+      if (typeof inject !== "function") return { reason: "inject-missing" };
+      let props;
+      try {
+        props = inject();
+      } catch (error) {
+        return { reason: "inject-failed" };
+      }
+      const store = props?.hooks?.[spec.hook];
+      if (store === null || typeof store !== "object") return { reason: "hook-missing" };
+      if (typeof store.getSnapshot !== "function" || typeof store.set !== "function" || typeof store.subscribe !== "function") {
+        return { reason: "hook-shape" };
+      }
+      return { store };
+    }
+
+    /** Write the device value into the live store (never the shared form). */
+    function applyLocalChatValue(binding, value) {
+      binding.ownWrite = true;
+      try {
+        binding.store.set(value);
+      } finally {
+        binding.ownWrite = false;
+      }
+    }
+
+    /**
+     * (Re)bind every preference to its upstream store.
+     *
+     * Called at boot, after a slot registration change and from the Settings
+     * rows, so a late `settings.general.item` entry is picked up without a
+     * reload. Rebinding the same store keeps the existing subscription.
+     */
+    function bindLocalChat(ctx) {
+      const saved = readLocalChatChoices();
+      for (const spec of LOCAL_CHAT_SPECS) {
+        const found = localChatStore(ctx, spec);
+        const existing = localChatBindings.get(spec.id);
+        if (found.store === undefined) {
+          if (existing?.store !== undefined && existing?.store !== null) {
+            existing.unsubscribe?.();
+            if (saved[spec.id] !== undefined && existing.store.getSnapshot() !== existing.baseline) {
+              applyLocalChatValue(existing, existing.baseline);
+            }
+          }
+          localChatBindings.set(spec.id, { store: null, reason: found.reason });
+          continue;
+        }
+        if (existing?.store === found.store) continue;
+        existing?.unsubscribe?.();
+        const binding = {
+          store: found.store,
+          baseline: found.store.getSnapshot(),
+          ownWrite: false,
+          unsubscribe: null,
+        };
+        binding.unsubscribe = found.store.subscribe(() => {
+          // A notification that is not our own write is the Host's latest
+          // accepted answer; it moves the baseline used by reset and teardown.
+          if (binding.ownWrite) return;
+          const next = binding.store.getSnapshot();
+          binding.baseline = next;
+          const chosen = readLocalChatChoices()[spec.id];
+          if (chosen !== undefined && next !== chosen) applyLocalChatValue(binding, chosen);
+          publishLocalChat();
+        });
+        localChatBindings.set(spec.id, binding);
+        if (saved[spec.id] !== undefined && saved[spec.id] !== binding.baseline) {
+          applyLocalChatValue(binding, saved[spec.id]);
+        }
+      }
+      publishLocalChat();
+    }
+
+    /** Save and apply one device choice. */
+    function setLocalChatValue(id, value) {
+      const spec = LOCAL_CHAT_SPECS.find((candidate) => candidate.id === id);
+      if (spec === undefined || !spec.values.includes(value)) return false;
+      const binding = localChatBindings.get(id);
+      if (binding?.store === undefined || binding?.store === null) return false;
+      const choices = readLocalChatChoices();
+      choices[id] = value;
+      writeLocalChatChoices(choices);
+      if (binding.store.getSnapshot() !== value) applyLocalChatValue(binding, value);
+      publishLocalChat();
+      return true;
+    }
+
+    /** Drop the device choice and follow the latest Host-accepted value. */
+    function resetLocalChat(id) {
+      const choices = readLocalChatChoices();
+      if (choices[id] === undefined) return false;
+      delete choices[id];
+      writeLocalChatChoices(choices);
+      const binding = localChatBindings.get(id);
+      if (binding?.store !== undefined && binding?.store !== null && binding.store.getSnapshot() !== binding.baseline) {
+        applyLocalChatValue(binding, binding.baseline);
+      }
+      publishLocalChat();
+      return true;
+    }
+
+    /** Release every subscription and restore the latest Host baseline. */
+    function disposeLocalChat() {
+      const saved = readLocalChatChoices();
+      for (const [id, binding] of localChatBindings) {
+        binding.unsubscribe?.();
+        if (binding.store !== undefined && binding.store !== null && saved[id] !== undefined && binding.store.getSnapshot() !== binding.baseline) {
+          applyLocalChatValue(binding, binding.baseline);
+        }
+      }
+      localChatBindings.clear();
+      publishLocalChat();
+    }
+
+    /**
+     * Install the overrides for the mobile page and keep them bound.
+     *
+     * `subscription` re-binds when upstream registers or replaces the settings
+     * entries; the effect teardown removes both the subscription and every
+     * restored value.
+     */
+    function attachLocalChat(ctx) {
+      ctx.effect(() => {
+        bindLocalChat(ctx);
+        const stop = typeof ctx.slots?.subscribe === "function"
+          ? ctx.slots.subscribe("settings.general.item", () => bindLocalChat(ctx))
+          : undefined;
+        return () => {
+          stop?.();
+          disposeLocalChat();
+        };
+      }, "rdsh-mobile-ux: local chat policy");
+    }
+
+    // Test seam: the runtime is plain functions over the slots service, so a
+    // harness that sets this flag gets the same closures without a browser.
+    const localChatTestHook = globalThis.__RDSH_LOCAL_CHAT_TEST__;
+    if (localChatTestHook !== null && typeof localChatTestHook === "object") {
+      localChatTestHook.localChat = {
+        attachLocalChat,
+        bindLocalChat,
+        disposeLocalChat,
+        setLocalChatValue,
+        resetLocalChat,
+        publishLocalChat,
+        status: () => localChatStatus,
+        specs: LOCAL_CHAT_SPECS,
+        key: LOCAL_CHAT_KEY,
+        subscribe: subscribeLocalChatStatus,
+      };
     }
 
     // Shared clipboard + toast
@@ -1119,6 +1384,220 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     // ---------------------------------------------------------------------
+    // #71 — phone-only automatic loading of older conversation messages.
+    //
+    // Upstream renders its "Load earlier" button only while history has more,
+    // disables it while a page is in flight, and its own loadEarlier() retains
+    // the paging anchor. This helper only presses that existing control after a
+    // real reader scroll settles at the top; it never renders, fetches, writes
+    // scrollTop, or calls scrollTo/scrollBy. The scroller is recognised
+    // structurally as the element whose direct child carries upstream's
+    // data-chat-flow tag, and the older wrapper is the first non-message direct
+    // child with a direct <button>. No class hash or label text is involved.
+    // ---------------------------------------------------------------------
+    function createOlderMessageLoader({ doc, win, isPhone }) {
+      const SETTLE_MS = 160;
+      // A gesture arms the loader only briefly; momentum refreshes this on
+      // every real scroll, while a stale tap cannot arm a later programmatic
+      // scroll to the top.
+      const INTENT_MS = 1500;
+      // iOS reports overscroll as a negative scrollTop; both are "at the top".
+      const TOP_PX = 24;
+      let installed = false;
+      let armed = true;
+      let loading = false;
+      let intentScroller = null;
+      let intentAt = 0;
+      let pendingScroller = null;
+      let activeScroller = null;
+      let settleTimer = 0;
+      let observer = null;
+
+      function columnOf(scroller) {
+        if (scroller === null || scroller === undefined || scroller.nodeType !== 1) return null;
+        for (const child of scroller.children) {
+          if (child.nodeType === 1 && child.hasAttribute("data-chat-flow")) return child;
+        }
+        return null;
+      }
+
+      /** Walk up from an event target to the transcript scroller, if any. */
+      function scrollerOf(node) {
+        let element = node !== null && node !== undefined && node.nodeType === 1 ? node : null;
+        while (element !== null) {
+          if (columnOf(element) !== null) return element;
+          element = element.parentElement;
+        }
+        return null;
+      }
+
+      /**
+       * Upstream's older wrapper is the first direct non-message child of the
+       * flow column with a direct button; message rows carry data-chat-flow-kind.
+       */
+      function controlFor(scroller) {
+        const column = columnOf(scroller);
+        if (column === null) return null;
+        for (const wrapper of column.children) {
+          if (wrapper.nodeType !== 1 || wrapper.hasAttribute("data-chat-flow-kind")) continue;
+          for (const child of wrapper.children) {
+            if (child.nodeType === 1 && child.tagName === "BUTTON") return child;
+          }
+        }
+        return null;
+      }
+
+      function disconnectObserver() {
+        if (observer !== null) {
+          observer.disconnect();
+          observer = null;
+        }
+      }
+
+      function clearSettle() {
+        if (settleTimer !== 0) {
+          win.clearTimeout(settleTimer);
+          settleTimer = 0;
+        }
+      }
+
+      function resetState() {
+        armed = true;
+        loading = false;
+        intentScroller = null;
+        intentAt = 0;
+        pendingScroller = null;
+        activeScroller = null;
+        clearSettle();
+        disconnectObserver();
+      }
+
+      /** A different session replaced the scroller; a new gesture is still required. */
+      function adopt(scroller) {
+        if (activeScroller === scroller) return;
+        clearSettle();
+        disconnectObserver();
+        activeScroller = scroller;
+        armed = true;
+        loading = false;
+      }
+
+      /**
+       * Re-arm only after upstream's own loading state ends: the control is
+       * enabled again or gone (history exhausted). DOM mutations never click.
+       */
+      function finish() {
+        if (!loading) return;
+        loading = false;
+        armed = true;
+        disconnectObserver();
+      }
+
+      function onMutations() {
+        if (!installed || !loading) return;
+        if (activeScroller === null) {
+          finish();
+          return;
+        }
+        const control = controlFor(activeScroller);
+        if (control === null || control.disabled !== true) finish();
+      }
+
+      function observe(column) {
+        disconnectObserver();
+        const Observer = win.MutationObserver
+          ?? (typeof MutationObserver === "function" ? MutationObserver : null);
+        if (Observer === null) return;
+        observer = new Observer(onMutations);
+        observer.observe(column, {
+          childList: true,
+          subtree: true,
+          characterData: true,
+          attributes: true,
+          attributeFilter: ["disabled"],
+        });
+      }
+
+      /** Only input inside the transcript counts as a real reader scroll. */
+      function noteIntent(event) {
+        if (!installed || !isPhone()) return;
+        const scroller = scrollerOf(event.target);
+        if (scroller === null) return;
+        intentScroller = scroller;
+        intentAt = Date.now();
+      }
+
+      function onScroll(event) {
+        if (!installed || !isPhone()) return;
+        const scroller = event.target;
+        if (columnOf(scroller) === null) return;
+        // Programmatic anchor/follow scrolling carries no intent and is ignored.
+        if (intentScroller !== scroller) return;
+        if (Date.now() - intentAt > INTENT_MS) {
+          intentScroller = null;
+          return;
+        }
+        // This scroll is part of a live gesture: keep the gesture armed while
+        // momentum continues.
+        intentAt = Date.now();
+        if (activeScroller !== scroller) adopt(scroller);
+        if (!armed || loading) return;
+        pendingScroller = scroller;
+        clearSettle();
+        settleTimer = win.setTimeout(onSettled, SETTLE_MS);
+      }
+
+      function onSettled() {
+        settleTimer = 0;
+        if (!installed || !isPhone()) return;
+        const scroller = pendingScroller;
+        pendingScroller = null;
+        if (scroller === null || scroller !== activeScroller || intentScroller !== scroller) return;
+        // One load per reader gesture; a new scroll is needed to re-arm.
+        intentScroller = null;
+        if (!armed || loading) return;
+        if (!(scroller.scrollTop <= TOP_PX)) return;
+        const column = columnOf(scroller);
+        if (column === null) return;
+        const control = controlFor(scroller);
+        if (control === null || control.disabled === true) return;
+        armed = false;
+        loading = true;
+        observe(column);
+        try {
+          control.click();
+        } catch {
+          finish();
+        }
+      }
+
+      function install() {
+        if (installed || !isPhone()) return false;
+        installed = true;
+        resetState();
+        doc.addEventListener("pointerdown", noteIntent, true);
+        doc.addEventListener("touchstart", noteIntent, true);
+        doc.addEventListener("wheel", noteIntent, true);
+        doc.addEventListener("keydown", noteIntent, true);
+        doc.addEventListener("scroll", onScroll, true);
+        return true;
+      }
+
+      function dispose() {
+        if (!installed) return;
+        installed = false;
+        doc.removeEventListener("pointerdown", noteIntent, true);
+        doc.removeEventListener("touchstart", noteIntent, true);
+        doc.removeEventListener("wheel", noteIntent, true);
+        doc.removeEventListener("keydown", noteIntent, true);
+        doc.removeEventListener("scroll", onScroll, true);
+        resetState();
+      }
+
+      return { install, dispose, scrollerOf, controlFor, state: () => ({ installed, armed, loading }) };
+    }
+
+    // ---------------------------------------------------------------------
     // rdsh-mobile-ux — mobile-device UX: drawer, settings, composer, in-app banners.
     // ---------------------------------------------------------------------
     function mobilePart() {
@@ -1227,6 +1706,16 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     const DEVICE_THEME_KEY = "dsh-mobile-maxxing:device-theme";
     /** Browser-local display choices. Never a Host setting and never synced. */
     const LOCAL_DISPLAY_KEY = "rdsh-mobile-ux:local-display";
+    /** Browser-local terminal-only dark choice (#79); off by default. */
+    const TERMINAL_DARK_KEY = "rdsh-mobile-ux:terminal-dark";
+    /** Root marker the scoped mobile stylesheet keys the terminal palette off. */
+    const TERMINAL_DARK_ATTR = "data-rdsh-terminal-dark";
+    /** Marks a theme snapshot this module emitted just to ask the terminal to repaint. */
+    const TERMINAL_DARK_PROJECTION = Symbol.for("rdsh-mobile-ux:terminal-dark-projection");
+    /** Marks the device-local font/locale projection so it is not a Host baseline. */
+    const LOCAL_DISPLAY_PROJECTION = Symbol.for("rdsh-mobile-ux:local-display-projection");
+    /** Marks the locally unique revision token a device-local locale view carries. */
+    const LOCAL_DISPLAY_REVISION = Symbol.for("rdsh-mobile-ux:local-display-revision");
     /** The three published theme font roles and their accepted integer ranges. */
     const LOCAL_FONT_SPECS = {
       text: { min: 10, max: 22, default: 14, variable: "--dsh-content-font-size" },
@@ -1261,6 +1750,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       notifyDeviceTurns: readNotifyDeviceTurns(),
       deviceTheme: readDeviceTheme(),
       deviceThemeNote: "",
+      terminalDark: readTerminalDark(),
       localPermission: readLocalPermission(),
       permissionOptions: [],
       permissionSharedDefault: "",
@@ -1784,6 +2274,157 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     // ---------------------------------------------------------------------
+    // Terminal-only dark surface (#79)
+    //
+    // The terminal is the one surface whose ANSI palette reads badly on a
+    // light page. This preference is browser-local and deliberately narrow:
+    // it paints only the terminal body and asks upstream to reread that
+    // computed style through its normal `theme/change` subscription (the
+    // sidebar terminal reads the screen wrapper's background/foreground and
+    // keeps xterm's own ANSI palette, with upstream's minimumContrastRatio).
+    // The surrounding UI, the shared theme and the Host settings stay as they
+    // are; nothing is written through `theme.setTheme`.
+    // ---------------------------------------------------------------------
+    let terminalDarkRuntime = null;
+
+    function readTerminalDark() {
+      try {
+        return localStorage.getItem(TERMINAL_DARK_KEY) === "1";
+      } catch (error) {
+        return false;
+      }
+    }
+
+    function applyTerminalDark() {
+      // No usable theme service means no repaint path: painting the scoped
+      // background alone would leave xterm's light-theme default foreground
+      // and ANSI palette on a dark surface. Wait for attach() instead.
+      if (terminalDarkRuntime === null) return;
+      if (typeof document === "undefined") return;
+      const root = document.documentElement;
+      if (root === null || root === undefined) return;
+      if (!phone()) return;
+      root.toggleAttribute(TERMINAL_DARK_ATTR, state.terminalDark === true);
+    }
+
+    /** Store the choice, paint the scoped rule and ask the terminal to repaint. */
+    function writeTerminalDark(value) {
+      const next = value === true;
+      try {
+        if (next) localStorage.setItem(TERMINAL_DARK_KEY, "1");
+        else localStorage.removeItem(TERMINAL_DARK_KEY);
+      } catch (error) {
+        /* private mode: the choice lasts for this page */
+      }
+      emit({ terminalDark: next });
+      applyTerminalDark();
+      terminalDarkRuntime?.repaint();
+    }
+
+    /**
+     * Wire the scoped palette to the theme service.
+     *
+     * The CSS alone does not repaint xterm: the terminal keeps the
+     * background/foreground it last read from the screen wrapper. Emitting a
+     * fresh (semantically identical) `theme/change` snapshot makes the
+     * existing terminal effect run its `getComputedStyle` pass again. The
+     * snapshot is marked so this module does not mistake its own echo for a
+     * Host theme change, and the latest Host snapshot is restored on dispose.
+     *
+     * The clone deliberately keeps the Host revision. Upstream Appearance and
+     * font row stores ignore a snapshot whose revision is not newer than the
+     * one they stored, so a fabricated revision here would make this synthetic
+     * repaint the last snapshot they ever accept and freeze those rows. The
+     * new object identity is what forces an already-mounted terminal to
+     * reread its computed styles; the revision stays the Host's.
+     */
+    function attachTerminalDark(ctx) {
+      let service;
+      try {
+        service = typeof ctx.get === "function" ? ctx.get("theme") : undefined;
+      } catch (error) {
+        service = undefined;
+      }
+      if (service === undefined || service === null || typeof service.getTheme !== "function") return;
+      // A read-only service cannot make the terminal reread the scoped CSS.
+      if (!("snapshot" in service)) return;
+      ctx.effect(() => {
+        let active = true;
+        let host = null;
+        let projected = false;
+        let projecting = false;
+        try {
+          host = service.getTheme() ?? null;
+        } catch (error) {
+          host = null;
+        }
+        const repaint = (restoreHost = false) => {
+          if (!active || !phone() || host === null) return;
+          let current = host;
+          try {
+            current = service.getTheme() ?? host;
+          } catch (error) {
+            current = host;
+          }
+          if (current === null || current === undefined) return;
+          // Same revision as the Host: see the note on attachTerminalDark. The
+          // clone is a distinct object, which is all the terminal's snapshot
+          // subscription needs to run its getComputedStyle pass again.
+          const next = { ...current };
+          Object.defineProperty(next, TERMINAL_DARK_PROJECTION, { value: true });
+          Object.freeze(next);
+          projected = true;
+          projecting = true;
+          try {
+            service.snapshot = next;
+            if (typeof ctx.emit === "function") ctx.emit("theme/change", next);
+          } catch (error) {
+            /* the theme fiber may already be gone */
+          } finally {
+            projecting = false;
+            // A teardown repaint only has to make the terminal run its
+            // getComputedStyle pass once; the shared snapshot goes back to the
+            // Host immediately so a dispose leaves nothing projected. A live
+            // repaint keeps the clone installed until the terminal's snapshot
+            // subscription renders: restoring the Host object here would make
+            // that read return the previous identity and skip the repaint.
+            if (restoreHost) {
+              try {
+                service.snapshot = host;
+              } catch (error) {
+                /* the theme fiber may already be gone */
+              }
+            }
+          }
+        };
+        const runtime = { apply: applyTerminalDark, repaint };
+        terminalDarkRuntime = runtime;
+        applyTerminalDark();
+        // A stored ON is applied before the terminal mounts; this also covers
+        // a hot reload where the terminal is already mounted.
+        if (state.terminalDark === true) repaint();
+        const off = typeof ctx.on === "function" ? ctx.on("theme/change", (snapshot) => {
+          if (!active || projecting) return;
+          if (snapshot === null || snapshot === undefined) return;
+          if (snapshot[TERMINAL_DARK_PROJECTION] === true) return;
+          if (snapshot[LOCAL_DISPLAY_PROJECTION] === true) return;
+          host = snapshot;
+        }) : undefined;
+        return () => {
+          if (terminalDarkRuntime === runtime) terminalDarkRuntime = null;
+          document.documentElement.removeAttribute(TERMINAL_DARK_ATTR);
+          // Repaint after the marker is gone so the terminal reads the shared
+          // light palette again. The repaint restores the Host snapshot in its
+          // finally block; the display projection's own teardown will then
+          // put back the true Host object.
+          if (projected && host !== null) repaint(true);
+          active = false;
+          if (typeof off === "function") off();
+        };
+      }, "rdsh-mobile-ux: terminal dark");
+    }
+
+    // ---------------------------------------------------------------------
     // Device-local display: font sizes and UI language.
     //
     // Both controls are deliberately browser-local. The theme and locale
@@ -1795,60 +2436,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     // a durable setting and not a remote call.
     // ---------------------------------------------------------------------
     let localDisplayRuntime = null;
-
-    /**
-     * Japanese language pack for the shared locale service (#64).
-     *
-     * Upstream ships zh and en only, so the display-language picker cannot
-     * offer Japanese by itself. The dictionaries live in lib/copy.js (the one
-     * module allowed to carry UI copy) and the host injects them as
-     * `__RDSH_PWA_LOCALES__`; this page adds the language through the public
-     * `addLanguage`/`register` API. A namespace without a ja dictionary falls
-     * through the declared ja -> en chain to its English copy, which is the
-     * locale service's documented behaviour. The pack is installed only on a
-     * phone, so a desktop catalog stays exactly upstream's (#44).
-     */
-    const JA_LOCALE_PACK = globalThis.__RDSH_PWA_LOCALES__?.ja ?? null;
-
-    /**
-     * Register the Japanese pack when the public locale API is present.
-     *
-     * Returns a disposer that removes the definition and every dictionary. A
-     * missing `addLanguage`/`register` (an older shell, the unit-test stub) or a
-     * catalog where another pack already owns ja leaves the picker untouched.
-     */
-    function installJapaneseLocale(localeService) {
-      if (!phone() || localeService === null || localeService === undefined) return null;
-      if (typeof localeService.addLanguage !== "function" || typeof localeService.register !== "function") return null;
-      const pack = JA_LOCALE_PACK;
-      if (pack === null || typeof pack !== "object" || pack.language === null || typeof pack.language !== "object"
-        || pack.dictionaries === null || typeof pack.dictionaries !== "object") return null;
-      let removeLanguage;
-      try {
-        removeLanguage = localeService.addLanguage(pack.language);
-      } catch (error) {
-        // Another pack already defines ja: its catalog and dictionaries stand.
-        return null;
-      }
-      const disposers = typeof removeLanguage === "function" ? [removeLanguage] : [];
-      for (const [namespace, dictionary] of Object.entries(pack.dictionaries)) {
-        try {
-          const removeDictionary = localeService.register(namespace, "ja", dictionary);
-          if (typeof removeDictionary === "function") disposers.push(removeDictionary);
-        } catch (error) {
-          console.warn("[rdsh-mobile-ux] ja dictionary failed", namespace, error);
-        }
-      }
-      return () => {
-        for (const dispose of disposers.reverse()) {
-          try {
-            dispose();
-          } catch (error) {
-            /* the locale fiber may already be gone */
-          }
-        }
-      };
-    }
 
     /** Read only this browser's display choices; malformed data means "follow Host". */
     function readLocalDisplaySettings() {
@@ -1917,7 +2504,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       };
       if (next[role] === current[role]) return;
       const display = { ...state.localDisplay, fonts: next, fontsLocal: true };
-      writeLocalDisplaySettings(display);
+      // Persist the remembered language, not the temporarily unprojected one:
+      // a font step must not forget a stored ja while its owner is inactive.
+      writeLocalDisplaySettings({
+        ...display,
+        language: localDisplayStoredLanguage !== "" ? localDisplayStoredLanguage : display.language,
+      });
       emit({ localDisplay: display });
       localDisplayRuntime?.applyTheme();
     }
@@ -1931,6 +2523,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (!supported) return;
       const updated = { ...display, language: next };
       localDisplayLanguage = next;
+      // "" is an explicit "System" choice; it must outlive a later catalog
+      // change, unlike the temporary "" this module shows when a stored
+      // language's owner is not registered right now.
+      localDisplayStoredLanguage = next;
       writeLocalDisplaySettings(updated);
       emit({ localDisplay: updated });
       localDisplayRuntime?.applyLocale();
@@ -1946,6 +2542,15 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * page and restored by the effect cleanup. Locale listeners are notified
      * directly (not through `locale/change`) so the native shell bridge never
      * observes the device-local choice.
+     *
+     * The projected snapshots keep the Host numeric revision. Upstream
+     * Appearance, font and Language row stores ignore a snapshot whose
+     * revision is not newer than the one they stored, so a numeric bump here
+     * would become their high-water mark and freeze the shared rows. Object
+     * identity is enough for local readers that reread the service snapshot
+     * (the mounted terminal's theme subscription); the locale projection
+     * additionally carries a boxed revision token so the upstream readers
+     * that invalidate text and slot labels by revision identity refresh.
      */
     function attachLocalDisplay(ctx) {
       let theme;
@@ -1962,9 +2567,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       }
       const themeService = theme !== null && theme !== undefined && typeof theme.getTheme === "function" ? theme : null;
       const localeService = locale !== null && locale !== undefined && typeof locale.getSnapshot === "function" ? locale : null;
-      // Register before the first snapshot read so a stored "ja" is a valid
-      // choice on this page load, and before the picker copies the catalog.
-      let jaLocaleDispose = installJapaneseLocale(localeService);
       let hostTheme = null;
       let hostLocale = null;
       try {
@@ -1998,8 +2600,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         ? "locale-missing"
         : (!localeShape ? "locale-shape" : (options.length === 0 ? "no-locales" : ""));
       const stored = readLocalDisplaySettings();
-      const language = localeUsable && stored.language !== "" && options.some((entry) => entry.id === stored.language)
-        ? stored.language
+      // Remember the stored choice even while the catalog cannot offer it (no
+      // owner yet, or no locale service at all): a later catalog update or a
+      // font step must not turn a stored ja into "System" (#80).
+      const storedLanguage = typeof stored.language === "string" ? stored.language : "";
+      const language = localeUsable && storedLanguage !== "" && options.some((entry) => entry.id === storedLanguage)
+        ? storedLanguage
         : "";
       const fonts = stored.fonts ?? (themeUsable ? hostFonts : {
         text: 14,
@@ -2015,17 +2621,29 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         reason: { fonts: themeReason, language: localeReason },
       };
       localDisplayLanguage = language;
+      localDisplayStoredLanguage = storedLanguage;
       localDisplayHostLanguage = typeof hostLocale?.active === "string" ? hostLocale.active : "";
       localDisplayRuntime = {
         applyTheme: () => {},
         applyLocale: () => {},
       };
 
-      const themeEpoch = { value: 0 };
-      const localeEpoch = { value: 0 };
       let projectingTheme = false;
+      // Set while this module installs/normalises its own locale view. The
+      // LocaleFace listener below is notified by this module's own
+      // notifyLocale(), so without the guard a reset ("System", which leaves
+      // the snapshot unprojected) would re-enter applyLocale forever.
+      let applyingLocale = false;
+      let localeApplyQueued = false;
+      // The snapshot currently installed as the device-local projection.
+      let projectedLocale = null;
       let disposed = false;
       const baseDocumentLang = document.documentElement.lang;
+      // The Host active the boot document language was written for. Only a
+      // real Host active change moves the restore target (see
+      // restoredDocumentLang); a store republish that inherits this module's
+      // projected active is normalised before adoption and never counts.
+      const baseHostLanguage = typeof hostLocale?.active === "string" ? hostLocale.active : "";
 
       const emitTheme = (snapshot) => {
         projectingTheme = true;
@@ -2054,34 +2672,259 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           if (themeService.snapshot !== hostTheme) themeService.snapshot = hostTheme;
           return;
         }
-        themeEpoch.value += 1;
-        const revision = hostTheme.revision + 1000 + themeEpoch.value;
-        themeService.snapshot = Object.freeze({
+        // Keep the Host revision: see the note on attachLocalDisplay. The new
+        // object identity is what carries the local sizes to the terminal.
+        const projected = {
           ...hostTheme,
           fontSizes: Object.freeze({ ...state.localDisplay.fonts }),
-          revision,
-        });
+        };
+        // #79's terminal-only repaint listener must not adopt this local font
+        // projection as a Host baseline.
+        Object.defineProperty(projected, LOCAL_DISPLAY_PROJECTION, { value: true });
+        themeService.snapshot = Object.freeze(projected);
         emitTheme(themeService.snapshot);
       };
 
-      const applyLocale = () => {
-        if (state.localDisplay.available.language !== true || localeService === null || hostLocale === null) return;
-        const chosen = state.localDisplay.language;
-        if (chosen === "" || !state.localDisplay.languages.some((entry) => entry.id === chosen)) {
-          if (localeService.snapshot !== hostLocale) localeService.snapshot = hostLocale;
-          if (document.documentElement.lang !== baseDocumentLang) document.documentElement.lang = baseDocumentLang;
-          notifyLocale();
-          return;
+      /** The runtime's current snapshot, or null when the fiber is going away. */
+      const readLocaleSnapshot = () => {
+        try {
+          const snapshot = localeService?.getSnapshot?.();
+          return snapshot !== null && snapshot !== undefined && typeof snapshot === "object" ? snapshot : null;
+        } catch (error) {
+          return null;
         }
-        localeEpoch.value += 1;
-        const revision = hostLocale.revision + 1000 + localeEpoch.value;
-        localeService.snapshot = Object.freeze({
-          ...hostLocale,
-          active: chosen,
-          revision,
+      };
+
+      /** True for a snapshot this module installed for this one device. */
+      const isLocalLocaleProjection = (snapshot) => snapshot !== null && snapshot !== undefined
+        && snapshot[LOCAL_DISPLAY_PROJECTION] === true;
+
+      const sameLocales = (left, right) => Array.isArray(left?.locales) && Array.isArray(right?.locales)
+        && left.locales.length === right.locales.length
+        && left.locales.every((entry, index) => entry?.id === right.locales[index]?.id);
+
+      /**
+       * The Host's current active locale, from the runtime's durable
+       * preference/provisional resolution.
+       *
+       * `LocaleRuntime.adopt` returns early when the resolved Host active
+       * already equals `snapshot.active`, and the device-local projection
+       * installs its own active there: a Host that switches to the language
+       * this device already shows publishes no `locale/change` at all
+       * (verified with @deepseek-ai/dsh-client-locale 0.2.1-rc.2). The
+       * projected snapshot cannot distinguish that from a store republish, so
+       * read the runtime's pure resolver instead. `resolveActive()` is a
+       * TypeScript-private (runtime-callable) rc.2 method over the durable
+       * preference and the browser provisional value; it never reads the
+       * projected snapshot. Runtimes without it fall back to the last
+       * published baseline, which cannot see a silent switch.
+       */
+      const hostActiveNow = () => {
+        const published = typeof hostLocale?.active === "string" ? hostLocale.active : "";
+        if (localeService === null || typeof localeService.resolveActive !== "function") return published;
+        let resolved;
+        try {
+          resolved = localeService.resolveActive();
+        } catch (error) {
+          return published;
+        }
+        if (typeof resolved !== "string" || resolved === "") return published;
+        const locales = hostLocale?.locales;
+        if (Array.isArray(locales) && !locales.some((entry) => entry?.id === resolved)) return published;
+        return resolved;
+      };
+
+      /**
+       * Fold a silent Host active change into the baseline. Only the identity
+       * changes: the Host revision is kept and the projection marker is never
+       * part of a Host baseline.
+       */
+      const refreshHostActive = () => {
+        if (hostLocale === null) return false;
+        const active = hostActiveNow();
+        if (active === "" || active === hostLocale.active) return false;
+        if (Array.isArray(hostLocale.locales) && !hostLocale.locales.some((entry) => entry?.id === active)) return false;
+        hostLocale = Object.freeze({ ...hostLocale, active });
+        localDisplayHostLanguage = active;
+        return true;
+      };
+
+      /**
+       * The document language to restore when this device stops projecting.
+       *
+       * The boot document language belongs to the Host active seen at attach.
+       * Only a real Host active change moves the restore target: an
+       * authoritative `locale/change`, a silent durable switch folded in by
+       * refreshHostActive(), or the runtime's fallback after an externally
+       * removed language. `zh` keeps the upstream `zh-CN` spelling.
+       */
+      const restoredDocumentLang = () => {
+        const active = hostLocale !== null && typeof hostLocale.active === "string" ? hostLocale.active : "";
+        if (active === "" || active === baseHostLanguage) return baseDocumentLang;
+        const locales = hostLocale?.locales;
+        if (Array.isArray(locales) && !locales.some((entry) => entry?.id === active)) return baseDocumentLang;
+        return active === "zh" ? "zh-CN" : active;
+      };
+
+      /**
+       * The Host view behind a snapshot read from the public store.
+       *
+       * `LocaleRuntime.register` republishes `this.snapshot.active` instead of
+       * re-resolving the stored preference. While the device-local projection
+       * is installed that value is the local choice, so a republish with an
+       * unchanged catalog is not a Host active change: adopting it would move
+       * the shared active onto this device's choice and restore it on dispose.
+       * Catalog changes (`addLanguage`/`removeLanguage`) re-resolve the
+       * preference, so their active stays authoritative.
+       *
+       * This applies to store reads (the LocaleFace listener and the snapshot
+       * reread) only. A `locale/change` payload is the authoritative active
+       * switch and is adopted as-is, even when it names the language this
+       * device already projects.
+       */
+      const hostView = (snapshot) => {
+        if (snapshot === null) return null;
+        if (isLocalLocaleProjection(snapshot)) return null;
+        if (projectedLocale === null) return snapshot;
+        if (snapshot.active !== projectedLocale.active || !sameLocales(snapshot, projectedLocale)) return snapshot;
+        const active = hostActiveNow();
+        if (active === "" || active === snapshot.active) return snapshot;
+        return Object.freeze({ ...snapshot, active });
+      };
+
+      /**
+       * A revision token for one device-local locale view.
+       *
+       * Upstream refreshes already-mounted text and slot labels through the
+       * LocaleFace revision, not through object identity or locale/change:
+       * the renderer's t seat cache, the Settings section ledger and the
+       * Plugins ledgers compare getSnapshot().revision by identity and
+       * rebuild their labels/translations only when it changes. Replacing the
+       * snapshot alone therefore leaves their cached English copy mounted.
+       *
+       * A numeric bump is not an option: the shared Language row store adopts
+       * the highest revision it sees and then ignores later Host snapshots at
+       * or below that high-water mark (#73/#64, and the +1000 regression).
+       * This token keeps the Host numeric revision for every ordering,
+       * arithmetic and JSON use (+ 1, <=, JSON.stringify) while giving the
+       * local view a distinct identity for the reader caches, so they refresh
+       * and the row store still ignores the projection.
+       *
+       * SHORTCUT(#80): identity-only token, not a number. rc.2 consumers
+       * (renderer t-seat/slots cache, settings/plugins ledgers, language row,
+       * LocaleRuntime.publish) only use ===/!==, <=, + 1 and JSON, so none
+       * rejects it. A third-party or future SDK consumer that requires
+       * typeof revision === "number" or Number.isInteger would; that is the
+       * known limit of a device-local projection on the shared face. A
+       * numeric bump (row high-water) or a fabricated locale/change (native
+       * bridge, slot/dictionary re-registration loops) are not substitutes.
+       */
+      const localLocaleRevision = (revision) => {
+        if (typeof revision !== "number" || !Number.isFinite(revision)) return revision;
+        const token = Object(revision);
+        Object.defineProperty(token, LOCAL_DISPLAY_REVISION, { value: true });
+        return Object.freeze(token);
+      };
+
+      /** The remembered device choice while the catalog offers it, else "" (System). */
+      const selectedLanguage = (nextOptions) => {
+        const offered = (id) => id !== "" && nextOptions.some((entry) => entry.id === id);
+        if (offered(localDisplayStoredLanguage)) return localDisplayStoredLanguage;
+        if (offered(state.localDisplay.language)) return state.localDisplay.language;
+        return "";
+      };
+
+      /**
+       * Adopt one Host snapshot as the projection baseline and refresh the
+       * picker. Returns false for the known baseline and for this module's own
+       * projections, so one publish notified twice stays cheap.
+       */
+      const adoptHostLocale = (snapshot) => {
+        if (disposed || snapshot === null || snapshot === undefined) return false;
+        if (isLocalLocaleProjection(snapshot)) return false;
+        if (snapshot === hostLocale) return false;
+        hostLocale = snapshot;
+        localDisplayHostLanguage = typeof snapshot.active === "string" ? snapshot.active : "";
+        const nextOptions = localeOptionsFrom(snapshot);
+        const nextLanguage = selectedLanguage(nextOptions);
+        const optionsChanged = nextOptions.length !== state.localDisplay.languages.length
+          || nextOptions.some((entry, index) => entry.id !== state.localDisplay.languages[index]?.id);
+        if (optionsChanged || nextLanguage !== state.localDisplay.language) {
+          emit({ localDisplay: { ...state.localDisplay, languages: nextOptions, language: nextLanguage } });
+        }
+        localDisplayLanguage = nextLanguage;
+        return true;
+      };
+
+      const applyLocale = () => {
+        if (applyingLocale) return;
+        applyingLocale = true;
+        try {
+          if (state.localDisplay.available.language !== true || localeService === null) return;
+          // Never project a catalog read before the last owner registered (or
+          // withdrew) its definition: that stale baseline is what dropped an
+          // externally owned ja from the picker and from the restored snapshot
+          // (#80).
+          const latest = hostView(readLocaleSnapshot());
+          if (latest !== null && latest !== hostLocale) adoptHostLocale(latest);
+          if (hostLocale === null) return;
+          // A Host switch to the projected language leaves no event behind;
+          // re-read the durable preference before projecting or restoring.
+          refreshHostActive();
+          const chosen = state.localDisplay.language;
+          const localeDocumentLang = chosen === "zh" ? "zh-CN" : chosen;
+          if (chosen === "" || !state.localDisplay.languages.some((entry) => entry.id === chosen)) {
+            const hadProjection = projectedLocale !== null;
+            projectedLocale = null;
+            if (hadProjection || localeService.snapshot !== hostLocale) {
+              localeService.snapshot = hostLocale;
+              notifyLocale();
+            }
+            // A removed language can already have published the Host fallback
+            // snapshot, so the restore must not depend on rewriting the
+            // identity: unproject the document language in either case.
+            const lang = restoredDocumentLang();
+            if (document.documentElement.lang !== lang) document.documentElement.lang = lang;
+            return;
+          }
+          // An unchanged device view may be reapplied by a catalog or Host
+          // notification; reusing the installed snapshot keeps its revision
+          // token stable so readers do not churn for nothing.
+          if (projectedLocale !== null
+            && localeService.snapshot === projectedLocale
+            && projectedLocale.active === chosen
+            && Number(projectedLocale.revision) === Number(hostLocale.revision)
+            && sameLocales(projectedLocale, hostLocale)) {
+            if (document.documentElement.lang !== localeDocumentLang) document.documentElement.lang = localeDocumentLang;
+            return;
+          }
+          // The token carries the Host revision for row-store ordering but a
+          // new identity for the renderer/slot-label caches; notifyLocale()
+          // then lets those caches rebuild at the device language.
+          const projected = {
+            ...hostLocale,
+            active: chosen,
+            revision: localLocaleRevision(hostLocale.revision),
+          };
+          // Anyone reading the service back (this module's catalog listener
+          // included) must see a device-local view, never a Host baseline.
+          Object.defineProperty(projected, LOCAL_DISPLAY_PROJECTION, { value: true });
+          projectedLocale = Object.freeze(projected);
+          localeService.snapshot = projectedLocale;
+          document.documentElement.lang = localeDocumentLang;
+          notifyLocale();
+        } finally {
+          applyingLocale = false;
+        }
+      };
+
+      const queueApplyLocale = () => {
+        if (disposed || localeApplyQueued) return;
+        localeApplyQueued = true;
+        queueMicrotask(() => {
+          localeApplyQueued = false;
+          if (!disposed) applyLocale();
         });
-        document.documentElement.lang = chosen === "zh" ? "zh-CN" : chosen;
-        notifyLocale();
       };
 
       localDisplayRuntime = { applyTheme, applyLocale };
@@ -2090,6 +2933,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       ctx.effect(() => {
         const offTheme = ctx.on("theme/change", (snapshot) => {
           if (projectingTheme || disposed || snapshot === null || snapshot === undefined) return;
+          // #79's terminal-only repaint clone is not a Host theme change; it
+          // carries the same tokens/fonts. Keep the real Host baseline so that
+          // teardown restores the actual shared snapshot.
+          if (snapshot[TERMINAL_DARK_PROJECTION] === true) return;
           if (state.localDisplay.available.fonts !== true) return;
           hostTheme = snapshot;
           if (!state.localDisplay.fontsLocal) {
@@ -2105,25 +2952,38 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           });
         });
         const offLocale = ctx.on("locale/change", (snapshot) => {
-          if (disposed || snapshot === null || snapshot === undefined) return;
+          if (applyingLocale || disposed || snapshot === null || snapshot === undefined) return;
           if (state.localDisplay.available.language !== true) return;
-          hostLocale = snapshot;
-          localDisplayHostLanguage = typeof snapshot.active === "string" ? snapshot.active : "";
-          const nextOptions = localeOptionsFrom(snapshot);
-          const chosen = state.localDisplay.language;
-          const valid = chosen === "" || nextOptions.some((entry) => entry.id === chosen);
-          if (nextOptions.length !== state.localDisplay.languages.length
-            || nextOptions.some((entry, index) => entry.id !== state.localDisplay.languages[index]?.id)) {
-            emit({ localDisplay: { ...state.localDisplay, languages: nextOptions, language: valid ? chosen : "" } });
-          }
-          if (!valid) {
-            localDisplayLanguage = "";
-            writeLocalDisplaySettings({ ...state.localDisplay, language: "" });
-          }
-          queueMicrotask(() => {
-            if (!disposed) applyLocale();
-          });
+          if (isLocalLocaleProjection(snapshot)) return;
+          // An active switch is the authoritative Host fact (only publish(...,
+          // true) emits it), so it is adopted as-is and never normalised back
+          // to an older baseline: a Host that follows this device's language
+          // must survive System/reset and dispose.
+          adoptHostLocale(snapshot);
+          queueApplyLocale();
         });
+        // Language packs publish catalog additions and removals through the
+        // LocaleFace listeners only; `locale/change` is reserved for active
+        // switches (LocaleRuntime.publish). Without this listener an owner
+        // that activates after this attach never reaches the picker, and a
+        // stale catalog is later restored over a withdrawn definition (#80).
+        // Dictionary registrations republish the same catalog and are
+        // adopted as a baseline refresh, not as a language change.
+        let offCatalog = null;
+        if (localeService !== null && typeof localeService.subscribe === "function") {
+          try {
+            const off = localeService.subscribe(() => {
+              if (applyingLocale || disposed) return;
+              if (state.localDisplay.available.language !== true) return;
+              const latest = hostView(readLocaleSnapshot());
+              if (latest === null) return;
+              if (adoptHostLocale(latest)) queueApplyLocale();
+            });
+            if (typeof off === "function") offCatalog = off;
+          } catch (error) {
+            offCatalog = null;
+          }
+        }
         try {
           applyTheme();
           applyLocale();
@@ -2134,6 +2994,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           disposed = true;
           offTheme?.();
           offLocale?.();
+          offCatalog?.();
           try {
             if (state.localDisplay.available.fonts === true && themeService !== null && hostTheme !== null) {
               themeService.snapshot = hostTheme;
@@ -2143,20 +3004,24 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
             /* the theme fiber may already be gone */
           }
           try {
+            let lang = baseDocumentLang;
             if (state.localDisplay.available.language === true && localeService !== null && hostLocale !== null) {
+              // A silent Host switch to the projected language emitted no
+              // locale/change; restore the durable Host active, not the one
+              // this device was showing.
+              refreshHostActive();
               localeService.snapshot = hostLocale;
               notifyLocale();
+              lang = restoredDocumentLang();
             }
-            if (document.documentElement.lang !== baseDocumentLang) document.documentElement.lang = baseDocumentLang;
+            if (document.documentElement.lang !== lang) document.documentElement.lang = lang;
           } catch (error) {
             /* the locale fiber may already be gone */
           }
-          if (typeof jaLocaleDispose === "function") {
-            jaLocaleDispose();
-            jaLocaleDispose = null;
-          }
           localDisplayLanguage = "";
+          localDisplayStoredLanguage = "";
           localDisplayHostLanguage = "";
+          projectedLocale = null;
           localDisplayRuntime = null;
         };
       }, "rdsh-mobile-ux: local display");
@@ -2309,7 +3174,14 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     function hideLabels() {
-      return [...HIDE_DEFAULT, ...(Array.isArray(CONFIG.hideLabels) ? CONFIG.hideLabels : [])];
+      // The default list is English; the probes carry the same controls as the
+      // shell renders them in every locale it ships (ja included). A profile's
+      // own entries stay last and keep their exact/prefix semantics.
+      return [
+        ...HIDE_DEFAULT,
+        ...probeValues("hideControls"),
+        ...(Array.isArray(CONFIG.hideLabels) ? CONFIG.hideLabels : []),
+      ];
     }
 
     function shouldHide(label, labels) {
@@ -2409,6 +3281,66 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         if (localised !== undefined && stock !== undefined) {
           stock.setAttribute("data-rdsh-hidden", "");
         }
+      }
+    }
+
+    /**
+     * Labels the Trajectory Conversation view prints in the tab strip (#75).
+     *
+     * The strip is structurally stable (`[data-conversation-tabs]` with
+     * `<button role="tab">` children), but upstream projects neither the view
+     * id nor a per-view attribute onto the buttons: only the localized label
+     * is available. The slot id `trajectory` is the stable identifier, so
+     * `readTrajectoryLabel` supplies the active locale from its registration;
+     * the injected probe vocabulary covers en/ja/zh when that table is absent.
+     */
+    const TRAJECTORY_TAB_LABELS = probeValues("trajectoryTab", ["Trajectory"]);
+    let readTrajectoryLabel = () => null;
+
+    function sameTabLabel(left, right) {
+      const normalize = (value) => String(value ?? "").trim().replace(/\s+/g, " ");
+      const target = normalize(right);
+      return target !== "" && normalize(left).toLowerCase() === target.toLowerCase();
+    }
+
+    function isTrajectoryTab(tab, localized = readTrajectoryLabel()) {
+      const label = labelOf(tab);
+      if (label === "") return false;
+      if (sameTabLabel(label, localized)) return true;
+      return TRAJECTORY_TAB_LABELS.some((candidate) => sameTabLabel(label, candidate));
+    }
+
+    /**
+     * Hide the Trajectory view tab on a phone (#75).
+     *
+     * Chat is the primary view and stays visible; every other view tab keeps
+     * its own selection. A selected Trajectory tab would be a dead end once
+     * hidden, so another tab is selected first. If there is no other tab, the
+     * tab is left visible rather than hiding the only reachable view.
+     */
+    function decorateConversationTabs(disabled) {
+      const hideOnThisDevice = !disabled && phone();
+      const localized = readTrajectoryLabel();
+      for (const strip of document.querySelectorAll("[data-conversation-tabs]")) {
+        const tabs = [...strip.querySelectorAll('[role="tab"]')];
+        const trajectory = tabs.find((tab) => isTrajectoryTab(tab, localized)) ?? null;
+        for (const tab of tabs) {
+          if (tab !== trajectory) tab.removeAttribute("data-rdsh-trajectory-tab-hidden");
+        }
+        if (!hideOnThisDevice || trajectory === null) {
+          trajectory?.removeAttribute("data-rdsh-trajectory-tab-hidden");
+          continue;
+        }
+        if (trajectory.getAttribute("aria-selected") === "true") {
+          const chat = tabs.find((tab) => tab !== trajectory) ?? null;
+          if (chat === null) {
+            trajectory.removeAttribute("data-rdsh-trajectory-tab-hidden");
+            continue;
+          }
+          chat.click();
+          if (typeof chat.focus === "function") chat.focus();
+        }
+        trajectory.setAttribute("data-rdsh-trajectory-tab-hidden", "");
       }
     }
 
@@ -2581,6 +3513,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       "data-rdsh-header",
       "data-rdsh-crumbs",
       "data-rdsh-conversation",
+      "data-rdsh-trajectory-tab-hidden",
       "data-rdsh-rightpanel",
       "data-rdsh-rightpanel-open",
       "data-rdsh-rtab",
@@ -2632,6 +3565,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       "data-rdsh-workspace-search",
       "data-rdsh-workspace-empty",
       "data-rdsh-workspace-trigger",
+      "data-rdsh-workspace-picking",
       "data-rdsh-activity-chip",
       "data-rdsh-activity-spinner",
       "data-rdsh-activity-icon",
@@ -2657,6 +3591,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       "data-rdsh-crop-overlay",
       "data-rdsh-swipe",
       "data-rdsh-auto-fired",
+      "data-rdsh-terminal-dark",
     ];
 
     function clearOwnedAttribute(name) {
@@ -2699,13 +3634,19 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       clearModelSearch();
       clearActivityChips();
       clearPreviewTools();
+      // #72: the open marker and the measured dock width are style state, not
+      // just attributes; forgetRightPanel retires both and the panel observers.
+      forgetRightPanel();
       // The file-tree tools own document-level pointer/scroll listeners. This
       // teardown must retire them too, or a mobile boot leaves them behind.
       disposeWorkspaceTools();
+      // #71 owns its own document listeners, timer and observer.
+      disposeOlderLoader();
       clearComposerHooks();
       clearTypingAnimations();
       removeRouteBack();
       removeDrawerNodes();
+      clearSidebarNavMore();
       removeSettingsRows();
       // Inline styles this module wrote onto upstream nodes.
       clearQueueDockHooks();
@@ -2716,7 +3657,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       releaseSafeArea();
       releaseViewportLock();
       releaseDeviceTheme();
+      disposeTerminalKeys();
       clearTerminalFit();
+      removeRightPanelHeading();
     }
 
     function decorateEditCards() {
@@ -2746,6 +3689,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     let rightPanelNode = null;
     let rightPanelWatch = null;
     let rightPanelIO = null;
+    /** The mobile-only panel-type heading (#82), and the node it lives in. */
+    let rightPanelHeadingNode = null;
 
     /**
      * Upstream's own wrapper for the right sidebar.
@@ -2759,9 +3704,31 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      */
     const RIGHT_PANEL_ROOT = "[data-sidebar-right-panel]";
 
-    /** The collapse button of a panel that is actually laid out. */
+    /**
+     * The panel kinds that get a heading, keyed by upstream's stable body
+     * attribute. The text stays generic: the tab chip already carries the
+     * per-tab name (the terminal number, the child session's label).
+     */
+    const RIGHT_PANEL_HEADING_KEYS = {
+      "data-sidebar-terminal": "localDisplay.terminal",
+      "data-sidebar-chat": "localDisplay.subagent",
+    };
+
+    /**
+     * The collapse button of a panel that is actually laid out.
+     *
+     * The aria-label is localised (ja: 右サイドバーを折りたたむ), so the phone
+     * lookup cannot key off the English string alone: without a match every
+     * downstream hook is dropped, and the panel lost its heading, its open
+     * marker and the hidden split/exit controls. Prefer upstream's stable
+     * toggle attribute and keep the English label for builds without it.
+     */
     function visibleCollapseButton() {
-      for (const button of document.querySelectorAll('[aria-label="Collapse right sidebar"]')) {
+      // Two lookups, not one comma selector: the exact English label stays
+      // the first path for builds that expose only that string.
+      const english = document.querySelectorAll('[aria-label="Collapse right sidebar"]');
+      const structural = document.querySelectorAll("button[data-sidebar-right-toggle]");
+      for (const button of [...english, ...structural]) {
         // Visibility is deliberately not part of this: the real panel keeps
         // its chrome mounted while closed (clipped to a zero-width column and
         // parked off-screen), and its rect stays non-zero. Only a panel that
@@ -2786,6 +3753,19 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           && panel.getBoundingClientRect().width > 0;
       }
       document.documentElement.toggleAttribute("data-rdsh-rightpanel-open", open);
+      // The heading is part of the open-surface chrome: add it before the fit
+      // measures the terminal, and take it down with the panel.
+      decorateRightPanelHeading();
+      if (open && !narrow()) {
+        // #72: the tablet tier reserves upstream's right track. The stylesheet
+        // cannot read the panel's inline width (it sits on a child), so the
+        // measured dock width is published once per pass; a drag-resize keeps
+        // this observer firing through the panel's style mutation.
+        const width = Math.round(panel.getBoundingClientRect().width);
+        if (width > 0) document.documentElement.style.setProperty("--rdsh-rightbar-width", `${width}px`);
+      } else {
+        document.documentElement.style.removeProperty("--rdsh-rightbar-width");
+      }
       if (open) scheduleTerminalFit();
       else clearTerminalFit();
     }
@@ -2794,6 +3774,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (rightPanelNode !== panel) {
         rightPanelWatch?.disconnect();
         rightPanelIO?.disconnect();
+        removeRightPanelHeading();
         rightPanelNode = panel;
         rightPanelWatch = new MutationObserver(syncRightPanelOpen);
         rightPanelWatch.observe(panel, { attributes: true, attributeFilter: ["class", "style"] });
@@ -2811,6 +3792,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * mobile layout (max-width, overflow, padding) to the whole app.
      */
     function forgetRightPanel() {
+      removeRightPanelHeading();
       for (const node of document.querySelectorAll("[data-rdsh-rightpanel]")) node.removeAttribute("data-rdsh-rightpanel");
       rightPanelWatch?.disconnect();
       rightPanelIO?.disconnect();
@@ -2818,6 +3800,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       rightPanelIO = null;
       rightPanelNode = null;
       document.documentElement.removeAttribute("data-rdsh-rightpanel-open");
+      document.documentElement.style.removeProperty("--rdsh-rightbar-width");
     }
 
     /**
@@ -2845,7 +3828,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     function ensureRightPanelFits() {
-      if (!phone()) {
+      // #72: upstream already fullscreens its own panel below 768px. At tablet
+      // widths it docks, and forcing the phone sheet there would take the
+      // conversation away instead of reserving the right column.
+      if (!phone() || !narrow()) {
         rightPanelFitPending = false;
         return;
       }
@@ -2866,8 +3852,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     /**
      * Tag the scroller that owns a code preview.
      *
-     * The viewer scrolls in both axes by default; the lock in the stylesheet
-     * keys off this attribute so a long line cannot be panned sideways.
+     * The viewer scrolls in both axes when upstream's wrap is off; while wrap
+     * is on a long line must not pan sideways. Upstream already marks the
+     * current choice on the preview body as `data-textpreview-wrap`, so the
+     * scroller lock follows that state instead of forcing it: turning wrap
+     * off through the stock header button gives the horizontal travel back.
      */
     function decorateCodePreview() {
       if (!phone()) {
@@ -2875,13 +3864,14 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         clearOwnedAttribute("data-rdsh-code-scroll");
         return;
       }
-      for (const pre of document.querySelectorAll("[data-rdsh-rightpanel] [data-textpreview-body] pre:not([data-rdsh-code-pre])")) {
+      for (const pre of document.querySelectorAll("[data-rdsh-rightpanel] [data-textpreview-body] pre")) {
         pre.setAttribute("data-rdsh-code-pre", "");
+        const wrapped = pre.closest("[data-textpreview-wrap]") !== null;
         let node = pre.parentElement;
         while (node !== null && node !== document.body) {
           const overflowX = getComputedStyle(node).overflowX;
           if (overflowX === "auto" || overflowX === "scroll") {
-            node.setAttribute("data-rdsh-code-scroll", "");
+            node.toggleAttribute("data-rdsh-code-scroll", wrapped);
             break;
           }
           node = node.parentElement;
@@ -3076,12 +4066,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     /**
      * Buttons the kebab may offer.
      *
-     * The path and the viewer picker stay in the header (the picker renders
-     * the current renderer's name and its upstream Menu is anchored to the
-     * visible button). Wrap is excluded on purpose: the phone stylesheet
-     * already forces text previews to wrap, so the stock toggle is hidden by
-     * the same query and would be a dead control. `#33`'s native open targets
-     * and upstream's deliberately-hidden auto-refresh stay out too.
+     * The path, the viewer picker and the stock wrap toggle stay in the header
+     * (the picker renders the current renderer's name and its upstream Menu is
+     * anchored to the visible button; wrap is the user's own choice now that
+     * #81 stopped forcing it, so moving it would only duplicate one control).
+     * `#33`'s native open targets and upstream's deliberately-hidden
+     * auto-refresh stay out too.
      */
     function previewSecondaryButtons(header) {
       return [...header.querySelectorAll("button")].filter((button) => {
@@ -3389,8 +4379,26 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         return;
       }
       const boundary = collapse.closest(RIGHT_PANEL_ROOT);
-      // The panel is the nearest ancestor that already spans the phone (the
-      // fullscreen layer), not a hash-named class that changes per release.
+      // #72: at tablet widths upstream docks the panel instead of covering the
+      // phone, so the "spans >=85% of the viewport" test below never matches.
+      // Tag the stable upstream root itself, and only while upstream says the
+      // panel is expanded; the root owns the measured dock width the tablet
+      // stylesheet reserves.
+      if (!narrow()) {
+        if (!boundary.hasAttribute("data-sidebar-right-open")) {
+          if (rightPanelNode !== null) forgetRightPanel();
+          return;
+        }
+        for (const stale of document.querySelectorAll("[data-rdsh-rightpanel]")) {
+          if (stale !== boundary) stale.removeAttribute("data-rdsh-rightpanel");
+        }
+        boundary.setAttribute("data-rdsh-rightpanel", "");
+        watchRightPanel(boundary);
+        return;
+      }
+      // The phone panel is the nearest ancestor that already spans the phone
+      // (the fullscreen layer), not a hash-named class that changes per
+      // release.
       let node = collapse.parentElement;
       while (node !== null && node !== boundary && node !== document.body) {
         const rect = node.getBoundingClientRect();
@@ -3425,6 +4433,96 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       for (const tab of document.querySelectorAll('[data-rdsh-rightpanel] [role="tab"][data-dockkit-tab]')) {
         tab.setAttribute("data-rdsh-rtab", "");
       }
+    }
+
+    /** The pane whose tab is focused, or the panel itself when it holds one. */
+    function activeRightPanelScope(panel) {
+      if (panel.hasAttribute("data-dockkit-pane")) return panel;
+      return panel.querySelector("[data-dockkit-pane][data-dockkit-pane-active]")
+        ?? panel.querySelector("[data-dockkit-pane]")
+        ?? panel;
+    }
+
+    /**
+     * Which panel-type heading the active tab needs, or "" for any other tab.
+     *
+     * A panel body carries the same id as its chip (data-sidebar-right-tab and
+     * data-dockkit-tab), so the selected chip picks the active body even while
+     * dockkit keeps another tab's section mounted. The chip title is
+     * deliberately not read: it names the instance, the heading names the kind.
+     */
+    function rightPanelHeadingKey(panel) {
+      const scope = activeRightPanelScope(panel);
+      const selectedTab = scope.querySelector('[role="tab"][data-dockkit-tab][aria-selected="true"]')
+        ?? scope.querySelector('[data-dockkit-tab][aria-selected="true"]');
+      const selected = selectedTab === null || selectedTab === undefined
+        ? null
+        : selectedTab.getAttribute("data-dockkit-tab");
+      let fallback = "";
+      for (const body of scope.querySelectorAll("[data-sidebar-terminal], [data-sidebar-chat]")) {
+        if (body.closest("[hidden]") !== null) continue;
+        const key = body.hasAttribute("data-sidebar-terminal")
+          ? RIGHT_PANEL_HEADING_KEYS["data-sidebar-terminal"]
+          : RIGHT_PANEL_HEADING_KEYS["data-sidebar-chat"];
+        const tab = body.closest("[data-sidebar-right-tab]");
+        if (selected !== null && tab !== null && tab.getAttribute("data-sidebar-right-tab") === selected) return key;
+        if (fallback === "") fallback = key;
+      }
+      return fallback;
+    }
+
+    /** Drop the heading node; safe to call when none exists. */
+    function removeRightPanelHeading() {
+      rightPanelHeadingNode?.remove();
+      rightPanelHeadingNode = null;
+    }
+
+    /**
+     * #82: name the kind of panel a phone has open, above dockkit's tab strip.
+     *
+     * Only the mobile surface writes this node. It follows the active tab
+     * (and a language change on the next pass), stays outside the tab strip
+     * and the terminal body, and is removed when the panel closes, moves to
+     * another node, or the module tears down. The panel itself carries the
+     * safe-area padding, so the heading only supplies its own gutters.
+     */
+    function decorateRightPanelHeading() {
+      const open = document.documentElement.hasAttribute("data-rdsh-rightpanel-open");
+      if (!phone() || rightPanelNode === null || !rightPanelNode.isConnected || !open) {
+        removeRightPanelHeading();
+        return;
+      }
+      // A split dock spans the phone as one row; the heading belongs at the
+      // top of the pane that owns the focused tab, which is always a column.
+      const scope = activeRightPanelScope(rightPanelNode);
+      const key = rightPanelHeadingKey(scope);
+      if (key === "") {
+        // A file/preview tab takes the strip back: refit the terminal that a
+        // previous tab heading shortened, if one is still mounted.
+        const removed = rightPanelHeadingNode !== null;
+        removeRightPanelHeading();
+        if (removed) scheduleTerminalFit();
+        return;
+      }
+      const label = t(key);
+      let heading = rightPanelHeadingNode;
+      if (heading === null || !heading.isConnected || heading.parentElement !== scope) {
+        removeRightPanelHeading();
+        heading = document.createElement("div");
+        heading.className = "rdsh-mux-panel-heading";
+        heading.setAttribute("data-rdsh-panel-heading", "");
+        heading.setAttribute("role", "heading");
+        heading.setAttribute("aria-level", "2");
+        const first = scope.firstElementChild
+          ?? (scope.children ? scope.children[0] : null)
+          ?? null;
+        scope.insertBefore(heading, first);
+        rightPanelHeadingNode = heading;
+        // The heading takes vertical space in the pane; the fit runs after it
+        // exists so the xterm mount keeps the same visible band.
+        scheduleTerminalFit();
+      }
+      if (heading.textContent !== label) heading.textContent = label;
     }
 
     /** The plugin context, kept so the session projection can be looked up. */
@@ -3723,10 +4821,112 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * search.
      */
     let modelSearchState = null;
+    /** The observer watching the open picker's own inline position. */
+    let modelMenuWatch = null;
+    let modelMenuWatched = null;
+    let modelMenuMaxWidth = null;
+    let modelMenuNaturalWidth = null;
+
+    /**
+     * Keep the open picker inside the safe area of the visible viewport.
+     *
+     * Upstream positions the menu with a 12px margin against
+     * `window.innerWidth`, which ignores both the notch and the keyboard.
+     * `visualViewport` is the part the user can actually see: its
+     * `offsetLeft` is how far that part is inside the layout viewport (a
+     * pinch-zoom or a keyboard-driven pan), and its `width` is narrower than
+     * `innerWidth` while zoomed. The menu is left where upstream put it
+     * unless it crosses an edge; the horizontal position (and, only when the
+     * safe band is narrower than the menu, its width) is corrected.
+     */
+    function clampModelMenu(menu) {
+      const style = menu.style;
+      if (style === null || style === undefined) return;
+      const current = parseFloat(style.left);
+      if (!Number.isFinite(current)) return;
+      const viewport = window.visualViewport;
+      const viewportWidth = viewport !== null && viewport !== undefined
+        && Number.isFinite(viewport.width) && viewport.width > 0
+        ? viewport.width
+        : window.innerWidth;
+      const viewportLeft = viewport !== null && viewport !== undefined && Number.isFinite(viewport.offsetLeft)
+        ? viewport.offsetLeft
+        : 0;
+      // Integer bounds keep a fractional inset from rounding the menu back
+      // across the edge it was just clamped to.
+      const minLeft = Math.ceil(viewportLeft + safeInset("left") + 8);
+      const maxRight = viewportLeft + viewportWidth - safeInset("right") - 8;
+      if (!(maxRight > minLeft)) return;
+      const rect = typeof menu.getBoundingClientRect === "function" ? menu.getBoundingClientRect() : null;
+      let width = menu.offsetWidth || (rect === null ? 0 : rect.width)
+        || menu.clientWidth || parseFloat(style.width) || 0;
+      // The menu cannot satisfy both gutters if it is wider than the band
+      // between them. Upstream's max-width still uses the full window, so cap
+      // it only in that case (the normal path leaves upstream's width alone).
+      const room = maxRight - minLeft;
+      if (width > room) {
+        // Remember what the menu wanted before our cap, so widening the band
+        // (rotation, keyboard down) can drop the cap again.
+        if (modelMenuMaxWidth === null) modelMenuNaturalWidth = width;
+        modelMenuMaxWidth = null;
+        const cap = `${Math.max(1, Math.floor(room))}px`;
+        if (style.maxWidth !== cap) style.maxWidth = cap;
+        modelMenuMaxWidth = cap;
+        width = Math.max(1, Math.floor(room));
+      } else if (modelMenuMaxWidth !== null && modelMenuNaturalWidth !== null
+        && modelMenuNaturalWidth <= room) {
+        // The band grew past the menu's natural width; upstream's own
+        // max-width should apply again instead of this pass's old cap.
+        if (style.maxWidth === modelMenuMaxWidth) style.removeProperty("max-width");
+        modelMenuMaxWidth = null;
+        width = modelMenuNaturalWidth;
+      }
+      // An unmeasured menu has no right edge yet; only the left floor is
+      // meaningful until its ResizeObserver gives upstream a size.
+      const left = width > 0
+        ? Math.min(Math.max(current, minLeft), Math.max(minLeft, Math.floor(maxRight - width)))
+        : Math.max(current, minLeft);
+      if (left !== current) style.left = `${left}px`;
+    }
+
+    /**
+     * Follow upstream's own inline repositioning (its scroll/resize handler
+     * and ResizeObserver write `style.left` directly). Observing just this
+     * one style attribute avoids a rAF poll, and the write above is skipped
+     * once the target stops changing, so the observer cannot loop.
+     */
+    function watchModelMenu(menu) {
+      if (modelMenuWatch !== null && modelMenuWatched === menu) {
+        clampModelMenu(menu);
+        return;
+      }
+      // A new menu also retires the old one's cap before this pass records
+      // its own; the old node may still be connected for a rerender.
+      clearModelMenuWatch();
+      modelMenuWatched = menu;
+      clampModelMenu(menu);
+      if (typeof MutationObserver !== "function") return;
+      modelMenuWatch = new MutationObserver(() => clampModelMenu(menu));
+      modelMenuWatch.observe(menu, { attributes: true, attributeFilter: ["style"] });
+    }
+
+    function clearModelMenuWatch() {
+      modelMenuWatch?.disconnect();
+      modelMenuWatch = null;
+      if (modelMenuWatched !== null && modelMenuMaxWidth !== null
+        && modelMenuWatched.style !== null && modelMenuWatched.style !== undefined
+        && modelMenuWatched.style.maxWidth === modelMenuMaxWidth) {
+        modelMenuWatched.style.removeProperty("max-width");
+      }
+      modelMenuWatched = null;
+      modelMenuMaxWidth = null;
+      modelMenuNaturalWidth = null;
+    }
 
     function clearModelSearch() {
       const record = modelSearchState;
       modelSearchState = null;
+      clearModelMenuWatch();
       if (record === null) return;
       if (record.row !== null) record.row.removeEventListener("pointerdown", record.handler, true);
       if (record.input.isConnected) record.input.disabled = record.wasDisabled;
@@ -3741,10 +4941,22 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // that enabled it, so the next open starts disabled again.
       if (modelSearchState !== null && !modelSearchState.input.isConnected) clearModelSearch();
       const menu = document.querySelector('[class*="_7KE1Ra_menu"]');
-      if (menu === null) return;
+      if (menu === null) {
+        clearModelMenuWatch();
+        return;
+      }
+      // The root pane (Model / Effort rows) has no search field, but it is
+      // the same upstream menu and needs the same safe-area clamp.
       const input = menu.querySelector("input");
-      if (input === null) return;
+      if (input === null) {
+        watchModelMenu(menu);
+        return;
+      }
+      // Retire the previous picker before watching this one: clearModelSearch
+      // also disconnects the style observer, and watching first would leave
+      // the new menu unobserved for a pass.
       if (modelSearchState !== null && modelSearchState.input !== input) clearModelSearch();
+      watchModelMenu(menu);
       if (!input.hasAttribute("data-rdsh-model-search")) {
         input.setAttribute("data-rdsh-model-search", "");
         const row = input.closest('[class*="_7KE1Ra_searchRow"]') ?? input.parentElement;
@@ -4096,11 +5308,30 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     /**
+     * Upstream's own way back from a plugin detail: the breadcrumb button.
+     *
+     * The page keeps no other close control, so this button is the source both
+     * the tap and the left-edge swipe press (#61). Locate it structurally:
+     * every level of the nested detail draws one `button` whose CSS-module
+     * class still carries the `_crumb` suffix, and its aria-label changes with
+     * the level (`Back to plugins` / `Back to {name}`).
+     *
+     * @param {Element} container
+     * @returns {Element|null}
+     */
+    function routeCrumbOf(container) {
+      return [...container.querySelectorAll('button[class*="_crumb"]')]
+        .find((button) => routeLaidOut(button)) ?? null;
+    }
+
+    /**
      * The upstream screen that replaced the chat with a route's detail view.
      *
      * Plugins render the detail itself: a bundle page marks it
-     * `data-plugin-detail`, a built-in plugin `data-plugin-item-detail`, and
-     * the breadcrumb at its top is the way back.
+     * `data-plugin-detail`, a built-in plugin `data-plugin-item-detail`, a
+     * component page `data-plugin-row-detail`, and the breadcrumb at its top
+     * is the way back. Each level keeps its own crumb, so pressing it once
+     * climbs exactly one level.
      *
      * Automation tasks keep the list and the detail side by side; upstream
      * hides the list below 760px, which leaves the detail's own close button
@@ -4110,8 +5341,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * @returns {{container: Element, source: Element|null, back: boolean}|null}
      */
     function routeDetailOf() {
-      for (const container of document.querySelectorAll("[data-plugin-detail], [data-plugin-item-detail]")) {
-        if (routeLaidOut(container)) return { container, source: null, back: false };
+      for (const container of document.querySelectorAll("[data-plugin-detail], [data-plugin-item-detail], [data-plugin-row-detail]")) {
+        if (routeLaidOut(container)) return { container, source: routeCrumbOf(container), back: false };
       }
       const page = document.querySelector('[data-testid="task-manager-page"]');
       if (page === null || !routeLaidOut(page)) return null;
@@ -4128,6 +5359,20 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       return listGone ? { container: page, source: close, back: true } : null;
     }
 
+    /**
+     * Press the detail's own way back: the plugin breadcrumb or the task
+     * detail's close control. Re-read the screen so a route that changed
+     * during a gesture is never sent two levels back.
+     *
+     * @returns {boolean} whether there was something to press.
+     */
+    function pressRouteBack() {
+      const detail = routeDetailOf();
+      if (detail === null || detail.source === null) return false;
+      detail.source.click();
+      return true;
+    }
+
     /** The phone's own way out of a route detail, built once on boot. */
     let routeBack = null;
 
@@ -4140,8 +5385,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       routeBack.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>';
       routeBack.addEventListener("click", () => {
         // Re-read the screen: the route may have changed since the last frame.
-        const detail = routeDetailOf();
-        if (detail !== null && detail.source !== null) detail.source.click();
+        pressRouteBack();
       });
       document.body.append(routeBack);
     }
@@ -4661,9 +5905,15 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     /**
-     * Upstream count chips start with their number ("3 subagents running",
-     * "3 个子智能体"). The label vocabulary is a probe table because the shell
-     * translates it; the running word inside it is probed separately.
+     * Upstream count chips usually start with their number ("3 subagents
+     * running", "3 个子智能体"). The label vocabulary is a probe table because
+     * the shell translates it; the running word inside it is probed separately.
+     *
+     * The committed ja subagent total is noun-first ("サブエージェント 3 件"),
+     * so a second, fully anchored shape accepts a probed noun followed by the
+     * number and its counter. Keeping it anchored to the whole label is what
+     * stops a bare noun (or a sentence that merely mentions one) becoming a
+     * chip.
      */
     const ACTIVITY_CHIP_LABEL = (() => {
       const labels = probeValues("activityChip", [
@@ -4672,7 +5922,14 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         "shell command", "shell commands",
       ]);
       if (labels.length === 0) return null;
-      return new RegExp(`^\\d[\\d,.]*\\s+(?:${labels.join("|")})`, "i");
+      // The ja count puts its counter straight after the number ("3件の…"),
+      // so the separator is optional; en and zh still need their space.
+      const countFirst = `\\d[\\d,.]*\\s*(?:${labels.join("|")})`;
+      const nouns = probeValues("activityChipCountLast");
+      const counters = probeValues("activityChipCounter");
+      if (nouns.length === 0 || counters.length === 0) return new RegExp(`^${countFirst}`, "i");
+      const countLast = `(?:${nouns.join("|")})\\s*\\d[\\d,.]*\\s*(?:${counters.join("|")})$`;
+      return new RegExp(`^(?:${countFirst}|${countLast})`, "i");
     })();
 
     /** The subagent nouns, so a non-English label still picks the right glyph. */
@@ -4858,7 +6115,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         if (tagged !== moreRow) tagged.removeAttribute("data-rdsh-more-row");
       }
       if (moreRow !== null) moreRow.setAttribute("data-rdsh-more-row", "");
-      const auto = nav.querySelector('button[aria-label="Automation tasks"]');
+      const auto = nav.querySelector(ariaLabelSelector("button", "navAutomation", ["Automation tasks"]));
       if (row === null) {
         row = document.createElement("button");
         row.type = "button";
@@ -4872,7 +6129,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           openSettingsViaAccountMenu();
         });
       }
-      const anchor = auto ?? nav.querySelector('button[aria-label="Plugins"]');
+      const anchor = auto ?? nav.querySelector(ariaLabelSelector("button", "navPlugins", ["Plugins"]));
       // Two exclusive branches. Written as one `if` with a trailing `else if`,
       // the second branch also ran when the row was already directly after the
       // anchor but not last, so `after()` and `append()` moved the row on every
@@ -4883,6 +6140,219 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       } else if (nav.lastElementChild !== row) {
         nav.append(row);
       }
+    }
+
+    // ---------------------------------------------------------------------
+    // #59: landscape drawer nav — one More row for the three stock actions
+    //
+    // Plugins, Automation tasks and Settings are wide rows; in landscape the
+    // drawer is wider than the phone but still leaves the chat too little
+    // room. Only the three rows are folded, and only while the viewport is
+    // landscape: the stock nodes stay in place (React keeps its own state, the
+    // single #87 Settings row keeps its lifecycle) and receive a hide
+    // attribute. The More row and its menu are this module's nodes and are
+    // removed on portrait, desktop and dispose.
+    // ---------------------------------------------------------------------
+    const NAV_MORE_HIDDEN = "data-rdsh-nav-more-hidden";
+    let sidebarNavMore = null;
+    let sidebarNavMoreSeq = 0;
+
+    /** #59: landscape means geometry, not the device mode; the mode gate is separate. */
+    function navMoreLandscape() {
+      return phone() && window.innerWidth > window.innerHeight;
+    }
+
+    /** The three stock rows, matched by stable labels/attrs, never by a hashed class. */
+    function sidebarNavRows(nav) {
+      return {
+        plugins: nav.querySelector(ariaLabelSelector("button", "navPlugins", ["Plugins"])),
+        automation: nav.querySelector(ariaLabelSelector("button", "navAutomation", ["Automation tasks"])),
+        settings: nav.querySelector("[data-rdsh-settings-row]"),
+      };
+    }
+
+    function navRowLabel(row) {
+      const aria = row.getAttribute("aria-label");
+      if (aria !== null && aria.trim() !== "") return aria.trim();
+      return (row.textContent || "").trim().replace(/\s+/g, " ");
+    }
+
+    function onSidebarNavMoreButtonKey(event) {
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+      const button = event.currentTarget;
+      if (button === null || button === undefined) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const rows = sidebarNavRows(document.querySelector("nav.hHd-Xa_panelList"));
+      if (rows.plugins === null || rows.automation === null || rows.settings === null) return;
+      openSidebarNavMore(button, rows, event.key === "ArrowUp");
+    }
+
+    function onSidebarNavMoreItemKey(event) {
+      const state = sidebarNavMore;
+      if (state === null) return;
+      if (event.key === "Tab") {
+        // Let the browser move focus; a floating menu must not stay behind.
+        closeSidebarNavMore();
+        return;
+      }
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp" && event.key !== "Home" && event.key !== "End") return;
+      event.preventDefault();
+      const items = state.items;
+      if (items.length === 0) return;
+      const active = document.activeElement;
+      const at = items.indexOf(active);
+      let next = at < 0 ? 0 : at;
+      if (event.key === "ArrowDown") next = (at + 1 + items.length) % items.length;
+      else if (event.key === "ArrowUp") next = (at - 1 + items.length) % items.length;
+      else if (event.key === "Home") next = 0;
+      else next = items.length - 1;
+      items[next].focus({ preventScroll: true });
+    }
+
+    function onSidebarNavMoreEscape(event) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      closeSidebarNavMore({ restore: true });
+    }
+
+    function closeSidebarNavMore({ restore = false } = {}) {
+      const state = sidebarNavMore;
+      if (state === null) return false;
+      sidebarNavMore = null;
+      state.menu.remove();
+      if (state.dismiss !== null) {
+        document.removeEventListener("pointerdown", state.dismiss.pointer, true);
+        document.removeEventListener("keydown", state.dismiss.key, true);
+        window.removeEventListener("resize", state.dismiss.resize);
+      }
+      state.button.setAttribute("aria-expanded", "false");
+      state.button.removeAttribute("aria-controls");
+      if (restore && state.button.isConnected !== false) state.button.focus({ preventScroll: true });
+      return true;
+    }
+
+    function positionSidebarNavMore(button, menu) {
+      const rect = button.getBoundingClientRect();
+      const left = safeInset("left");
+      const right = safeInset("right");
+      const floor = safeInset("top") + 12;
+      const width = Math.min(260, Math.max(160, window.innerWidth - left - right - 24));
+      menu.style.width = `${width}px`;
+      const height = menu.getBoundingClientRect().height;
+      let top = rect.bottom + 6;
+      const bottom = window.innerHeight - safeInset("bottom") - 12;
+      if (height > 0 && top + height > bottom) top = Math.max(floor, rect.top - height - 6);
+      menu.style.top = `${Math.round(top)}px`;
+      menu.style.left = `${Math.round(Math.max(left + 12, Math.min(rect.left, window.innerWidth - right - width - 12)))}px`;
+    }
+
+    function openSidebarNavMore(button, rows, focusLast = false) {
+      closeSidebarNavMore();
+      const menu = document.createElement("div");
+      menu.className = "rdsh-mux-nav-more-menu";
+      menu.setAttribute("role", "menu");
+      menu.setAttribute("aria-label", t("mux.navMore.menu"));
+      menu.id = `rdsh-nav-more-menu-${++sidebarNavMoreSeq}`;
+      const items = [];
+      for (const row of [rows.plugins, rows.automation, rows.settings]) {
+        const item = document.createElement("button");
+        item.type = "button";
+        item.setAttribute("role", "menuitem");
+        item.setAttribute("tabindex", "-1");
+        item.textContent = navRowLabel(row);
+        item.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          closeSidebarNavMore();
+          row.click();
+        });
+        item.addEventListener("keydown", onSidebarNavMoreItemKey);
+        items.push(item);
+        menu.append(item);
+      }
+      const dismiss = (event) => {
+        if (sidebarNavMore === null) return;
+        if (sidebarNavMore.menu.contains(event.target)) return;
+        if (sidebarNavMore.button.contains(event.target)) return;
+        closeSidebarNavMore();
+      };
+      const key = (event) => onSidebarNavMoreEscape(event);
+      const resize = () => closeSidebarNavMore();
+      sidebarNavMore = { button, menu, items, dismiss: { pointer: dismiss, key, resize } };
+      document.addEventListener("pointerdown", dismiss, true);
+      document.addEventListener("keydown", key, true);
+      window.addEventListener("resize", resize);
+      document.body.append(menu);
+      positionSidebarNavMore(button, menu);
+      button.setAttribute("aria-expanded", "true");
+      button.setAttribute("aria-controls", menu.id);
+      const first = focusLast ? items[items.length - 1] : items[0];
+      first?.focus({ preventScroll: true });
+      return true;
+    }
+
+    function toggleSidebarNavMore(button) {
+      if (sidebarNavMore !== null && sidebarNavMore.button === button) {
+        closeSidebarNavMore({ restore: true });
+        return;
+      }
+      const rows = sidebarNavRows(document.querySelector("nav.hHd-Xa_panelList"));
+      if (rows.plugins === null || rows.automation === null || rows.settings === null) return;
+      openSidebarNavMore(button, rows);
+    }
+
+    function ensureSidebarNavMore(nav, firstRow) {
+      let button = nav.querySelector("[data-rdsh-nav-more]") ?? document.querySelector("[data-rdsh-nav-more]");
+      if (button === null) {
+        button = document.createElement("button");
+        button.type = "button";
+        button.className = "hHd-Xa_panelRow rdsh-mux-nav-more";
+        button.setAttribute("data-rdsh-nav-more", "");
+        button.setAttribute("aria-label", t("mux.navMore"));
+        button.setAttribute("aria-haspopup", "menu");
+        button.setAttribute("aria-expanded", "false");
+        button.innerHTML = `<span class="hHd-Xa_panelGlyph" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><circle cx="3.2" cy="8" r="1.45"/><circle cx="8" cy="8" r="1.45"/><circle cx="12.8" cy="8" r="1.45"/></svg></span><span class="hHd-Xa_panelTitle hHd-Xa_wide">${t("mux.navMore")}</span>`;
+        button.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          toggleSidebarNavMore(button);
+        });
+        button.addEventListener("keydown", onSidebarNavMoreButtonKey);
+      }
+      if (button.parentElement !== nav || button.nextElementSibling !== firstRow) {
+        if (firstRow.parentElement === nav) nav.insertBefore(button, firstRow);
+        else nav.append(button);
+      }
+      return button;
+    }
+
+    function decorateSidebarNavMore() {
+      const nav = navMoreLandscape() ? document.querySelector("nav.hHd-Xa_panelList") : null;
+      if (nav === null) {
+        clearSidebarNavMore();
+        return;
+      }
+      const rows = sidebarNavRows(nav);
+      if (rows.plugins === null || rows.automation === null || rows.settings === null) {
+        clearSidebarNavMore();
+        return;
+      }
+      // A rerender can replace a stock row; drop a hide attribute from a node
+      // that no longer belongs to the trio before marking the current three.
+      for (const row of document.querySelectorAll(`[${NAV_MORE_HIDDEN}]`)) {
+        if (row !== rows.plugins && row !== rows.automation && row !== rows.settings) row.removeAttribute(NAV_MORE_HIDDEN);
+      }
+      for (const row of [rows.plugins, rows.automation, rows.settings]) row.setAttribute(NAV_MORE_HIDDEN, "");
+      const button = ensureSidebarNavMore(nav, rows.plugins);
+      if (sidebarNavMore !== null && sidebarNavMore.button !== button) closeSidebarNavMore();
+    }
+
+    function clearSidebarNavMore() {
+      closeSidebarNavMore();
+      for (const node of document.querySelectorAll("[data-rdsh-nav-more]")) node.remove();
+      for (const row of document.querySelectorAll(`[${NAV_MORE_HIDDEN}]`)) row.removeAttribute(NAV_MORE_HIDDEN);
     }
 
     /**
@@ -5073,6 +6543,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       decorateLightbox();
       decorateRightPanel();
       decorateRightPanelTabs();
+      decorateRightPanelHeading();
+      decorateTerminalKeys();
       decorateWorkspaceFiles();
       decorateCodePreview();
       decoratePreviewTools();
@@ -5107,6 +6579,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       decorateComposer();
       decorateHeaderActivityChips();
       decorateSidebarSettingsRow();
+      decorateSidebarNavMore();
       decorateSidebarToggle();
       // The right panel keeps its chrome mounted even while closed (it is
       // clipped by a zero-width column), so presence of its buttons says
@@ -5118,6 +6591,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (onPhone !== state.phone) emit({ phone: onPhone });
       document.documentElement.toggleAttribute("data-rdsh-hide-settings", onPhone && !hideListDisabled);
       applyHideList(hideListDisabled);
+      decorateConversationTabs(hideListDisabled);
       maybeOpenSettings();
     }
 
@@ -5696,12 +7170,14 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     let workspacePickerWatchTimer = 0;
 
     /**
-     * Stop watching for the picker's portal.
+     * Stop watching for the picker's portal and release the reserved band.
      *
      * The observer exists only between the trigger click and the first
      * decorated panel: the search row has to be in the menu before its first
      * visible paint, otherwise upstream's anchor pass measures the old height
-     * and the panel jumps on the next frame.
+     * and the panel jumps on the next frame. The armed attribute is left on
+     * <html> until this point; the tagged rules repeat the same geometry, so
+     * swapping the two changes no box.
      */
     function stopWorkspacePickerWatch() {
       if (workspacePickerWatchTimer !== 0) {
@@ -5710,6 +7186,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       }
       workspacePickerWatch?.disconnect();
       workspacePickerWatch = null;
+      document.documentElement.removeAttribute("data-rdsh-workspace-picking");
     }
 
     /**
@@ -5720,9 +7197,16 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * callback runs at the microtask checkpoint of the commit that mounts the
      * portal, so the search row and its attributes are in place before the
      * upstream rAF anchor pass measures the panel.
+     *
+     * Upstream's Menu still reads its own offsetHeight in the layout effect of
+     * that commit, before a microtask observer can run. The armed attribute is
+     * therefore written here, synchronously on the opening click and before
+     * React mounts the portal, so the CSS reserves the search band for the
+     * first measurement (#39).
      */
     function beginWorkspacePicker() {
       workspacePickerPending = true;
+      if (phone()) document.documentElement.setAttribute("data-rdsh-workspace-picking", "");
       if (workspacePickerWatch !== null) return;
       workspacePickerWatch = new MutationObserver(() => {
         decorateWorkspacePicker();
@@ -5750,10 +7234,26 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       }, 1500);
     }
 
+    /**
+     * Arm the pre-mount reservation for a keyboard-opened picker.
+     *
+     * The session-less composer opens the chooser from Enter/Space without a
+     * click, so the capture handler cannot rely on the pointer path. A normal
+     * composer has no popup wiring and a space is just text, so this only
+     * matches the picker trigger recognized by `workspaceTriggerControl`.
+     */
+    function armWorkspacePickerFromKey(event) {
+      if (!phone() || (event.key !== "Enter" && event.key !== " ")) return;
+      if (event.target === null || event.target === undefined) return;
+      const trigger = workspaceTriggerControl(event.target);
+      if (trigger !== null && trigger.getAttribute("aria-expanded") !== "true") beginWorkspacePicker();
+    }
+
     function clearWorkspacePicker() {
       const state = workspacePickerState;
       workspacePickerState = null;
       workspacePickerPending = false;
+      document.documentElement.removeAttribute("data-rdsh-workspace-picking");
       if (state === null) return;
       state.input.removeEventListener("keydown", state.keydown);
       state.search.remove();
@@ -6096,6 +7596,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       clearFilesHighlight();
       for (const row of rows) row.removeAttribute("data-rdsh-files-hidden");
       state.query = query;
+      syncFilesSearchClear();
       if (query === "") {
         state.empty.hidden = true;
         return;
@@ -6137,6 +7638,34 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       runFilesSearch(filesSearch?.input.value ?? "");
     }
 
+    /** Keep the explicit clear button in step with the field. */
+    function syncFilesSearchClear() {
+      if (filesSearch === null) return;
+      filesSearch.clear.hidden = filesSearch.input.value === "";
+    }
+
+    /** Clear the field, the filter and the highlight, then return focus. */
+    function onFilesSearchClear() {
+      const state = filesSearch;
+      if (state === null) return;
+      state.input.value = "";
+      runFilesSearch("");
+      syncFilesSearchClear();
+      state.input.focus({ preventScroll: true });
+    }
+
+    /**
+     * The native search field can clear itself (WebKit's cancel affordance).
+     * Only an empty value acts: a non-empty input just reveals the explicit
+     * clear button, so typing still never filters (#83).
+     */
+    function onFilesSearchInput() {
+      const state = filesSearch;
+      if (state === null) return;
+      syncFilesSearchClear();
+      if (state.input.value === "") runFilesSearch("");
+    }
+
     function onFilesSearchKeyDown(event) {
       const state = filesSearch;
       if (state === null) return;
@@ -6171,7 +7700,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (filesSearch !== null && filesSearch.root === root && filesSearch.search.isConnected !== false) return filesSearch;
       if (filesSearch !== null) {
         filesSearch.input.removeEventListener("keydown", onFilesSearchKeyDown);
+        filesSearch.input.removeEventListener("input", onFilesSearchInput);
         filesSearch.button.removeEventListener("click", onFilesSearchSubmit);
+        filesSearch.clear.removeEventListener("click", onFilesSearchClear);
         filesSearch.search.remove();
         filesSearch = null;
       }
@@ -6194,19 +7725,28 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       button.setAttribute("aria-label", t("files.search.submit"));
       button.title = t("files.search.submit");
       button.setAttribute("data-rdsh-files-search-button", "");
+      const clear = document.createElement("button");
+      clear.type = "button";
+      clear.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 6 12 12M18 6 6 18"/></svg>';
+      clear.setAttribute("aria-label", t("files.search.clear"));
+      clear.title = t("files.search.clear");
+      clear.setAttribute("data-rdsh-files-search-clear", "");
+      clear.hidden = true;
       const empty = document.createElement("div");
       empty.className = "rdsh-mux-files-empty";
       empty.setAttribute("data-rdsh-files-empty", "");
       empty.textContent = t("files.search.noMatches");
       empty.hidden = true;
-      row.append(input, button);
+      row.append(input, button, clear);
       search.append(row, empty);
       input.addEventListener("keydown", onFilesSearchKeyDown);
+      input.addEventListener("input", onFilesSearchInput);
       button.addEventListener("click", onFilesSearchSubmit);
+      clear.addEventListener("click", onFilesSearchClear);
       const body = root.querySelector("[data-files-body]");
       if (body === null) root.append(search);
       else root.insertBefore(search, body);
-      filesSearch = { root, search, input, button, empty, query: "" };
+      filesSearch = { root, search, input, button, clear, empty, query: "" };
       return filesSearch;
     }
 
@@ -6569,7 +8109,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       restoreFilesRootTrigger();
       if (filesSearch !== null) {
         filesSearch.input.removeEventListener("keydown", onFilesSearchKeyDown);
+        filesSearch.input.removeEventListener("input", onFilesSearchInput);
         filesSearch.button.removeEventListener("click", onFilesSearchSubmit);
+        filesSearch.clear.removeEventListener("click", onFilesSearchClear);
         filesSearch.search.remove();
         filesSearch = null;
       }
@@ -7205,6 +8747,14 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         if (target.closest("input, textarea, [contenteditable=true]") !== null) return;
         if (touch.clientX > 36 && target.closest("button, a, [role=button]") !== null) return;
       }
+      // A full-screen route detail replaces the chat, so the left-edge swipe
+      // there is the screen's own back gesture, not the drawer's (#61, #62).
+      // It presses the same upstream control the screen already offers and
+      // leaves the drawer/panel rules above and right-edge gestures untouched.
+      if (!fromRight && routeDetailOf() !== null) {
+        edgeSwipe = { x: touch.clientX, y: touch.clientY, fromRight: false, routeBack: true };
+        return;
+      }
       edgeSwipe = { x: touch.clientX, y: touch.clientY, fromRight };
     }
     function onEdgeSwipeMove(event) {
@@ -7227,6 +8777,13 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         return;
       }
       if (Math.abs(dx) > 4 && event.cancelable) event.preventDefault();
+      if (edgeSwipe.routeBack === true) {
+        if (dx < 64) return;
+        edgeSwipe = null;
+        if (event.cancelable) event.preventDefault();
+        pressRouteBack();
+        return;
+      }
       if (edgeSwipe.closesDrawer === true) {
         if (dx > -64) return;
         edgeSwipe = null;
@@ -7329,6 +8886,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     function onKeyDownCapture(event) {
+      // The session-less composer opens the picker on Enter/Space without a
+      // click, so arm the same pre-mount reservation here (#39).
+      armWorkspacePickerFromKey(event);
       // Enter follows the device mode: mobile gets newline by default, a
       // desktop stays stock unless the #15 opt-in is on.
       const finger = phone();
@@ -7455,6 +9015,349 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     function endTerminalDrag() {
       terminalDrag = null;
+    }
+
+    // ---------------------------------------------------------------------
+    // Terminal: mobile special-key row (#78)
+    //
+    // A phone has no Esc, Tab, arrow or Ctrl key. This row sits above the
+    // xterm mount and sends the key through the terminal's real input path:
+    // the upstream emulator is reached through the React ref on its mount
+    // (upstream 0.2.1-rc.2 keeps it in a useRef and exposes no terminal
+    // service), and xterm.input() feeds the same onData subscription the
+    // hardware keyboard uses. The ref lookup is deliberately defensive: if a
+    // later upstream build moves the emulator, every key falls back to the
+    // hidden helper textarea's own input handler, which still ends in
+    // onData -> model.write. No synthetic keyboard event is sent.
+    //
+    // Arrow keys are built from the emulator's live DECCKM (application
+    // cursor) mode, so a shell that set ESC[?1h gets ESC O A while the normal
+    // screen gets ESC [ A. Ctrl is an explicit one-shot modifier: it applies
+    // to exactly the next terminal key, then clears. Pressing it again while
+    // armed cancels it. Ctrl+C therefore works either with the next row key
+    // (Ctrl + arrow -> ESC[1;5A) or with the soft keyboard's C, which the
+    // capture handler converts before xterm sees it.
+    //
+    // The row is a flex child of upstream's terminal section, before its
+    // .screen mount, so the existing ResizeObserver/fit (#67) measures the
+    // smaller screen and keeps the last rows above the keyboard. Only the
+    // hidden textarea receives focus: the row never blurs it, so the iOS
+    // keyboard and an in-flight IME composition are left alone.
+    // ---------------------------------------------------------------------
+    const TERMINAL_KEY_ROWS = new Map();
+    const TERMINAL_KEYS = [
+      { id: "escape", textKey: "terminalKeys.esc", labelKey: "terminalKeys.escape" },
+      { id: "tab", textKey: "terminalKeys.tab", labelKey: "terminalKeys.tab" },
+      { id: "up", textKey: "terminalKeys.up", labelKey: "terminalKeys.arrowUp" },
+      { id: "down", textKey: "terminalKeys.down", labelKey: "terminalKeys.arrowDown" },
+      { id: "left", textKey: "terminalKeys.left", labelKey: "terminalKeys.arrowLeft" },
+      { id: "right", textKey: "terminalKeys.right", labelKey: "terminalKeys.arrowRight" },
+      { id: "ctrl", textKey: "terminalKeys.ctrl", labelKey: "terminalKeys.control" },
+    ];
+
+    /**
+     * The bytes one row key sends.
+     *
+     * Mirrors xterm's own key table for the keys this row owns: Esc and Tab
+     * are single C0 bytes, arrows honour DECCKM, and a Ctrl-modified arrow
+     * uses the CSI 1;5 form xterm emits for any Ctrl+arrow.
+     */
+    function terminalKeySequence(key, applicationCursor = false, control = false) {
+      switch (key) {
+        case "escape": return "\x1b";
+        case "tab": return "\t";
+        case "up": return control ? "\x1b[1;5A" : applicationCursor ? "\x1bOA" : "\x1b[A";
+        case "down": return control ? "\x1b[1;5B" : applicationCursor ? "\x1bOB" : "\x1b[B";
+        case "right": return control ? "\x1b[1;5C" : applicationCursor ? "\x1bOC" : "\x1b[C";
+        case "left": return control ? "\x1b[1;5D" : applicationCursor ? "\x1bOD" : "\x1b[D";
+        default: return "";
+      }
+    }
+
+    /**
+     * The C0 byte Ctrl+<key> means, or null when the key has no such form.
+     *
+     * Covers the printable letters and the punctuation xterm maps to a
+     * control byte; every other key is left to the terminal's own handler.
+     */
+    function terminalControlByte(key) {
+      if (typeof key !== "string" || key.length !== 1) return null;
+      const upper = key.toUpperCase();
+      const code = upper.charCodeAt(0);
+      if (code >= 65 && code <= 90) return String.fromCharCode(code - 64);
+      switch (key) {
+        case " ": return "\x00";
+        case "@": return "\x00";
+        case "[": return "\x1b";
+        case "\\": return "\x1c";
+        case "]": return "\x1d";
+        case "^": return "\x1e";
+        case "_": return "\x1f";
+        case "?": return "\x7f";
+        default: return null;
+      }
+    }
+
+    /**
+     * The xterm instance behind a mounted terminal, or null.
+     *
+     * Upstream's TerminalScreen puts the emulator in a React useRef on the
+     * host node that xterm was opened into. React prefixes the fiber key with
+     * a per-render suffix, so the lookup matches the prefix and then scans
+     * the hook list for a current value that carries xterm's input().
+     * A changed hook order or a different host simply returns null,
+     * and the caller uses the textarea route below.
+     */
+    function terminalXterm(section) {
+      const terminal = section.querySelector(".xterm");
+      const mount = terminal === null || terminal === undefined ? null : terminal.parentElement;
+      if (mount === null || mount === undefined) return null;
+      for (const name of Object.keys(mount)) {
+        if (!name.startsWith("__reactFiber$")) continue;
+        let fiber = mount[name];
+        for (let depth = 0; fiber !== null && fiber !== undefined && depth < 6; depth += 1, fiber = fiber.return) {
+          let hook = fiber.memoizedState;
+          for (let index = 0; hook !== null && hook !== undefined && index < 24; index += 1, hook = hook.next) {
+            const current = hook.memoizedState;
+            const value = current !== null && typeof current === "object" ? current.current : undefined;
+            if (value !== null && value !== undefined && typeof value.input === "function") return value;
+          }
+        }
+      }
+      return null;
+    }
+
+    /** The hidden textarea that is xterm's real keyboard surface. */
+    function terminalTextarea(section) {
+      return section.querySelector("textarea.xterm-helper-textarea, textarea");
+    }
+
+    /** Keep the keyboard up: focus the terminal, never the row button. */
+    function focusTerminalInput(section) {
+      const textarea = terminalTextarea(section);
+      if (textarea === null) return null;
+      if (typeof textarea.focus === "function") {
+        try {
+          textarea.focus({ preventScroll: true });
+        } catch (error) {
+          textarea.focus();
+        }
+      }
+      return textarea;
+    }
+
+    /**
+     * Send bytes through xterm's own input event handler.
+     *
+     * This is the fallback when the React ref is not readable. It feeds
+     * xterm's _inputEvent -> coreService -> onData path directly, without a
+     * KeyboardEvent or a textarea value change. Arrow keys use normal-cursor
+     * bytes here: without the emulator object there is no DECCKM to read.
+     */
+    function sendTerminalInput(section, data) {
+      const textarea = terminalTextarea(section);
+      if (textarea === null) return;
+      const event = new Event("input", { bubbles: true, cancelable: true });
+      Object.defineProperty(event, "data", { value: data, configurable: true });
+      Object.defineProperty(event, "inputType", { value: "insertText", configurable: true });
+      Object.defineProperty(event, "composed", { value: false, configurable: true });
+      textarea.dispatchEvent(event);
+    }
+
+    /** Feed the terminal raw bytes, preferring the live xterm handle. */
+    function sendTerminalBytes(section, data) {
+      if (data === "") return;
+      const xterm = terminalXterm(section);
+      if (xterm !== null) xterm.input(data);
+      else sendTerminalInput(section, data);
+    }
+
+    /** Read DECCKM without letting a shape change break the key row. */
+    function terminalApplicationCursor(section) {
+      const xterm = terminalXterm(section);
+      if (xterm === null) return false;
+      try {
+        return xterm.modes !== null && xterm.modes !== undefined && xterm.modes.applicationCursorKeysMode === true;
+      } catch (error) {
+        return false;
+      }
+    }
+
+    function setSpecialKeyControl(state, armed) {
+      state.control = armed;
+      if (state.ctrlButton !== null) state.ctrlButton.setAttribute("aria-pressed", armed ? "true" : "false");
+    }
+
+    function activateSpecialKey(state, key) {
+      if (key === "ctrl") {
+        setSpecialKeyControl(state, !state.control);
+        return;
+      }
+      const control = state.control;
+      const sequence = terminalKeySequence(key, terminalApplicationCursor(state.section), control);
+      sendTerminalBytes(state.section, sequence);
+      if (control) setSpecialKeyControl(state, false);
+    }
+
+    function onSpecialKeyPointerDown(event) {
+      const row = event.currentTarget;
+      const state = row === null || row === undefined ? undefined : TERMINAL_KEY_ROWS.get(row.parentElement);
+      if (state === undefined) return;
+      const target = event.target;
+      const button = target !== null && target !== undefined && typeof target.closest === "function"
+        ? target.closest("[data-rdsh-terminal-key]")
+        : null;
+      if (button === null) return;
+      if (event.button !== undefined && event.button !== 0) return;
+      if (event.cancelable) event.preventDefault();
+      if (typeof event.stopPropagation === "function") event.stopPropagation();
+      focusTerminalInput(state.section);
+      activateSpecialKey(state, button.getAttribute("data-rdsh-terminal-key"));
+    }
+
+    function onSpecialKeyButtonKeyDown(event) {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      const row = event.currentTarget;
+      const state = row === null || row === undefined ? undefined : TERMINAL_KEY_ROWS.get(row.parentElement);
+      if (state === undefined) return;
+      const target = event.target;
+      const button = target !== null && target !== undefined && typeof target.closest === "function"
+        ? target.closest("[data-rdsh-terminal-key]")
+        : null;
+      if (button === null) return;
+      if (event.cancelable) event.preventDefault();
+      if (typeof event.stopPropagation === "function") event.stopPropagation();
+      activateSpecialKey(state, button.getAttribute("data-rdsh-terminal-key"));
+    }
+
+    /**
+     * Apply the one-shot Ctrl to a soft-keyboard character before xterm does.
+     *
+     * keydown covers Android and hardware keyboards; beforeinput covers iOS,
+     * where the virtual keyboard may report Unidentified on keydown. An IME
+     * composition is never intercepted. Once a character is consumed the
+     * modifier clears, so it cannot leak into the next key.
+     */
+    function onSpecialKeyTextKeyDown(event) {
+      const state = TERMINAL_KEY_ROWS.get(event.currentTarget);
+      if (state === undefined || !state.control || event.isComposing === true || event.keyCode === 229) return;
+      if (event.target !== terminalTextarea(state.section)) return;
+      if (event.ctrlKey === true || event.altKey === true || event.metaKey === true) return;
+      const byte = terminalControlByte(event.key);
+      if (byte === null) {
+        if (typeof event.key === "string" && event.key.length > 1) setSpecialKeyControl(state, false);
+        return;
+      }
+      if (event.cancelable) event.preventDefault();
+      if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+      sendTerminalBytes(state.section, byte);
+      setSpecialKeyControl(state, false);
+    }
+
+    function onSpecialKeyBeforeInput(event) {
+      const state = TERMINAL_KEY_ROWS.get(event.currentTarget);
+      if (state === undefined || !state.control || event.isComposing === true) return;
+      if (event.target !== terminalTextarea(state.section)) return;
+      if (typeof event.data !== "string" || event.data.length !== 1) return;
+      const byte = terminalControlByte(event.data);
+      if (byte === null) return;
+      if (event.cancelable) event.preventDefault();
+      if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+      sendTerminalBytes(state.section, byte);
+      setSpecialKeyControl(state, false);
+    }
+
+    /** Build one row for a mounted terminal section. */
+    function mountTerminalKeyRow(section) {
+      const terminal = section.querySelector(".xterm");
+      const mount = terminal === null || terminal === undefined ? null : terminal.parentElement;
+      if (mount === null || mount === undefined) return false;
+      const row = document.createElement("div");
+      row.className = "rdsh-mux-terminal-keys";
+      row.setAttribute("data-rdsh-special-keys", "");
+      row.setAttribute("role", "group");
+      row.setAttribute("aria-label", t("terminalKeys.label"));
+      let ctrlButton = null;
+      for (const spec of TERMINAL_KEYS) {
+        const button = document.createElement("button");
+        button.setAttribute("type", "button");
+        button.className = "rdsh-mux-terminal-key";
+        button.setAttribute("data-rdsh-terminal-key", spec.id);
+        button.setAttribute("aria-label", t(spec.labelKey));
+        button.textContent = t(spec.textKey);
+        if (spec.id === "ctrl") {
+          button.setAttribute("aria-pressed", "false");
+          ctrlButton = button;
+        }
+        row.append(button);
+      }
+      row.addEventListener("pointerdown", onSpecialKeyPointerDown);
+      row.addEventListener("keydown", onSpecialKeyButtonKeyDown);
+      const state = {
+        section,
+        row,
+        control: false,
+        ctrlButton,
+      };
+      TERMINAL_KEY_ROWS.set(section, state);
+      section.insertBefore(row, mount);
+      section.addEventListener("keydown", onSpecialKeyTextKeyDown, true);
+      section.addEventListener("beforeinput", onSpecialKeyBeforeInput, true);
+      return true;
+    }
+
+    function disposeTerminalKeyRow(section) {
+      const state = TERMINAL_KEY_ROWS.get(section);
+      if (state === undefined) return false;
+      TERMINAL_KEY_ROWS.delete(section);
+      section.removeEventListener("keydown", onSpecialKeyTextKeyDown, true);
+      section.removeEventListener("beforeinput", onSpecialKeyBeforeInput, true);
+      state.row.remove();
+      return true;
+    }
+
+    /** Drop every row and listener; safe when none was mounted. */
+    function disposeTerminalKeys() {
+      for (const section of [...TERMINAL_KEY_ROWS.keys()]) disposeTerminalKeyRow(section);
+      for (const row of document.querySelectorAll("[data-rdsh-special-keys]")) row.remove();
+    }
+
+    /**
+     * Reconcile the row with the mounted terminal sections.
+     *
+     * One row per visible mounted terminal. A section hidden behind another
+     * tab loses its row and gets a fresh one when it comes back, so a stale
+     * listener can never outlive its emulator. Only a phone gets here.
+     */
+    function decorateTerminalKeys() {
+      if (!phone()) {
+        disposeTerminalKeys();
+        return;
+      }
+      const sections = [];
+      for (const section of document.querySelectorAll("[data-sidebar-terminal]")) {
+        if (section.closest("[hidden]") !== null) continue;
+        const terminal = section.querySelector(".xterm");
+        if (terminal === null || terminal === undefined || terminal.parentElement === null) continue;
+        sections.push(section);
+      }
+      const keep = new Set(sections);
+      let changed = false;
+      for (const section of [...TERMINAL_KEY_ROWS.keys()]) {
+        const state = TERMINAL_KEY_ROWS.get(section);
+        if (state === undefined) continue;
+        if (!keep.has(section) || section.isConnected === false || state.row.isConnected === false) {
+          disposeTerminalKeyRow(section);
+          changed = true;
+        }
+      }
+      for (const section of sections) {
+        const state = TERMINAL_KEY_ROWS.get(section);
+        if (state !== undefined && state.row.parentElement === section) continue;
+        if (state !== undefined) disposeTerminalKeyRow(section);
+        if (mountTerminalKeyRow(section)) changed = true;
+      }
+      if (changed) scheduleTerminalFit();
     }
 
     // ---------------------------------------------------------------------
@@ -7870,12 +9773,14 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * phone drawer must not stay over that screen. New Session, session rows
      * and Settings are handled separately.
      */
-    const PANEL_ROUTE_PATTERN = /^(?:Plugins|Automation tasks)$/i;
-
     function isPanelRouteButton(target) {
       const button = target.closest("button[aria-label]");
       if (button === null) return false;
-      return PANEL_ROUTE_PATTERN.test(button.getAttribute("aria-label") || "");
+      const label = button.getAttribute("aria-label") || "";
+      // #59: the same probe vocabulary the landscape More menu uses; a zh shell
+      // must close the drawer for its folded rows too.
+      return probeValues("navPlugins", ["Plugins"]).includes(label)
+        || probeValues("navAutomation", ["Automation tasks"]).includes(label);
     }
 
     function onClickCapture(event) {
@@ -9446,6 +11351,60 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       );
     }
 
+    /**
+     * Device-local chat preferences.
+     *
+     * Each row writes only the live client store of the upstream policy; the
+     * shared configuration form is never touched. A row whose entry or hook is
+     * missing says so instead of looking saved and doing nothing.
+     */
+    function LocalChatSettingsSection() {
+      const [status, setStatus] = useState(localChatStatus);
+      useEffect(() => {
+        setStatus({ ...localChatStatus });
+        return subscribeLocalChatStatus(() => setStatus({ ...localChatStatus }));
+      }, []);
+      return h(
+        "div",
+        { className: "rdsh-mux-card", "data-rdsh-local-chat": "" },
+        h("h3", { className: "rdsh-mux-title" }, t("localChat.title")),
+        h("p", { className: "rdsh-mux-desc" }, t("localChat.desc")),
+        LOCAL_CHAT_SPECS.map((spec) => {
+          const available = status.available?.[spec.id] === true;
+          const local = status.local?.[spec.id];
+          const hostValue = status.host?.[spec.id] ?? spec.fallback;
+          return h(
+            "div",
+            { className: "rdsh-mux-slider", key: spec.id, "data-rdsh-local-chat-row": spec.id },
+            h("span", null, t(`localChat.${spec.id}`)),
+            h(
+              "select",
+              {
+                className: "rdsh-mux-select",
+                value: available ? (local ?? hostValue) : hostValue,
+                disabled: !available,
+                onChange: (event) => {
+                  setLocalChatValue(spec.id, event.target.value);
+                },
+              },
+              spec.values.map((option) => h("option", { key: option, value: option }, t(`localChat.${spec.id}.${option}`))),
+            ),
+            available && local !== undefined
+              ? h("button", {
+                type: "button",
+                className: "rdsh-mux-secondary",
+                onClick: () => resetLocalChat(spec.id),
+              }, t("localChat.followHost"))
+              : null,
+            available
+              ? null
+              : h("span", { className: "rdsh-mux-note" }, t("localChat.unavailable", { reason: status.reason?.[spec.id] ?? "not-bound" })),
+          );
+        }),
+        h("p", { className: "rdsh-mux-note" }, t("localChat.note")),
+      );
+    }
+
     function MobileSection() {
       const s = useStore();
       // The rows this section keeps are decided by the device, not the window
@@ -9609,6 +11568,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           h("p", { className: "rdsh-mux-note" }, t("mux.note.notifyScope")),
           message !== "" ? h("p", { className: "rdsh-mux-note" }, message) : null,
         ),
+        // Chat view preferences are device-local, so they only exist here.
+        onPhone ? h(LocalChatSettingsSection) : null,
         // One Mobile tab carries both sections inline; the separate tabs are
         // no longer registered.
         onPhone ? h(LocalDisplaySettingsSection) : null,
@@ -9713,6 +11674,17 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           available.fonts === false
             ? h("p", { className: "rdsh-mux-note" }, t("localDisplay.unavailable", { reason: reasonText("fonts") }))
             : null,
+          h(
+            "label",
+            { className: "rdsh-mux-check" },
+            h("input", {
+              type: "checkbox",
+              checked: s.terminalDark === true,
+              onChange: (event) => writeTerminalDark(event.target.checked),
+            }),
+            t("localDisplay.terminalDark"),
+          ),
+          h("p", { className: "rdsh-mux-note" }, t("localDisplay.terminalDark.note")),
           h(
             "label",
             { className: "rdsh-mux-slider" },
@@ -9884,12 +11856,26 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
 `;
 
+    /** The panel's own exit-control labels, as selectors scoped to the panel. */
+    const RIGHT_PANEL_EXIT = probeValues("fullscreenExit", ["Exit fullscreen"])
+      .map((label) => `[data-rdsh-rightpanel] [aria-label="${cssValue(label)}"]`)
+      .join(", ");
+
+    /** The dock's pane-split control in every locale, scoped to the panel. */
+    const RIGHT_PANEL_SPLIT = probeValues("split", ["Split"])
+      .map((label) => `[data-rdsh-rightpanel] [aria-label="${cssValue(label)}"]`)
+      .join(", ");
+
     const CSS_PHONE = `
 /* Controls the hide list matched. The attribute these selectors key off is
    written only while phone() holds (see applyHideList), and the rules sit in
    the mobile sheet as well: a desktop keeps every control. */
 html[data-rdsh-hide-settings] [data-rdsh-hidden],
 html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !important; }
+/* #75: the Trajectory Conversation view tab is secondary on a phone. Its
+   attribute is written only while hiding is active on a phone, and the rule
+   lives in the mobile sheet, so a desktop never sees it. */
+html[data-rdsh-hide-settings] [data-conversation-tabs] [data-rdsh-trajectory-tab-hidden] { display: none !important; }
 
 /* Session colour frames and their menu/palette. The frame is a phone
    affordance in the #44 contract: a desktop sidebar is upstream's, unchanged. */
@@ -9961,7 +11947,9 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
 html:has([data-rdsh-route-detail]) .rdsh-mux-fab { display: none !important; }
 [data-rdsh-route-detail="back"] { padding-top: 56px !important; }
 .rdsh-mux-route-back {
-  position: fixed; left: 8px; top: calc(env(safe-area-inset-top, 0px) + 8px);
+  /* #59: the route back button shares the drawer button's corner, so it has to
+     follow the same landscape notch inset. */
+  position: fixed; left: calc(env(safe-area-inset-left, 0px) + 8px); top: calc(env(safe-area-inset-top, 0px) + 8px);
   width: 40px; height: 40px; border: 0; border-radius: 12px; z-index: 40;
   display: none; align-items: center; justify-content: center;
   color: var(--dsw-alias-label-primary, #f9fafb);
@@ -10373,6 +12361,24 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   [data-rdsh-frame] [data-rdsh-center-col] { grid-column: 2 !important; }
   [data-rdsh-frame] [data-rdsh-rightbar-col] { grid-column: 3 !important; }
   [data-rdsh-frame][data-rightbar-fullscreen] { grid-template-columns: 0 minmax(0, 1fr) 0 !important; }
+  /* #72: mobile at 768px and up is a tablet, not a phone. Upstream already
+     fullscreens below 768px and docks at or above it, so the drawer keeps the
+     first column at 0 while the right track is reserved at the panel's own
+     measured width. The conversation keeps upstream's 400px minimum and the
+     dock never shrinks below upstream's 300px floor. The value is published by
+     syncRightPanelOpen; 45% is upstream's first-open default and only a
+     fallback for the frame before that measurement lands. User fullscreen
+     keeps the phone sheet above, hence the :not(). */
+  @media (min-width: 768px) {
+    html[data-rdsh-rightpanel-open] [data-rdsh-frame]:not([data-rightbar-fullscreen]) {
+      grid-template-columns: 0 minmax(400px, 1fr) minmax(300px, var(--rdsh-rightbar-width, 45%)) !important;
+    }
+    /* The tablet is wide enough for a user to leave fullscreen; keep the exit
+       control that the phone hides. Split stays hidden everywhere: this plugin
+       never uses dockkit's pane split as the iPad layout. The selector carries
+       every known exit label, so a ja shell keeps the same control. */
+    ${RIGHT_PANEL_EXIT} { display: inline-flex !important; }
+  }
   [data-rdsh-sidebar] {
     position: fixed !important; inset: 0 auto 0 0 !important;
     box-sizing: border-box;
@@ -10382,7 +12388,13 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
        keeps its rows clear of it (a fixed layer ignores #root's padding). */
     padding-left: env(safe-area-inset-left, 0px);
     padding-right: env(safe-area-inset-right, 0px);
-    width: 280px !important; max-width: 86vw; height: 100dvh !important; min-height: 100dvh;
+    /* #59: the outer width must hold the 280px content plus both notch
+       paddings. A fixed 280px let the padding eat 59px from every row on a
+       landscape phone; the 86vw cap applies to the content, so the insets are
+       added to the cap as well. */
+    width: calc(280px + env(safe-area-inset-left, 0px) + env(safe-area-inset-right, 0px)) !important;
+    max-width: calc(86vw + env(safe-area-inset-left, 0px) + env(safe-area-inset-right, 0px));
+    height: 100dvh !important; min-height: 100dvh;
     z-index: 50; overflow: hidden;
     transform: translateX(-104%);
     transition: transform var(--rdsh-slide-ms) var(--rdsh-slide-ease), box-shadow var(--rdsh-slide-ms) var(--rdsh-slide-ease);
@@ -10424,6 +12436,11 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
      inlines them). This attribute is only written under phone(), so a
      desktop keeps all three tabs. */
   [data-rdsh-settings-tab-hidden] { display: none !important; }
+
+  /* #59: landscape folds the three stock panel rows into one More row. The
+     rows stay in the DOM (and the single Settings row keeps its #87
+     lifecycle); only the visible row is replaced. */
+  [data-rdsh-nav-more-hidden] { display: none !important; }
 
   [data-rdsh-settings-nav-arrow] {
     position: fixed; z-index: 1006; width: 30px; height: 30px;
@@ -10549,6 +12566,13 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
      actions: margin affects the H1 box, while the wrapper's other children
      keep their position. */
   [data-rdsh-route-heading] > h1 { margin-left: 40px !important; }
+  /* #62: the Automation route scrolls its own list, and a row that passes
+     under the floating drawer button is unreadable. Start the route below the
+     button instead of covering scrolled text with a band: the page's padding
+     moves the scroll container itself, so nothing can travel above 56px. The
+     existing task-detail rule uses the same value, so the list and its back
+     button keep one clearance. */
+  [data-testid="task-manager-page"] { box-sizing: border-box; padding-top: 56px !important; }
   [data-rdsh-header] [class*="_titleCluster"] { min-width: 0; flex: 1 1 auto; }
   /* Pin the activity chips to the right edge of the header. Without this the
      actions block sits directly after the title, so a short session name drags
@@ -10894,8 +12918,28 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   .rdsh-mux-queue-menu button:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,.08)); }
   .rdsh-mux-queue-menu button:disabled { opacity: .45; }
   /* New-session workspace picker: a search row, a bounded item viewport and
-     the upstream Add workspace footer outside that viewport. */
-  [data-rdsh-workspace-menu] { max-height: min(70vh, 520px) !important; overflow: hidden !important; }
+     the upstream Add workspace footer outside that viewport.
+
+     #39: upstream's Menu reads its own offsetWidth/offsetHeight in the layout
+     effect of the commit that mounts it, before this module's microtask
+     observer can tag the portal. The geometry therefore has to hold before
+     the tag exists. The opening click writes data-rdsh-workspace-picking
+     on <html>; the structural selector below matches the shared Menu surface
+     (and its presentation viewport) while armed. The tagged rules repeat the
+     same values, so replacing the armed state with the tag changes no box.
+
+     The search row is out of flow inside a statically reserved band, so
+     inserting it adds neither height nor width to the menu the first place()
+     measured. One custom property is the single source of truth for that
+     band: the menu's padding and the row's height both use it. */
+  html[data-rdsh-workspace-picking] [role="menu"][data-menu-material],
+  [data-rdsh-workspace-menu] {
+    --rdsh-workspace-search-block: 44.5px;
+    padding-top: calc(4px + var(--rdsh-workspace-search-block)) !important;
+    max-height: min(70vh, 520px) !important;
+    overflow: hidden !important;
+  }
+  html[data-rdsh-workspace-picking] [role="menu"][data-menu-material] > div[aria-hidden="true"] + [role="presentation"],
   [data-rdsh-workspace-menu] [data-rdsh-workspace-viewport] {
     max-height: min(40vh, 320px) !important;
     overflow-y: auto !important;
@@ -10904,12 +12948,14 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   }
   [data-rdsh-workspace-menu] [data-rdsh-workspace-hidden] { display: none !important; }
   .rdsh-mux-workspace-search {
-    flex: none; box-sizing: border-box; padding: 6px 0;
+    position: absolute; top: 4px; left: 4px; right: 4px;
+    box-sizing: border-box; height: var(--rdsh-workspace-search-block, 44.5px);
+    padding: 6px 0; overflow: hidden;
     border-bottom: .5px solid var(--dsw-alias-border-l1, rgba(255,255,255,.1));
     background: var(--dsw-alias-bg-layer-2, #2c2c2e);
   }
   .rdsh-mux-workspace-search input {
-    display: block; box-sizing: border-box; width: 100%; height: 32px;
+    display: block; box-sizing: border-box; width: 100%; min-width: 0; height: 32px;
     margin: 0; padding: 0 8px; border-radius: 8px;
     border: .5px solid var(--dsw-alias-border-l3, rgba(255,255,255,.16));
     background: var(--dsw-alias-bg-base, #1b1b1d);
@@ -11027,10 +13073,85 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
      as a pan/zoom before the touchmove handler sees it. (This alone cannot
      make the terminal scroll: there is no scrollable node behind it.) */
   .xterm, .xterm .xterm-screen, .xterm .xterm-scrollable-element { touch-action: none; }
+  /* #78: the special-key row is a flex child of upstream's terminal section,
+     before the .screen mount. It keeps a finger-sized target without opening
+     a second layout path: the section is already a column, so .screen takes
+     the remaining height and the existing fit still measures the real band. */
+  [data-rdsh-special-keys] {
+    flex: 0 0 auto;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-height: 38px;
+    padding: 4px 8px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    background: var(--dsw-alias-bg-l2, #232324);
+    border-bottom: .5px solid var(--dsw-alias-border-l3, rgba(255, 255, 255, .12));
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+  [data-rdsh-special-keys]::-webkit-scrollbar { display: none; }
+  [data-rdsh-special-keys] button {
+    flex: none;
+    box-sizing: border-box;
+    min-width: 42px;
+    height: 30px;
+    padding: 0 8px;
+    border: .5px solid var(--dsw-alias-border-l3, rgba(255, 255, 255, .16));
+    border-radius: 7px;
+    background: var(--dsw-alias-button-elevated-fill, rgba(255, 255, 255, .08));
+    color: var(--dsw-alias-label-primary, #f9fafb);
+    font: inherit;
+    font-size: 13px;
+    line-height: 1;
+  }
+  [data-rdsh-special-keys] button:active,
+  [data-rdsh-special-keys] button[aria-pressed="true"] {
+    background: var(--dsw-alias-state-business-primary, #4d6bfe);
+    color: #fff;
+  }
+  [data-rdsh-special-keys] button:focus-visible {
+    outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary, #4d6bfe));
+    outline-offset: 1px;
+  }
+
+  /* #79: a terminal-only dark surface. The first selector is the screen
+     wrapper upstream reads with getComputedStyle for xterm's default
+     background/foreground; the second paints the xterm mount itself. Neither
+     reaches the panel status/error rows, the rest of the app or the Host
+     palette. ANSI colors stay xterm's own palette, and upstream's
+     minimumContrastRatio (4.5) keeps each indexed color readable here. */
+  html[data-rdsh-terminal-dark] [data-sidebar-terminal] > div:has(> .xterm),
+  html[data-rdsh-terminal-dark] [data-sidebar-terminal] .xterm {
+    background-color: var(--dsw-static-neutral-bluish-950, #151517) !important;
+    color: var(--dsw-static-neutral-bluish-50, #f9fafb) !important;
+  }
+  html[data-rdsh-terminal-dark] [data-sidebar-terminal] .xterm .xterm-viewport,
+  html[data-rdsh-terminal-dark] [data-sidebar-terminal] .xterm .xterm-scrollable-element {
+    background-color: var(--dsw-static-neutral-bluish-950, #151517) !important;
+  }
 
   /* Edit summary: tighter rows. */
   [data-rdsh-edit-header] { height: 44px !important; min-height: 44px !important; padding: 4px 10px !important; }
   [data-rdsh-edit-row] { height: 26px !important; padding-top: 2px !important; padding-bottom: 2px !important; }
+
+  /* #59: the safe-area padding belongs to upstream's own panel surface
+     ([data-sidebar-right-panel], verified in
+     @deepseek-ai/dsh-client-ui-sidebar-right 0.2.1-rc.2: absolute against the
+     frame's right edge, width 100vw in fullscreen). In fullscreen that puts the
+     left edge at -safe-right, so the tab strip, path and file tree lost the
+     first notch width; a pushed panel is already inside #root's padded frame
+     and must not be padded again. Vertical insets come from #root, which the
+     frame and every panel mode already sit inside. */
+  [data-sidebar-right-panel="fullscreen"] {
+    box-sizing: border-box !important;
+    right: calc(-1 * env(safe-area-inset-right, 0px)) !important;
+    padding-left: env(safe-area-inset-left, 0px) !important;
+    padding-right: env(safe-area-inset-right, 0px) !important;
+  }
 
   /* Right panel: never wider than the phone, wide tables scroll inside it. */
   [data-rdsh-rightpanel] {
@@ -11041,12 +13162,27 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
        this layer only has to stay in the sheet's own context. */
     isolation: isolate;
     box-sizing: border-box;
-    /* #59: the sheet is viewport-anchored. A zero top put the tab strip and the
-       path under the status bar, and the sides ran under a landscape notch. */
-    padding-top: env(safe-area-inset-top, 0px) !important;
-    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + var(--rdsh-native-gap-px, 0px)) !important;
-    padding-left: env(safe-area-inset-left, 0px) !important;
-    padding-right: env(safe-area-inset-right, 0px) !important;
+    /* No safe-area padding here: the stable panel surface above owns it. Adding
+       it to this full-width pane as well double-insets the panel (and cost 47px
+       of height in portrait). */
+  }
+  /* #82: name the kind of panel above dockkit's tab strip. The panel already
+     applies the safe-area insets; the heading only adds its own gutters. It
+     is pointer-transparent and sits outside the strip and the terminal body,
+     so it cannot claim a tab drag or resize the xterm mount. */
+  [data-rdsh-rightpanel] [data-rdsh-panel-heading] {
+    flex: 0 0 auto;
+    box-sizing: border-box;
+    margin: 0 !important;
+    padding: 8px 16px 6px !important;
+    color: var(--dsw-alias-label-secondary);
+    font-size: var(--dsh-content-font-size-secondary, 13px);
+    font-weight: 600;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+    pointer-events: none;
+    -webkit-user-select: none;
+    user-select: none;
   }
   /* The preview's close control is drawn as a panel glyph, which reads as
      "collapse this pane" rather than "leave the preview". Swap it for an X,
@@ -11099,26 +13235,29 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
     box-shadow: var(--dsw-elevation-prominent, 0 2px 8px rgba(0, 0, 0, .28));
   }
 
-  /* Code files: wrap every line, including a single long token (URLs,
-     minified lines). Wrapping only at spaces left those overflowing, which
-     turned the viewer into a free two-axis scroller.
+  /* Code files: while upstream's wrap is on, wrap every line, including a
+     single long token (URLs, minified lines). Wrapping only at spaces left
+     those overflowing, which turned the viewer into a free two-axis scroller.
      The lines are their own boxes: .line carries
      "white-space: var(--dsl-code-block-line-white-space, pre)", so styling
-     pre alone left them unwrapped (and the horizontal lock clipped them). */
+     pre alone left them unwrapped (and the horizontal lock clipped them).
+     Upstream writes data-textpreview-wrap on the preview body while its
+     header toggle is ON (#81), so both rules stop applying the moment the
+     user turns wrap off and the stock sideways scroll comes back. */
   /* Do NOT style the code element: the newline text nodes between the .line
      spans live there, and giving them pre-wrap painted an empty row between
      every line (19px -> 38px). The lines carry their own content. */
-  [data-rdsh-rightpanel] [data-textpreview-body] pre,
-  [data-rdsh-rightpanel] [data-textpreview-body] pre .line {
+  [data-rdsh-rightpanel] [data-textpreview-body][data-textpreview-wrap] pre,
+  [data-rdsh-rightpanel] [data-textpreview-body][data-textpreview-wrap] pre .line {
     white-space: pre-wrap !important;
     overflow-wrap: anywhere !important;
     word-break: break-word !important;
   }
-  /* ...and the code scroller itself keeps no sideways travel. */
-  [data-rdsh-code-scroll] { overflow-x: hidden !important; }
-  /* Wrapping is forced above, so the viewer's own toggle no longer changes
-     anything. Hide it rather than leave a control that does nothing. */
-  [data-rdsh-rightpanel] [data-textpreview-tool="wrap"] { display: none !important; }
+  /* ...and only in that wrapped state the code scroller keeps no sideways
+     travel. decorateCodePreview also drops the hook when the state turns off;
+     matching the state here keeps the lock off for the frame before it does. */
+  [data-textpreview-wrap] [data-rdsh-code-scroll],
+  [data-textpreview-wrap][data-rdsh-code-scroll] { overflow-x: hidden !important; }
 
   /* #33: the host's native "open in <app>" split button. The wrapper carries
      data-open-target and both halves carry data-open-path-*; hiding it takes
@@ -11143,8 +13282,8 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   /* Two controls in the panel header duplicate what the phone already is or
      cannot do: "Exit fullscreen" closes the panel exactly like the ✕ next to
      it, and "Split" needs width the phone does not have. Keep only the ✕. */
-  [data-rdsh-rightpanel] [aria-label="Exit fullscreen"],
-  [data-rdsh-rightpanel] [aria-label="Split"] { display: none !important; }
+  ${RIGHT_PANEL_EXIT},
+  ${RIGHT_PANEL_SPLIT} { display: none !important; }
 
   /* The native strip already contains the home indicator. */
   html[data-rdsh-native-gap] [data-rdsh-sidebar],
@@ -11186,7 +13325,8 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
   outline-offset: 1px;
 }
 .rdsh-mux-preview-kebab svg { fill: currentColor; }
-.rdsh-mux-preview-menu {
+.rdsh-mux-preview-menu,
+.rdsh-mux-nav-more-menu {
   position: fixed; z-index: 995; box-sizing: border-box;
   padding: 6px; border-radius: 12px;
   display: flex; flex-direction: column; gap: 2px;
@@ -11194,7 +13334,8 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
   border: .5px solid var(--dsw-alias-border-l3, rgba(255,255,255,.16));
   box-shadow: var(--dsw-elevation-prominent, 0 14px 40px rgba(0,0,0,.3));
 }
-.rdsh-mux-preview-menu button {
+.rdsh-mux-preview-menu button,
+.rdsh-mux-nav-more-menu button {
   box-sizing: border-box; width: 100%; min-height: 40px;
   margin: 0; padding: 8px 10px; border: 0; border-radius: 8px;
   display: block; text-align: left; overflow: hidden; white-space: nowrap;
@@ -11203,15 +13344,19 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
   cursor: pointer; -webkit-tap-highlight-color: transparent;
 }
 .rdsh-mux-preview-menu button:hover,
-.rdsh-mux-preview-menu button:focus-visible {
+.rdsh-mux-preview-menu button:focus-visible,
+.rdsh-mux-nav-more-menu button:hover,
+.rdsh-mux-nav-more-menu button:focus-visible {
   background: var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,.08));
   outline: none;
 }
-.rdsh-mux-preview-menu button:focus-visible {
+.rdsh-mux-preview-menu button:focus-visible,
+.rdsh-mux-nav-more-menu button:focus-visible {
   outline: 2px solid var(--dsw-alias-state-business-primary, #7aaaff);
   outline-offset: -2px;
 }
-.rdsh-mux-preview-menu button[disabled] {
+.rdsh-mux-preview-menu button[disabled],
+.rdsh-mux-nav-more-menu button[disabled] {
   color: var(--dsw-alias-label-tertiary, #a1a1aa);
   cursor: default;
 }
@@ -11229,6 +13374,19 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
     // Wiring
     // ---------------------------------------------------------------------
     let booted = false;
+    let olderLoader = null;
+
+    /** #71: create the phone loader once, install it with the other phone hooks. */
+    function installOlderLoader() {
+      if (olderLoader === null) {
+        olderLoader = createOlderMessageLoader({ doc: document, win: window, isPhone: phone });
+      }
+      olderLoader.install();
+    }
+
+    function disposeOlderLoader() {
+      olderLoader?.dispose();
+    }
 
     function boot(ctx) {
       if (booted) return;
@@ -11269,7 +13427,10 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         // own open/close signals on the app frame. They change without a
         // resize when the user toggles a sidebar, so without them the drawer
         // and right-panel state only caught up on the next unrelated mutation.
-        observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["aria-label", "aria-selected", "data-state", "draggable", "data-sidebar-collapsed", "data-rightbar-collapsed"] });
+        // `data-textpreview-wrap` is the same kind of signal for #81: the stock
+        // header toggle writes it, and without it the code-scroll lock would
+        // outlive the OFF until an unrelated mutation happened to repaint.
+        observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["aria-label", "aria-selected", "data-state", "draggable", "data-sidebar-collapsed", "data-rightbar-collapsed", "data-textpreview-wrap"] });
 
         document.addEventListener("pointerdown", onPointerDown, true);
         document.addEventListener("pointermove", onPointerMove, true);
@@ -11279,8 +13440,12 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         document.addEventListener("mousedown", onMouseDownCapture, true);
         document.addEventListener("click", onClickCapture, true);
         // Phone-only tree long-press and search listeners; installed here so
-        // the teardown below can remove exactly one set.
-        if (phone()) installWorkspaceTools();
+        // the teardown below can remove exactly one set. #71 loads older
+        // messages with the same lifetime.
+        if (phone()) {
+          installWorkspaceTools();
+          installOlderLoader();
+        }
         // Window capture runs before the app's document-level key adapter. That
         // adapter treats a keyCode 229 Return as IME input and consumes it, so a
         // listener on document never gets the chance to insert a newline.
@@ -11337,6 +13502,85 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           resetGestures();
           onLayoutResize();
         };
+        // #76: iPadOS standalone can dismiss the soft keyboard while the
+        // composer keeps focus. That path fires neither a focusout on the
+        // editor nor (on the affected builds) a visualViewport resize, so the
+        // layout stays sized for the keyboard until a rotation. The document
+        // does lose focus on that dismiss, and visibility covers an app that
+        // comes back with stale geometry; both re-run this plugin's existing
+        // measurement/decorate/fit pass. The native blank strip itself belongs
+        // to WebKit (see the viewport-fit=cover note above measureSafeArea);
+        // nothing here touches the composer, scrolls the document or forces a
+        // reflow to fake one.
+        //
+        // iPadOS can also leave innerHeight itself at the keyboard-shrunk
+        // value. A native gap is at most the status-bar strip; a layout that
+        // is hundreds of px shorter than the tallest height seen at this width
+        // is the keyboard, not a gap to publish. Remember the height per width
+        // so a rotation starts from the new geometry instead of portrait's.
+        const LAYOUT_SHRINK_MAX_PX = 100;
+        const KEYBOARD_SETTLE_MS = 350;
+        const KEYBOARD_RECOVERY_MS = 800;
+        let keyboardRecoveryFrame = 0;
+        let keyboardRecoveryTimer = 0;
+        let keyboardRecoveryUntil = 0;
+        let layoutWidth = window.innerWidth;
+        let layoutHeightMax = window.innerHeight;
+        const rememberLayoutHeight = () => {
+          if (window.innerWidth !== layoutWidth) {
+            layoutWidth = window.innerWidth;
+            layoutHeightMax = window.innerHeight;
+          }
+          if (window.innerHeight > layoutHeightMax) layoutHeightMax = window.innerHeight;
+        };
+        const keyboardSettled = () => {
+          if (document.visibilityState === "hidden") return false;
+          rememberLayoutHeight();
+          const viewport = window.visualViewport;
+          if (viewport !== null && viewport !== undefined && viewport.height < window.innerHeight - 100) return false;
+          return !(window.navigator.standalone === true && layoutHeightMax - window.innerHeight > LAYOUT_SHRINK_MAX_PX);
+        };
+        const applyKeyboardRecovery = () => {
+          keyboardRecoveryFrame = 0;
+          keyboardRecoveryTimer = 0;
+          if (!phone()) return;
+          if (!keyboardSettled()) {
+            // The dismiss animation can still be running when focus leaves.
+            // Retry once it should be over, but never keep polling a keyboard
+            // that is genuinely open (the user moved to another field).
+            if (Date.now() < keyboardRecoveryUntil) {
+              keyboardRecoveryTimer = window.setTimeout(applyKeyboardRecovery, KEYBOARD_SETTLE_MS);
+            } else {
+              keyboardRecoveryUntil = 0;
+            }
+            return;
+          }
+          keyboardRecoveryUntil = 0;
+          measureSafeArea();
+          scheduleDecorate();
+          scheduleTerminalFit();
+        };
+        const scheduleKeyboardRecovery = () => {
+          if (!phone()) return;
+          if (typeof requestAnimationFrame !== "function") {
+            applyKeyboardRecovery();
+            return;
+          }
+          keyboardRecoveryUntil = Date.now() + KEYBOARD_RECOVERY_MS;
+          if (keyboardRecoveryFrame !== 0) return;
+          keyboardRecoveryFrame = requestAnimationFrame(applyKeyboardRecovery);
+        };
+        const onKeyboardFocusOut = (event) => {
+          if (!phone()) return;
+          const target = event.target;
+          if (target === null || target === undefined || target.closest === undefined) return;
+          // Only a field that can raise the keyboard can have had one to hide.
+          if (textBoxOf(target) === null) return;
+          scheduleKeyboardRecovery();
+        };
+        const onKeyboardVisibility = () => {
+          if (document.visibilityState === "visible") scheduleKeyboardRecovery();
+        };
         window.addEventListener("resize", onResize);
         window.addEventListener("orientationchange", onOrientation);
         // The visual viewport reports the keyboard and the rotation's own
@@ -11347,6 +13591,14 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         // The visual viewport can move without resizing (the browser scrolls a
         // focused field above the keyboard); both events share the rAF fit.
         window.visualViewport?.addEventListener("scroll", onLayoutResize);
+        // #76: mobile-mode only, like the drawer and terminal hooks above. A
+        // desktop keeps upstream's composer focus and installs none of these.
+        if (phone()) {
+          document.addEventListener("focusout", onKeyboardFocusOut, true);
+          document.addEventListener("visibilitychange", onKeyboardVisibility);
+          window.addEventListener("blur", scheduleKeyboardRecovery);
+          window.addEventListener("focus", scheduleKeyboardRecovery);
+        }
         patchCommandUi(ctx);
         document.addEventListener("dragstart", onDragStartCapture, true);
         document.addEventListener("dragend", onDragEndCapture, true);
@@ -11389,6 +13641,13 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           readDeviceTheme,
           writeDeviceTheme,
           applyDeviceTheme,
+          readTerminalDark,
+          writeTerminalDark,
+          applyTerminalDark,
+          // The same entries the device-local display rows use: "System" ("")
+          // clears the remembered language, a language id stores it.
+          setLanguage: setLocalDisplayLanguage,
+          setFont: setLocalDisplayFont,
           build: BUILD,
           lang: currentLang(),
           autoSettings: true,
@@ -11404,6 +13663,11 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           // Diagnostics used by the unit tests: the layout predicate and the
           // restored scroll hooks have to be observable without a browser.
           decorateNow: decorate,
+          specialKeys: {
+            decorate: decorateTerminalKeys,
+            sequence: terminalKeySequence,
+            controlByte: terminalControlByte,
+          },
           phone,
           markMobileSession,
           closeDrawer,
@@ -11430,6 +13694,16 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             window.removeEventListener("orientationchange", onOrientation);
             window.visualViewport?.removeEventListener("resize", onLayoutResize);
             window.visualViewport?.removeEventListener("scroll", onLayoutResize);
+            document.removeEventListener("focusout", onKeyboardFocusOut, true);
+            document.removeEventListener("visibilitychange", onKeyboardVisibility);
+            window.removeEventListener("blur", scheduleKeyboardRecovery);
+            window.removeEventListener("focus", scheduleKeyboardRecovery);
+            if (keyboardRecoveryFrame !== 0) {
+              cancelAnimationFrame(keyboardRecoveryFrame);
+              keyboardRecoveryFrame = 0;
+            }
+            clearTimeout(keyboardRecoveryTimer);
+            keyboardRecoveryUntil = 0;
             clearTerminalFit();
             resetGestures();
             clearTimeout(rotationTimer);
@@ -11494,6 +13768,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
     if (workspaceTestHook !== null && typeof workspaceTestHook === "object") {
       workspaceTestHook.workspace = {
         beginWorkspacePicker,
+        armWorkspacePickerFromKey,
         decorateWorkspacePicker,
         workspaceTriggerControl,
         clearWorkspacePicker,
@@ -11527,6 +13802,19 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           const label = ctx.slots.entries?.("settings.section")?.find((entry) => entry.options.id === "general")?.options.label;
           return (typeof label === "function" ? label() : label) ?? "General";
         };
+        // #75: the slot id is stable; its label is the only key the rendered
+        // tab exposes in every locale. A missing slot table leaves the
+        // injected probe vocabulary (en/ja/zh) in charge.
+        readTrajectoryLabel = () => {
+          try {
+            const entries = ctx.slots.entries?.("conversation.view");
+            if (!Array.isArray(entries)) return null;
+            const label = entries.find((entry) => entry.options?.id === "trajectory")?.options?.label;
+            return (typeof label === "function" ? label() : label) ?? null;
+          } catch {
+            return null;
+          }
+        };
         // Session selection needs the workspace service, which arrives on its
         // own schedule; without it a notification tap can only raise a banner.
         ctx.inject(["uiWorkspace", "sessions", "conversation"], (scope) => {
@@ -11536,11 +13824,17 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         ctx.inject(["remote", "remote.permissionPresets"], (scope) => {
           if (phone()) void loadPermissionCatalog(scope.remote);
         });
-        try {
-          attachDeviceTheme(ctx);
-        } catch (error) {
-          console.error("[rdsh-mobile-ux] device theme failed", error);
-        }
+        // The shared theme presenter can boot after this plugin. Resolve the
+        // service through injection so a stored device choice is applied as
+        // soon as the palette contract exists, instead of being skipped at
+        // apply time because ctx.get("theme") was still undefined (#73).
+        ctx.inject(["theme"], (scope) => {
+          try {
+            attachDeviceTheme(scope);
+          } catch (error) {
+            console.error("[rdsh-mobile-ux] device theme failed", error);
+          }
+        });
         ctx.inject(["theme", "locale"], (scope) => {
           try {
             attachLocalDisplay(scope);
@@ -11548,11 +13842,28 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             console.error("[rdsh-mobile-ux] local display failed", error);
           }
         });
+        // After the display projection, so this teardown runs first on
+        // dispose and the display projection then restores the true Host
+        // snapshot (this module only put back its own projected view).
+        ctx.inject(["theme"], (scope) => {
+          try {
+            attachTerminalDark(scope);
+          } catch (error) {
+            console.error("[rdsh-mobile-ux] terminal dark failed", error);
+          }
+        });
         try {
           boot(ctx);
         } catch (error) {
           console.error("[rdsh-mobile-ux] boot failed", error);
           emit({ bootError: String((error && error.message) || error) });
+        }
+        // Device-local chat preferences: attach after boot so a failing boot
+        // still leaves the Host values untouched.
+        try {
+          attachLocalChat(ctx);
+        } catch (error) {
+          console.error("[rdsh-mobile-ux] local chat settings failed", error);
         }
         ctx.slots.inject("sidebar.workspaces.session.menu.item", () => ctx.slots.register({
           name: "sidebar.workspaces.session.menu.item",

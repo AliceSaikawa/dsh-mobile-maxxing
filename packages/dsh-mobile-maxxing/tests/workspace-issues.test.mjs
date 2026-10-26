@@ -12,13 +12,15 @@
  *        pointercancel and scroll cancel it
  *   #43  the root path gets the same copy menu, and search runs only on an
  *        explicit click/Enter over the mounted tree
+ *   #83  the file search gets an explicit clear button, and a native search
+ *        clear resets filtering/highlight/no-hit state without typing-search
  */
 
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import vm from "node:vm";
-import { COPY, LOCALE_PACKS, copyFor } from "../lib/copy.js";
+import { COPY, copyFor } from "../lib/copy.js";
 
 const CLIENT = readFileSync(new URL("../client.js", import.meta.url), "utf8");
 const NARROW = "(max-width: 767px)";
@@ -433,7 +435,6 @@ function boot({ mode = "mobile", width = 390 } = {}) {
 		performance: { now: () => 0 },
 		__RDSH_DEVICE_MODE__: mode,
 		__RDSH_PWA_COPY__: COPY,
-		__RDSH_PWA_LOCALES__: LOCALE_PACKS,
 		__RDSH_PWA_LANG__: "en",
 		__RDSH_WORKSPACE_TEST__: {},
 	};
@@ -526,12 +527,14 @@ function buttonWithName(document, name, attributes = {}) {
 }
 
 /**
- * The upstream picker portal: [role=menu] > viewport + footer. The footer
- * label is a parameter so a test can use the translated one: the picker is
- * recognized without reading it (#39).
+ * The upstream picker portal: [role=menu] (the shared Menu surface, marked by
+ * data-menu-material) > material + viewport + footer. The footer label is a
+ * parameter so a test can use the translated one: the picker is recognized
+ * without reading it (#39).
  */
 function workspaceMenu(document, names, addLabel = "Add workspace…") {
-	const menu = element(document, "div", { role: "menu" });
+	const menu = element(document, "div", { role: "menu", "data-menu-material": "translucent" });
+	const material = element(document, "div", { "aria-hidden": "true" });
 	const viewport = element(document, "div", { role: "presentation" });
 	for (const name of names) {
 		const wrap = element(document, "div");
@@ -542,8 +545,8 @@ function workspaceMenu(document, names, addLabel = "Add workspace…") {
 	const footerWrap = element(document, "div");
 	footerWrap.append(buttonWithName(document, addLabel, { role: "menuitem" }));
 	footer.append(footerWrap);
-	menu.append(viewport, footer);
-	return { menu, viewport, footer };
+	menu.append(material, viewport, footer);
+	return { menu, viewport, footer, material };
 }
 
 /**
@@ -609,6 +612,84 @@ test("#39 the picker search row is in the menu before its first paint", () => {
 	assert.equal(menu.getAttribute("data-rdsh-workspace-menu"), "", "the static height hook was not applied");
 	assert.equal(viewport.getAttribute("data-rdsh-workspace-viewport"), "", "the list viewport hook was not applied");
 	assert.equal(run.sandbox.CSS.highlights.size, 0, "the picker does not use the file-search highlight");
+	// The row is out of flow: the menu's measured box comes from the band the
+	// stylesheet reserves, not from this element.
+	assert.equal(search.hasAttribute("data-rdsh-workspace-search"), true);
+	assert.equal(menu.children[0].getAttribute("aria-hidden"), "true", "the fixture lost upstream's material layer");
+});
+
+test("#39 the opening click reserves the search band before the menu mounts", () => {
+	const run = boot();
+	run.reset();
+	const html = run.document.documentElement;
+	const { menu } = workspaceMenu(run.document, ["Alpha", "Beta"]);
+	// The click handler calls beginWorkspacePicker() in the capture phase,
+	// before React can mount the portal. The attribute must therefore exist
+	// while the portal is still absent, so the first offsetHeight/offsetWidth
+	// read already sees the reserved band.
+	run.tools.beginWorkspacePicker();
+	assert.equal(html.getAttribute("data-rdsh-workspace-picking"), "", "the first placement was not armed");
+	assert.equal(run.document.querySelector('[role="menu"]'), null, "the fixture mounted the portal too early");
+
+	run.document.body.appendChild(menu);
+	run.flushObservers();
+	assert.ok(menu.querySelector("[data-rdsh-workspace-search]"), "the armed portal was not decorated");
+	assert.equal(menu.getAttribute("data-rdsh-workspace-menu"), "", "the tagged geometry hook is missing");
+	assert.equal(html.hasAttribute("data-rdsh-workspace-picking"), false, "the armed state outlived the tagged menu");
+});
+
+test("#39 a keyboard-opened session-less composer is armed before the menu mounts", () => {
+	const run = boot();
+	run.reset();
+	// The hero draft editor opens the picker from Enter/Space without a click,
+	// so the click capture never sees it. Both keys must arm the reservation.
+	const card = element(run.document, "div", { "data-composer-card": "" });
+	const editor = element(run.document, "div", {
+		"data-composer-input": "",
+		"aria-haspopup": "menu",
+		"aria-expanded": "false",
+	});
+	card.append(editor);
+	run.document.body.append(card);
+	const key = (value) => event("keydown", editor, { key: value, shiftKey: false, ctrlKey: false, metaKey: false, altKey: false });
+
+	run.tools.armWorkspacePickerFromKey(key("Enter"));
+	assert.equal(run.document.documentElement.getAttribute("data-rdsh-workspace-picking"), "", "Enter did not arm the reservation");
+	run.tools.clearWorkspacePicker();
+
+	run.tools.armWorkspacePickerFromKey(key(" "));
+	assert.equal(run.document.documentElement.getAttribute("data-rdsh-workspace-picking"), "", "Space did not arm the reservation");
+	run.tools.clearWorkspacePicker();
+
+	// A normal session composer has no popup wiring: typing a space must not
+	// reserve the picker band or arm its observer.
+	const plain = element(run.document, "div", { "data-composer-input": "" });
+	run.document.body.append(plain);
+	run.tools.armWorkspacePickerFromKey(event("keydown", plain, { key: " " }));
+	assert.equal(run.document.documentElement.hasAttribute("data-rdsh-workspace-picking"), false, "a plain space armed the picker");
+	// The capture handler the browser installs must call this same path.
+	assert.match(CLIENT, /function onKeyDownCapture\(event\) \{[\s\S]{0,400}armWorkspacePickerFromKey\(event\)/, "the keydown listener does not arm the picker");
+});
+
+test("#39 the reserved band is released when no portal arrives, or on teardown", () => {
+	const timeout = boot();
+	timeout.reset();
+	timeout.tools.beginWorkspacePicker();
+	assert.equal(timeout.document.documentElement.hasAttribute("data-rdsh-workspace-picking"), true);
+	timeout.runTimers(1500);
+	assert.equal(timeout.document.documentElement.hasAttribute("data-rdsh-workspace-picking"), false, "the timeout kept the menu armed");
+
+	const cleared = boot();
+	cleared.reset();
+	cleared.tools.beginWorkspacePicker();
+	cleared.tools.clearWorkspacePicker();
+	assert.equal(cleared.document.documentElement.hasAttribute("data-rdsh-workspace-picking"), false, "clear kept the menu armed");
+
+	const disposed = boot();
+	disposed.reset();
+	disposed.tools.beginWorkspacePicker();
+	disposed.tools.disposeWorkspaceTools();
+	assert.equal(disposed.document.documentElement.hasAttribute("data-rdsh-workspace-picking"), false, "teardown kept the menu armed");
 });
 
 test("#39 picker filter, no-match row, Escape and removal", () => {
@@ -1159,6 +1240,151 @@ test("#43 filtering still works where CSS Custom Highlight is unavailable", () =
 	assert.equal(tree.app.querySelectorAll("mark").length, 0, "a fallback rewrote the tree");
 });
 
+test("#83 the clear button sits beside search, starts hidden and shows while typing", () => {
+	const run = boot();
+	run.reset();
+	const tree = filesTree(run.document);
+	run.tools.decorateWorkspaceFiles();
+	const search = tree.root.querySelector("[data-rdsh-files-search]");
+	const input = search.querySelector("input");
+	const submit = search.querySelector("[data-rdsh-files-search-button]");
+	const clear = search.querySelector("[data-rdsh-files-search-clear]");
+	assert.ok(clear, "the clear button was not created");
+	assert.equal(clear.parentElement, submit.parentElement, "the clear button left the search row");
+	assert.equal(clear.hidden, true, "the clear button is shown for an empty field");
+	assert.equal(clear.getAttribute("aria-label"), COPY.en["files.search.clear"], "the clear button has no accessible name");
+	assert.equal(clear.title, COPY.en["files.search.clear"], "the clear button has no tooltip");
+	assert.match(clear.innerHTML, /^<svg\b[^>]*aria-hidden="true"/, "the clear icon must use the hand-drawn SVG");
+	assert.doesNotMatch(clear.textContent + clear.innerHTML, /\p{Extended_Pictographic}/u, "the clear button must not use system emoji");
+	assert.equal(search.querySelectorAll("button").length, 2, "the search row lost or gained a button");
+
+	input.value = "app";
+	input.dispatchEvent(event("input", input));
+	assert.equal(clear.hidden, false, "typing did not reveal the clear button");
+	assert.equal(tree.readme.hasAttribute("data-rdsh-files-hidden"), false, "typing filtered without a submit");
+});
+
+test("#83 clear drops hiding, highlight and the no-hit row, then focuses the field", () => {
+	const run = boot();
+	run.reset();
+	const tree = filesTree(run.document);
+	run.tools.decorateWorkspaceFiles();
+	const search = tree.root.querySelector("[data-rdsh-files-search]");
+	const input = search.querySelector("input");
+	const submit = search.querySelector("[data-rdsh-files-search-button]");
+	const clear = search.querySelector("[data-rdsh-files-search-clear]");
+	const empty = search.querySelector("[data-rdsh-files-empty]");
+
+	input.value = "no-such-entry";
+	submit.dispatchEvent(event("click", submit));
+	assert.equal(empty.hidden, false, "setup did not show the no-hit row");
+
+	input.value = "app";
+	input.dispatchEvent(event("input", input));
+	submit.dispatchEvent(event("click", submit));
+	assert.equal(tree.readme.hasAttribute("data-rdsh-files-hidden"), true, "setup did not hide the non-hit");
+	assert.equal(run.sandbox.CSS.highlights.has("rdsh-files-search"), true, "setup did not highlight the hit");
+
+	const focusCalls = [];
+	input.focus = (options) => {
+		focusCalls.push(options);
+		run.document.activeElement = input;
+	};
+	clear.dispatchEvent(event("click", clear));
+	assert.equal(input.value, "", "clear did not empty the field");
+	assert.equal(tree.app.hasAttribute("data-rdsh-files-hidden"), false, "clear left a filtered hit hidden");
+	assert.equal(tree.readme.hasAttribute("data-rdsh-files-hidden"), false, "clear left a non-hit hidden");
+	assert.equal(tree.src.hasAttribute("data-rdsh-files-hidden"), false, "clear left an ancestor hidden");
+	assert.equal(run.sandbox.CSS.highlights.size, 0, "clear left the highlight behind");
+	assert.equal(empty.hidden, true, "clear left the no-hit row");
+	assert.equal(clear.hidden, true, "clear left its own button visible");
+	assert.equal(run.document.activeElement, input, "clear did not return focus to the field");
+	assert.equal(focusCalls.length, 1, "clear focused the field more than once");
+	assert.equal(focusCalls[0].preventScroll, true, "clear focused without preventScroll");
+});
+
+test("#83 a native search clear resets filtering without making typing incremental", () => {
+	const run = boot();
+	run.reset();
+	const tree = filesTree(run.document);
+	run.tools.decorateWorkspaceFiles();
+	const search = tree.root.querySelector("[data-rdsh-files-search]");
+	const input = search.querySelector("input");
+	const clear = search.querySelector("[data-rdsh-files-search-clear]");
+	const empty = search.querySelector("[data-rdsh-files-empty]");
+
+	input.value = "app";
+	input.dispatchEvent(event("input", input));
+	search.querySelector("[data-rdsh-files-search-button]").dispatchEvent(event("click", search.querySelector("[data-rdsh-files-search-button]")));
+	assert.equal(tree.readme.hasAttribute("data-rdsh-files-hidden"), true, "setup did not filter");
+	assert.equal(run.sandbox.CSS.highlights.has("rdsh-files-search"), true, "setup did not highlight");
+
+	// WebKit's native cancel control writes an empty value and emits input.
+	input.value = "";
+	input.dispatchEvent(event("input", input));
+	assert.equal(tree.app.hasAttribute("data-rdsh-files-hidden"), false, "native clear left a row hidden");
+	assert.equal(tree.readme.hasAttribute("data-rdsh-files-hidden"), false, "native clear left a row hidden");
+	assert.equal(run.sandbox.CSS.highlights.size, 0, "native clear left a highlight");
+	assert.equal(empty.hidden, true, "native clear left the no-hit row");
+	assert.equal(clear.hidden, true, "native clear left the clear button visible");
+
+	input.value = "src";
+	input.dispatchEvent(event("input", input));
+	assert.equal(tree.readme.hasAttribute("data-rdsh-files-hidden"), false, "typing filtered without a submit");
+	assert.equal(clear.hidden, false, "typing did not reveal the clear button");
+});
+
+test("#83 Escape clears the query and hides the clear button", () => {
+	const run = boot();
+	run.reset();
+	const tree = filesTree(run.document);
+	run.tools.decorateWorkspaceFiles();
+	const search = tree.root.querySelector("[data-rdsh-files-search]");
+	const input = search.querySelector("input");
+	const clear = search.querySelector("[data-rdsh-files-search-clear]");
+	const empty = search.querySelector("[data-rdsh-files-empty]");
+
+	input.value = "app";
+	input.dispatchEvent(event("input", input));
+	search.querySelector("[data-rdsh-files-search-button]").dispatchEvent(event("click", search.querySelector("[data-rdsh-files-search-button]")));
+	const escape = event("keydown", input, { key: "Escape" });
+	input.dispatchEvent(escape);
+	assert.equal(input.value, "", "Escape did not clear the query");
+	assert.equal(escape.defaultPrevented, true, "the clearing Escape was not consumed");
+	assert.equal(tree.app.hasAttribute("data-rdsh-files-hidden"), false, "Escape left a hit hidden");
+	assert.equal(tree.readme.hasAttribute("data-rdsh-files-hidden"), false, "Escape left a non-hit hidden");
+	assert.equal(run.sandbox.CSS.highlights.size, 0, "Escape left a highlight");
+	assert.equal(empty.hidden, true, "Escape left the no-hit row");
+	assert.equal(clear.hidden, true, "Escape left the clear button visible");
+});
+
+test("#83 clear is mobile-only and is removed with the search row on disposal", () => {
+	const desktop = boot({ mode: "desktop", width: 390 });
+	desktop.reset();
+	const desktopTree = filesTree(desktop.document);
+	assert.equal(desktop.tools, undefined, "a desktop boot installed the workspace tools");
+	assert.equal(desktopTree.root.querySelector("[data-rdsh-files-search-clear]"), null, "desktop got the clear button");
+
+	const run = boot();
+	run.reset();
+	const tree = filesTree(run.document);
+	run.tools.decorateWorkspaceFiles();
+	const search = tree.root.querySelector("[data-rdsh-files-search]");
+	const input = search.querySelector("input");
+	input.value = "app";
+	input.dispatchEvent(event("input", input));
+	search.querySelector("[data-rdsh-files-search-button]").dispatchEvent(event("click", search.querySelector("[data-rdsh-files-search-button]")));
+	const clear = search.querySelector("[data-rdsh-files-search-clear]");
+	assert.ok(clear, "setup did not create the clear button");
+
+	run.tools.disposeWorkspaceTools();
+	assert.equal(tree.root.querySelector("[data-rdsh-files-search]"), null, "dispose kept the search row");
+	assert.equal(tree.root.querySelector("[data-rdsh-files-search-clear]"), null, "dispose kept the clear button");
+	assert.equal(run.tools.filesSearch(), null, "dispose kept the search state");
+	assert.equal(run.sandbox.CSS.highlights.size, 0, "dispose kept a highlight");
+	assert.equal(tree.readme.hasAttribute("data-rdsh-files-hidden"), false, "dispose kept a row hidden");
+});
+
 
 test("#42 an unrelated container's scroll neither cancels the press nor closes the menu", () => {
 	const run = boot();
@@ -1372,6 +1598,7 @@ test("every new string exists in both copy packs", () => {
 		"workspace.search.noMatches",
 		"files.search.placeholder",
 		"files.search.submit",
+		"files.search.clear",
 		"files.search.noMatches",
 		"files.menu.root",
 		"files.menu.entry",

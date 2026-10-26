@@ -44,6 +44,9 @@ dsh plugin --profile web add link:/path/to/dsh-mobile-maxxing
 ```
 
 **必要なのはこれだけです。** 追加のプラグインも、`web-push` などのライブラリも要りません。
+日本語の共有 UI だけは任意の別パッケージ `rdsh-locale-ja` が所有します（この tarball には
+含まれず、自動では有効になりません）。完全な翻訳のローカル tarball から入れる手順は
+[`../rdsh-locale-ja/README.md`](../rdsh-locale-ja/README.md) にあります。
 
 ## できること
 
@@ -52,10 +55,13 @@ dsh plugin --profile web add link:/path/to/dsh-mobile-maxxing
 | インストール可能な PWA | ホーム画面に追加、オフライン起動、更新のお知らせ |
 | 通知 | アプリを見ている間はアプリ内バナー、それ以外は Web Push |
 | 通知音 | 合成した5種類。音量も設定可。音声ファイルは同梱しません |
-| スマホ/タブレットのレイアウト | サイドバーがドロワーに、設定は1タップ、コードは折り返し。幅ではなく端末で判定 |
+| スマホ/タブレットのレイアウト | サイドバーがドロワーに、設定は1タップ、コードは既定で折り返し（解除可）。幅ではなく端末で判定 |
 | コードレビュー | 折り返しを既定でON。右端の操作は「…」に集約し、PC で開く系は非表示 |
 | テーマ（ライト／ダーク） | 上流のトークンに追従。PC と別に「この端末だけ」の配色を選べる |
+| チャット表示（この端末のみ） | 作業の詳細・折りたたみ時機・実行中の Enter・性能表示を、この端末だけ上書き。共有設定は変更しない |
+| モバイル操作の細部 | ターミナルだけダーク、上端で過去ログを自動読み込み、Trajectory タブ非表示、右パネル見出し、ファイル検索のクリア、モデルメニューのセーフエリア、左端スワイプで戻る |
 | CJK 表示の修正（任意） | 別パッケージ `rdsh-markdown-cjk` を入れた場合のみ。このパッケージ本体は PC 側を変えないため、Markdown レンダラを書き換えません |
+| 日本語 UI（任意） | 別パッケージ `rdsh-locale-ja` をローカルの tarball から入れた場合のみ。この tarball には含まれず、自動で有効になりません |
 | セッションIDのコピー | セッションメニューに1行追加 |
 
 ## もっと詳しく
@@ -118,7 +124,10 @@ To develop against this checkout (installs the dependency and the bundle):
 dsh plugin --profile web add link:/path/to/dsh-mobile-maxxing
 ```
 
-**That is all.** No companion plugin, no `web-push`, no build step.
+**That is all.** No companion plugin, no `web-push`, no build step. The shared Japanese UI
+is owned only by the optional separate `rdsh-locale-ja` package (not in this tarball, never
+auto-enabled); see [`../rdsh-locale-ja/README.md`](../rdsh-locale-ja/README.md) for its
+local-tarball install.
 
 ## What it does
 
@@ -127,10 +136,13 @@ dsh plugin --profile web add link:/path/to/dsh-mobile-maxxing
 | Installable PWA | Add to home screen, offline launch, update notice |
 | Notifications | In-app banner while the app is on screen, Web Push otherwise |
 | Notification sounds | Five synthesised presets with a volume control; no audio files ship |
-| Mobile layout | Sidebar becomes a drawer, settings open in one tap, code wraps |
+| Mobile layout | Sidebar becomes a drawer, settings open in one tap, code wraps by default (toggle available) |
 | Code review | Wrap is on by default; header actions collapse into a "…" menu; native open-in-app buttons are hidden |
 | Light / dark theme | Follows the host tokens; a per-device palette can differ from the PC |
+| Chat view (this device) | Work-details verbosity, collapse timing, busy Enter and performance detail overridden for this browser only |
+| Mobile polish | Terminal-only dark, older history at scroll-to-top, hidden Trajectory tab, right-panel heading, file-search clear, model-menu safe area, left-edge swipe back |
 | CJK rendering (optional) | Only with the separate `rdsh-markdown-cjk` package; this package leaves the Markdown renderer stock to avoid changing the PC |
+| Japanese UI (optional) | Only with the separate `rdsh-locale-ja` package from its local tarball; it is not in this tarball and is never enabled automatically |
 | Session id copy | One row in the session row menu |
 
 ## More detail

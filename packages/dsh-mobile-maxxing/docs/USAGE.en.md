@@ -161,6 +161,8 @@ What changes:
 - Session rows keep their actions hidden until the menu or a long press
 - Right-panel tabs are finger-sized, and the tab strip scrolls sideways
 - Dragging inside the terminal scrolls it (the bundled xterm has no touch support)
+- The terminal gets a top key row for Esc, Tab, arrows and Ctrl; it stays above the keyboard.
+  Ctrl applies to the next key only: Ctrl then C sends SIGINT, and tapping Ctrl again cancels it.
 
 The long press opens the same menu as the `...` button. Swipe right on an open drawer to
 close it; swipe left to open it.

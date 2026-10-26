@@ -55,6 +55,19 @@ class FakeEvent {
 	}
 }
 
+/** Fire the listeners on one node for one phase of a fake event. */
+function fireFakeListeners(node, event, capture) {
+	const listeners = node.listeners?.get(event.type);
+	if (listeners === undefined) return;
+	event.currentTarget = node;
+	event.immediateStopped = false;
+	for (const entry of [...listeners]) {
+		if (entry.capture !== capture) continue;
+		if (event.immediateStopped === true) break;
+		entry.handler(event);
+	}
+}
+
 class FakeMouseEvent extends FakeEvent {
 	constructor(type, init = {}) {
 		super(type, init);
@@ -94,6 +107,7 @@ class FakeElement {
 		};
 		this.dataset = {};
 		this.dispatched = [];
+		this.listeners = new Map();
 		this.clicks = 0;
 		this.scrollLeft = 0;
 	}
@@ -116,7 +130,12 @@ class FakeElement {
 		return next;
 	}
 	closest(selector) {
-		if (typeof this._closest === "function") return this._closest.call(this, selector) ?? null;
+		if (typeof this._closest === "function") {
+			const found = this._closest.call(this, selector);
+			if (found !== null && found !== undefined) return found;
+		}
+		const attribute = /^\[(data-rdsh-[a-z0-9-]+)\]$/.exec(selector);
+		if (attribute !== null && this.hasAttribute(attribute[1])) return this;
 		return null;
 	}
 	matches(selector) {
@@ -136,12 +155,41 @@ class FakeElement {
 	}
 	dispatchEvent(event) {
 		this.dispatched.push(event);
-		return true;
+		// A small capture/bubble path so the behaviour tests can drive the
+		// plugin's real delegated listeners (a key row is a row of buttons).
+		if (event.target === undefined || event.target === null) event.target = this;
+		const path = [];
+		for (let node = this; node !== null && node !== undefined; node = node.parentElement) path.push(node);
+		for (let index = path.length - 1; index >= 0; index -= 1) {
+			fireFakeListeners(path[index], event, true);
+			if (event.propagationStopped === true) return !event.defaultPrevented;
+		}
+		for (let index = 0; index < path.length; index += 1) {
+			fireFakeListeners(path[index], event, false);
+			if (event.propagationStopped === true) return !event.defaultPrevented;
+		}
+		return !event.defaultPrevented;
+	}
+	addEventListener(type, handler, options) {
+		const capture = options === true || (options !== null && options !== undefined && options.capture === true);
+		const list = this.listeners.get(type) ?? [];
+		list.push({ handler, capture });
+		this.listeners.set(type, list);
+	}
+	removeEventListener(type, handler, options) {
+		const capture = options === true || (options !== null && options !== undefined && options.capture === true);
+		const list = this.listeners.get(type) ?? [];
+		this.listeners.set(type, list.filter((entry) => entry.handler !== handler || entry.capture !== capture));
 	}
 	click() {
 		this.clicks += 1;
 	}
-	append() {}
+	append(...nodes) {
+		for (const node of nodes) {
+			this.children.push(node);
+			node.parentElement = this;
+		}
+	}
 	appendChild(node) {
 		this.children.push(node);
 		node.parentElement = this;
@@ -151,13 +199,18 @@ class FakeElement {
 		this.children = this.children.filter((child) => child !== node);
 		return node;
 	}
-	insertBefore(node) {
-		this.children.push(node);
+	insertBefore(node, reference = null) {
+		const index = reference === null || reference === undefined ? -1 : this.children.indexOf(reference);
+		if (index === -1) this.children.push(node);
+		else this.children.splice(index, 0, node);
 		node.parentElement = this;
 		return node;
 	}
 	remove() {
 		this.isConnected = false;
+		if (this.parentElement !== null) {
+			this.parentElement.children = this.parentElement.children.filter((child) => child !== this);
+		}
 	}
 	replaceChildren() {
 		this.children = [];
@@ -165,8 +218,6 @@ class FakeElement {
 	after() {}
 	before() {}
 	prepend() {}
-	addEventListener() {}
-	removeEventListener() {}
 	focus() {}
 	blur() {}
 	contains(node) {
@@ -177,9 +228,11 @@ class FakeElement {
 	}
 	set innerHTML(_value) {}
 	get textContent() {
-		return "";
+		return this._textContent ?? "";
 	}
-	set textContent(_value) {}
+	set textContent(value) {
+		this._textContent = String(value);
+	}
 }
 
 /** A value that answers every operation without doing anything. */
@@ -877,13 +930,36 @@ test("a long press on a tab does not open the text callout menu", () => {
 /** Height of the fixture's scrollbar track, in pixels. */
 const TERMINAL_SCROLL_TRACK = 200;
 
-function terminalFixture(doc, collapseFixture) {
+function terminalFixture(doc, collapseFixture, emulator = null) {
 	const section = new FakeElement("section");
 	section.setAttribute("data-sidebar-terminal", "");
 	const screen = new FakeElement("div");
 	screen._rect = () => ({ x: 0, y: 44, top: 44, left: 0, right: 390, bottom: 744, width: 390, height: 700 });
 	const xterm = new FakeElement("div");
 	xterm.parentElement = screen;
+	const textarea = new FakeElement("textarea");
+	textarea.setAttribute("class", "xterm-helper-textarea");
+	textarea.focusCount = 0;
+	textarea.blurCount = 0;
+	textarea.focus = () => {
+		textarea.focusCount += 1;
+		doc.activeElement = textarea;
+	};
+	textarea.blur = () => {
+		textarea.blurCount += 1;
+	};
+	textarea.parentElement = xterm;
+	xterm.children.push(textarea);
+	if (emulator !== null) {
+		screen["__reactFiber$test"] = {
+			return: {
+				memoizedState: {
+					memoizedState: { current: emulator },
+					next: null,
+				},
+			},
+		};
+	}
 	const scroller = new FakeElement("div");
 	scroller.setAttribute("class", "xterm-scrollable-element");
 	// The vertical scrollbar is where xterm's JS-owned scroll position becomes
@@ -896,8 +972,13 @@ function terminalFixture(doc, collapseFixture) {
 	slider.setAttribute("class", "slider");
 	slider.style.top = "0px";
 	slider.style.height = `${TERMINAL_SCROLL_TRACK}px`;
-	section._querySelector = (selector) => (selector === ".xterm" ? xterm : null);
+	section._querySelector = (selector) => {
+		if (selector === ".xterm") return xterm;
+		if (selector === "textarea.xterm-helper-textarea, textarea") return textarea;
+		return null;
+	};
 	screen.parentElement = section;
+	section.children.push(screen);
 	screen._querySelector = (selector) => {
 		if (selector === ".xterm-scrollable-element") return scroller;
 		if (selector === ".xterm-screen") return null;
@@ -913,7 +994,7 @@ function terminalFixture(doc, collapseFixture) {
 		if (selector === "[data-rdsh-rightpanel]") return [];
 		return [];
 	};
-	return { section, screen, xterm, scroller, bar, slider };
+	return { section, screen, xterm, textarea, scroller, bar, slider };
 }
 
 /** Move the fixture's terminal scrollbar, as xterm does when output arrives. */
@@ -1547,4 +1628,261 @@ test("a desktop boot installs neither the route swipe nor the mobile drawer", ()
 	assert.equal(crumb.clicks, 0, "a desktop route detail was sent back");
 	assert.equal(drawerPresses, 0, "a desktop route detail opened a drawer");
 	booted.disposeAll();
+});
+
+/* ---------------------------------------------------------------------- */
+/* #78: mobile terminal special-key row                                   */
+/* ---------------------------------------------------------------------- */
+
+/** A stand-in for the xterm object the React ref points at. */
+function keyEmulator(applicationCursor = false) {
+	return {
+		modes: { applicationCursorKeysMode: applicationCursor },
+		sent: [],
+		input(data) {
+			this.sent.push(data);
+		},
+	};
+}
+
+function terminalKeyRow(terminal) {
+	return terminal.section.children.find((child) => child.hasAttribute("data-rdsh-special-keys")) ?? null;
+}
+
+function terminalKeyButton(row, id) {
+	return row.children.find((child) => child.getAttribute("data-rdsh-terminal-key") === id) ?? null;
+}
+
+/** Press one row button the way a finger does. */
+function pressTerminalKey(row, id) {
+	const button = terminalKeyButton(row, id);
+	assert.ok(button, "the " + id + " key exists");
+	const event = new FakeEvent("pointerdown", { bubbles: true, cancelable: true });
+	event.button = 0;
+	button.dispatchEvent(event);
+	return { button, event };
+}
+
+function terminalKeyEvent(type, fields = {}) {
+	const event = new FakeEvent(type, { bubbles: true, cancelable: true });
+	for (const [name, value] of Object.entries(fields)) event[name] = value;
+	return event;
+}
+
+test("#78 the mobile terminal gets one labelled, ordered key row above xterm", () => {
+	const booted = bootGestures({ narrow: true });
+	const collapse = panelFixture(booted.doc);
+	const emulator = keyEmulator();
+	const terminal = terminalFixture(booted.doc, collapse, emulator);
+	booted.drainFrames();
+
+	const row = terminalKeyRow(terminal);
+	assert.ok(row, "no row was mounted");
+	assert.equal(terminal.section.children.filter((child) => child.hasAttribute("data-rdsh-special-keys")).length, 1, "the row was mounted twice");
+	assert.equal(row.parentElement, terminal.section, "the row is not a direct child of the terminal section");
+	assert.ok(terminal.section.children.indexOf(row) < terminal.section.children.indexOf(terminal.screen), "the row is not above the xterm mount");
+	assert.equal(row.getAttribute("role"), "group");
+	assert.equal(row.getAttribute("aria-label"), COPY.en["terminalKeys.label"]);
+	assert.deepEqual(row.children.map((button) => button.getAttribute("data-rdsh-terminal-key")), ["escape", "tab", "up", "down", "left", "right", "ctrl"]);
+	assert.equal(terminalKeyButton(row, "escape").textContent, "Esc");
+	assert.equal(terminalKeyButton(row, "tab").textContent, "Tab");
+	assert.equal(terminalKeyButton(row, "up").getAttribute("aria-label"), "Arrow up");
+	assert.equal(terminalKeyButton(row, "ctrl").textContent, "Ctrl");
+	assert.equal(terminalKeyButton(row, "ctrl").getAttribute("aria-pressed"), "false");
+
+	// The test seam is the same pure table production uses.
+	const api = booted.sandbox.__RDSH_MOBILE_UX__;
+	assert.equal(api.specialKeys.sequence("up", false, false), "\x1b[A");
+	assert.equal(api.specialKeys.sequence("up", true, false), "\x1bOA");
+	assert.equal(api.specialKeys.controlByte("c"), "\x03");
+	booted.disposeAll();
+});
+
+test("#78 Esc, Tab and arrows send the exact PTY sequences in both cursor modes", () => {
+	const booted = bootGestures({ narrow: true });
+	const collapse = panelFixture(booted.doc);
+	const emulator = keyEmulator();
+	const terminal = terminalFixture(booted.doc, collapse, emulator);
+	booted.drainFrames();
+	const row = terminalKeyRow(terminal);
+	assert.ok(row);
+
+	const sent = (expected) => {
+		assert.deepEqual(emulator.sent, expected);
+		emulator.sent.length = 0;
+	};
+	let press = pressTerminalKey(row, "escape");
+	sent(["\x1b"]);
+	assert.equal(press.event.defaultPrevented, true, "a key press let the button steal focus");
+	press = pressTerminalKey(row, "tab");
+	sent(["\t"]);
+	press = pressTerminalKey(row, "up");
+	sent(["\x1b[A"]);
+	press = pressTerminalKey(row, "down");
+	sent(["\x1b[B"]);
+	press = pressTerminalKey(row, "right");
+	sent(["\x1b[C"]);
+	press = pressTerminalKey(row, "left");
+	sent(["\x1b[D"]);
+
+	emulator.modes.applicationCursorKeysMode = true;
+	pressTerminalKey(row, "up");
+	sent(["\x1bOA"]);
+	pressTerminalKey(row, "down");
+	sent(["\x1bOB"]);
+	pressTerminalKey(row, "right");
+	sent(["\x1bOC"]);
+	pressTerminalKey(row, "left");
+	sent(["\x1bOD"]);
+
+	// Focus stays in the hidden textarea: the keyboard and an IME composition
+	// must survive a row tap.
+	assert.equal(booted.doc.activeElement, terminal.textarea, "the row did not focus the terminal input");
+	assert.ok(terminal.textarea.focusCount > 0, "the terminal input was never focused");
+	assert.equal(terminal.textarea.blurCount, 0, "the row blurred the terminal input");
+	booted.disposeAll();
+});
+
+test("#78 Ctrl is a one-shot modifier and Ctrl+C becomes ETX", () => {
+	const booted = bootGestures({ narrow: true });
+	const collapse = panelFixture(booted.doc);
+	const emulator = keyEmulator();
+	const terminal = terminalFixture(booted.doc, collapse, emulator);
+	booted.drainFrames();
+	const row = terminalKeyRow(terminal);
+	const ctrl = terminalKeyButton(row, "ctrl");
+	assert.ok(row);
+
+	pressTerminalKey(row, "ctrl");
+	assert.deepEqual(emulator.sent, [], "Ctrl alone sent input");
+	assert.equal(ctrl.getAttribute("aria-pressed"), "true", "Ctrl was not visibly armed");
+
+	pressTerminalKey(row, "up");
+	assert.deepEqual(emulator.sent, ["\x1b[1;5A"], "Ctrl+Up is not the xterm CSI 1;5 form");
+	assert.equal(ctrl.getAttribute("aria-pressed"), "false", "the one-shot modifier survived its key");
+	emulator.sent.length = 0;
+	pressTerminalKey(row, "up");
+	assert.deepEqual(emulator.sent, ["\x1b[A"], "the next arrow kept Ctrl");
+	emulator.sent.length = 0;
+
+	// Pressing the armed modifier again cancels it instead of latching.
+	pressTerminalKey(row, "ctrl");
+	pressTerminalKey(row, "ctrl");
+	assert.deepEqual(emulator.sent, [], "cancelling Ctrl sent input");
+	assert.equal(ctrl.getAttribute("aria-pressed"), "false");
+
+	// A soft-keyboard C is converted before xterm sees it.
+	pressTerminalKey(row, "ctrl");
+	const keydown = terminalKeyEvent("keydown", { key: "c", code: "KeyC", keyCode: 67 });
+	terminal.textarea.dispatchEvent(keydown);
+	assert.deepEqual(emulator.sent, ["\x03"], "Ctrl then C did not send ETX");
+	assert.equal(keydown.defaultPrevented, true, "the original C reached xterm too");
+	assert.equal(ctrl.getAttribute("aria-pressed"), "false", "Ctrl stayed armed after C");
+
+	// iOS may only give beforeinput; it must be consumed the same way.
+	pressTerminalKey(row, "ctrl");
+	emulator.sent.length = 0;
+	const before = terminalKeyEvent("beforeinput", { data: "c", inputType: "insertText" });
+	terminal.textarea.dispatchEvent(before);
+	assert.deepEqual(emulator.sent, ["\x03"], "beforeinput C did not send ETX");
+	assert.equal(before.defaultPrevented, true, "the original beforeinput reached xterm too");
+
+	// An IME composition is not ours to intercept.
+	pressTerminalKey(row, "ctrl");
+	emulator.sent.length = 0;
+	terminal.textarea.dispatchEvent(terminalKeyEvent("keydown", { key: "c", keyCode: 67, isComposing: true }));
+	terminal.textarea.dispatchEvent(terminalKeyEvent("keydown", { key: "Process", keyCode: 229 }));
+	terminal.textarea.dispatchEvent(terminalKeyEvent("beforeinput", { data: "c", isComposing: true }));
+	assert.deepEqual(emulator.sent, [], "an IME composition was turned into a control byte");
+	assert.equal(ctrl.getAttribute("aria-pressed"), "true", "an IME composition consumed Ctrl");
+
+	// Ctrl with a non-character terminal key still consumes the modifier.
+	pressTerminalKey(row, "ctrl");
+	assert.equal(ctrl.getAttribute("aria-pressed"), "false", "the IME test left Ctrl armed");
+	pressTerminalKey(row, "ctrl");
+	assert.equal(ctrl.getAttribute("aria-pressed"), "true");
+	pressTerminalKey(row, "escape");
+	assert.deepEqual(emulator.sent, ["\x1b"], "Ctrl+Esc is not a plain Esc");
+	assert.equal(ctrl.getAttribute("aria-pressed"), "false");
+	booted.disposeAll();
+});
+
+test("#78 the textarea fallback sends bytes when the emulator ref is unavailable", () => {
+	const booted = bootGestures({ narrow: true });
+	const collapse = panelFixture(booted.doc);
+	const terminal = terminalFixture(booted.doc, collapse);
+	booted.drainFrames();
+	const row = terminalKeyRow(terminal);
+	assert.ok(row);
+
+	pressTerminalKey(row, "escape");
+	let event = terminal.textarea.dispatched.at(-1);
+	assert.equal(event.type, "input", "the fallback did not use xterm's input handler");
+	assert.equal(event.data, "\x1b");
+	assert.equal(event.inputType, "insertText");
+	assert.equal(event.composed, false);
+
+	pressTerminalKey(row, "up");
+	event = terminal.textarea.dispatched.at(-1);
+	assert.equal(event.data, "\x1b[A", "the fallback lost the normal arrow sequence");
+
+	pressTerminalKey(row, "ctrl");
+	terminal.textarea.dispatchEvent(terminalKeyEvent("keydown", { key: "c", keyCode: 67 }));
+	event = terminal.textarea.dispatched.at(-1);
+	assert.equal(event.type, "input");
+	assert.equal(event.data, "\x03", "the fallback lost Ctrl+C");
+	assert.equal(booted.doc.activeElement, terminal.textarea, "the fallback lost focus");
+	booted.disposeAll();
+});
+
+test("#78 the key row is mobile-only, idempotent, hidden with its tab, and disposed", () => {
+	const desktop = bootGestures({ narrow: false, mode: "desktop", width: 1024 });
+	const desktopCollapse = panelFixture(desktop.doc, 1024);
+	const desktopTerminal = terminalFixture(desktop.doc, desktopCollapse, keyEmulator());
+	desktop.drainFrames();
+	assert.equal(terminalKeyRow(desktopTerminal), null, "a desktop got the key row");
+	assert.equal(desktop.sandbox.__RDSH_MOBILE_UX__, undefined, "a desktop built the mobile half");
+	desktop.disposeAll();
+
+	const booted = bootGestures({ narrow: true });
+	const collapse = panelFixture(booted.doc);
+	const emulator = keyEmulator();
+	const terminal = terminalFixture(booted.doc, collapse, emulator);
+	booted.drainFrames();
+	const row = terminalKeyRow(terminal);
+	assert.ok(row);
+	const api = booted.sandbox.__RDSH_MOBILE_UX__;
+	api.specialKeys.decorate();
+	api.specialKeys.decorate();
+	assert.equal(terminal.section.children.filter((child) => child.hasAttribute("data-rdsh-special-keys")).length, 1, "a decorate pass duplicated the row");
+
+	// Keyboard open/close only changes the screen band; the row stays above it.
+	booted.visualViewport.height = 544;
+	visualViewportHandler(booted)();
+	booted.drainFrames();
+	assert.equal(terminal.screen.style.height, "500px", "the fit stopped following the keyboard");
+	assert.equal(terminalKeyRow(terminal), row, "the row was lost while the keyboard was open");
+
+	// A hidden terminal tab drops the row (and its listeners); becoming
+	// visible again builds a fresh one.
+	terminal.section._closest = (selector) => (selector === "[hidden]" ? {} : null);
+	api.specialKeys.decorate();
+	assert.equal(terminalKeyRow(terminal), null, "a hidden tab kept its key row");
+	assert.equal((terminal.section.listeners.get("keydown") ?? []).length, 0, "a hidden tab kept its key listener");
+	terminal.section._closest = () => null;
+	api.specialKeys.decorate();
+	const fresh = terminalKeyRow(terminal);
+	assert.ok(fresh, "a visible tab did not get its row back");
+	assert.notEqual(fresh, row, "the removed row object was reused");
+
+	pressTerminalKey(fresh, "escape");
+	assert.deepEqual(emulator.sent, ["\x1b"]);
+	const sent = emulator.sent.length;
+	booted.disposeAll();
+	assert.equal(fresh.isConnected, false, "the row survived dispose");
+	assert.equal(terminal.section.children.includes(fresh), false, "the row is still in the terminal");
+	assert.equal((terminal.section.listeners.get("keydown") ?? []).length, 0, "the terminal key listener survived dispose");
+	assert.equal((terminal.section.listeners.get("beforeinput") ?? []).length, 0, "the terminal beforeinput listener survived dispose");
+	terminal.textarea.dispatchEvent(terminalKeyEvent("keydown", { key: "c", keyCode: 67 }));
+	assert.equal(emulator.sent.length, sent, "a disposed row still sent input");
 });

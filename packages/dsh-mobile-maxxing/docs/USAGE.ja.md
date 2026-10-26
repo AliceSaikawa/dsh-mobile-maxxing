@@ -142,6 +142,9 @@ storage のいずれにも触れません。
 右パネルだけは **768px 以上**で会話の横にドックし（上流のドック表示）、768px 未満では
 従来どおり全画面シートになります。既存の 380px 以下のコンポーザー圧縮は寸法調整として残しています。
 
+ターミナル上部には、キーボード表示中でも隠れない Esc / Tab / 矢印 / Ctrl のキー行が出ます。
+Ctrl は次の1キーにだけ効き、Ctrl の次に C を押すと SIGINT になります。もう一度 Ctrl を押すと解除できます。
+
 実行中セッションのラベルの動きは `mobileUx.runningAnimation` で選べます（`aurora` /
 `breathing` / `outline` / `none`、既定は `outline`）。3案のモックアップはリポジトリの
 `packages/dsh-mobile-maxxing/mockups/` にあります（配布物には含みません）。

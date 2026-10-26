@@ -3412,6 +3412,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       releaseSafeArea();
       releaseViewportLock();
       releaseDeviceTheme();
+      disposeTerminalKeys();
       clearTerminalFit();
       removeRightPanelHeading();
     }
@@ -6060,6 +6061,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       decorateRightPanel();
       decorateRightPanelTabs();
       decorateRightPanelHeading();
+      decorateTerminalKeys();
       decorateWorkspaceFiles();
       decorateCodePreview();
       decoratePreviewTools();
@@ -8513,6 +8515,349 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     function endTerminalDrag() {
       terminalDrag = null;
+    }
+
+    // ---------------------------------------------------------------------
+    // Terminal: mobile special-key row (#78)
+    //
+    // A phone has no Esc, Tab, arrow or Ctrl key. This row sits above the
+    // xterm mount and sends the key through the terminal's real input path:
+    // the upstream emulator is reached through the React ref on its mount
+    // (upstream 0.2.1-rc.2 keeps it in a useRef and exposes no terminal
+    // service), and xterm.input() feeds the same onData subscription the
+    // hardware keyboard uses. The ref lookup is deliberately defensive: if a
+    // later upstream build moves the emulator, every key falls back to the
+    // hidden helper textarea's own input handler, which still ends in
+    // onData -> model.write. No synthetic keyboard event is sent.
+    //
+    // Arrow keys are built from the emulator's live DECCKM (application
+    // cursor) mode, so a shell that set ESC[?1h gets ESC O A while the normal
+    // screen gets ESC [ A. Ctrl is an explicit one-shot modifier: it applies
+    // to exactly the next terminal key, then clears. Pressing it again while
+    // armed cancels it. Ctrl+C therefore works either with the next row key
+    // (Ctrl + arrow -> ESC[1;5A) or with the soft keyboard's C, which the
+    // capture handler converts before xterm sees it.
+    //
+    // The row is a flex child of upstream's terminal section, before its
+    // .screen mount, so the existing ResizeObserver/fit (#67) measures the
+    // smaller screen and keeps the last rows above the keyboard. Only the
+    // hidden textarea receives focus: the row never blurs it, so the iOS
+    // keyboard and an in-flight IME composition are left alone.
+    // ---------------------------------------------------------------------
+    const TERMINAL_KEY_ROWS = new Map();
+    const TERMINAL_KEYS = [
+      { id: "escape", textKey: "terminalKeys.esc", labelKey: "terminalKeys.escape" },
+      { id: "tab", textKey: "terminalKeys.tab", labelKey: "terminalKeys.tab" },
+      { id: "up", textKey: "terminalKeys.up", labelKey: "terminalKeys.arrowUp" },
+      { id: "down", textKey: "terminalKeys.down", labelKey: "terminalKeys.arrowDown" },
+      { id: "left", textKey: "terminalKeys.left", labelKey: "terminalKeys.arrowLeft" },
+      { id: "right", textKey: "terminalKeys.right", labelKey: "terminalKeys.arrowRight" },
+      { id: "ctrl", textKey: "terminalKeys.ctrl", labelKey: "terminalKeys.control" },
+    ];
+
+    /**
+     * The bytes one row key sends.
+     *
+     * Mirrors xterm's own key table for the keys this row owns: Esc and Tab
+     * are single C0 bytes, arrows honour DECCKM, and a Ctrl-modified arrow
+     * uses the CSI 1;5 form xterm emits for any Ctrl+arrow.
+     */
+    function terminalKeySequence(key, applicationCursor = false, control = false) {
+      switch (key) {
+        case "escape": return "\x1b";
+        case "tab": return "\t";
+        case "up": return control ? "\x1b[1;5A" : applicationCursor ? "\x1bOA" : "\x1b[A";
+        case "down": return control ? "\x1b[1;5B" : applicationCursor ? "\x1bOB" : "\x1b[B";
+        case "right": return control ? "\x1b[1;5C" : applicationCursor ? "\x1bOC" : "\x1b[C";
+        case "left": return control ? "\x1b[1;5D" : applicationCursor ? "\x1bOD" : "\x1b[D";
+        default: return "";
+      }
+    }
+
+    /**
+     * The C0 byte Ctrl+<key> means, or null when the key has no such form.
+     *
+     * Covers the printable letters and the punctuation xterm maps to a
+     * control byte; every other key is left to the terminal's own handler.
+     */
+    function terminalControlByte(key) {
+      if (typeof key !== "string" || key.length !== 1) return null;
+      const upper = key.toUpperCase();
+      const code = upper.charCodeAt(0);
+      if (code >= 65 && code <= 90) return String.fromCharCode(code - 64);
+      switch (key) {
+        case " ": return "\x00";
+        case "@": return "\x00";
+        case "[": return "\x1b";
+        case "\\": return "\x1c";
+        case "]": return "\x1d";
+        case "^": return "\x1e";
+        case "_": return "\x1f";
+        case "?": return "\x7f";
+        default: return null;
+      }
+    }
+
+    /**
+     * The xterm instance behind a mounted terminal, or null.
+     *
+     * Upstream's TerminalScreen puts the emulator in a React useRef on the
+     * host node that xterm was opened into. React prefixes the fiber key with
+     * a per-render suffix, so the lookup matches the prefix and then scans
+     * the hook list for a current value that carries xterm's input().
+     * A changed hook order or a different host simply returns null,
+     * and the caller uses the textarea route below.
+     */
+    function terminalXterm(section) {
+      const terminal = section.querySelector(".xterm");
+      const mount = terminal === null || terminal === undefined ? null : terminal.parentElement;
+      if (mount === null || mount === undefined) return null;
+      for (const name of Object.keys(mount)) {
+        if (!name.startsWith("__reactFiber$")) continue;
+        let fiber = mount[name];
+        for (let depth = 0; fiber !== null && fiber !== undefined && depth < 6; depth += 1, fiber = fiber.return) {
+          let hook = fiber.memoizedState;
+          for (let index = 0; hook !== null && hook !== undefined && index < 24; index += 1, hook = hook.next) {
+            const current = hook.memoizedState;
+            const value = current !== null && typeof current === "object" ? current.current : undefined;
+            if (value !== null && value !== undefined && typeof value.input === "function") return value;
+          }
+        }
+      }
+      return null;
+    }
+
+    /** The hidden textarea that is xterm's real keyboard surface. */
+    function terminalTextarea(section) {
+      return section.querySelector("textarea.xterm-helper-textarea, textarea");
+    }
+
+    /** Keep the keyboard up: focus the terminal, never the row button. */
+    function focusTerminalInput(section) {
+      const textarea = terminalTextarea(section);
+      if (textarea === null) return null;
+      if (typeof textarea.focus === "function") {
+        try {
+          textarea.focus({ preventScroll: true });
+        } catch (error) {
+          textarea.focus();
+        }
+      }
+      return textarea;
+    }
+
+    /**
+     * Send bytes through xterm's own input event handler.
+     *
+     * This is the fallback when the React ref is not readable. It feeds
+     * xterm's _inputEvent -> coreService -> onData path directly, without a
+     * KeyboardEvent or a textarea value change. Arrow keys use normal-cursor
+     * bytes here: without the emulator object there is no DECCKM to read.
+     */
+    function sendTerminalInput(section, data) {
+      const textarea = terminalTextarea(section);
+      if (textarea === null) return;
+      const event = new Event("input", { bubbles: true, cancelable: true });
+      Object.defineProperty(event, "data", { value: data, configurable: true });
+      Object.defineProperty(event, "inputType", { value: "insertText", configurable: true });
+      Object.defineProperty(event, "composed", { value: false, configurable: true });
+      textarea.dispatchEvent(event);
+    }
+
+    /** Feed the terminal raw bytes, preferring the live xterm handle. */
+    function sendTerminalBytes(section, data) {
+      if (data === "") return;
+      const xterm = terminalXterm(section);
+      if (xterm !== null) xterm.input(data);
+      else sendTerminalInput(section, data);
+    }
+
+    /** Read DECCKM without letting a shape change break the key row. */
+    function terminalApplicationCursor(section) {
+      const xterm = terminalXterm(section);
+      if (xterm === null) return false;
+      try {
+        return xterm.modes !== null && xterm.modes !== undefined && xterm.modes.applicationCursorKeysMode === true;
+      } catch (error) {
+        return false;
+      }
+    }
+
+    function setSpecialKeyControl(state, armed) {
+      state.control = armed;
+      if (state.ctrlButton !== null) state.ctrlButton.setAttribute("aria-pressed", armed ? "true" : "false");
+    }
+
+    function activateSpecialKey(state, key) {
+      if (key === "ctrl") {
+        setSpecialKeyControl(state, !state.control);
+        return;
+      }
+      const control = state.control;
+      const sequence = terminalKeySequence(key, terminalApplicationCursor(state.section), control);
+      sendTerminalBytes(state.section, sequence);
+      if (control) setSpecialKeyControl(state, false);
+    }
+
+    function onSpecialKeyPointerDown(event) {
+      const row = event.currentTarget;
+      const state = row === null || row === undefined ? undefined : TERMINAL_KEY_ROWS.get(row.parentElement);
+      if (state === undefined) return;
+      const target = event.target;
+      const button = target !== null && target !== undefined && typeof target.closest === "function"
+        ? target.closest("[data-rdsh-terminal-key]")
+        : null;
+      if (button === null) return;
+      if (event.button !== undefined && event.button !== 0) return;
+      if (event.cancelable) event.preventDefault();
+      if (typeof event.stopPropagation === "function") event.stopPropagation();
+      focusTerminalInput(state.section);
+      activateSpecialKey(state, button.getAttribute("data-rdsh-terminal-key"));
+    }
+
+    function onSpecialKeyButtonKeyDown(event) {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      const row = event.currentTarget;
+      const state = row === null || row === undefined ? undefined : TERMINAL_KEY_ROWS.get(row.parentElement);
+      if (state === undefined) return;
+      const target = event.target;
+      const button = target !== null && target !== undefined && typeof target.closest === "function"
+        ? target.closest("[data-rdsh-terminal-key]")
+        : null;
+      if (button === null) return;
+      if (event.cancelable) event.preventDefault();
+      if (typeof event.stopPropagation === "function") event.stopPropagation();
+      activateSpecialKey(state, button.getAttribute("data-rdsh-terminal-key"));
+    }
+
+    /**
+     * Apply the one-shot Ctrl to a soft-keyboard character before xterm does.
+     *
+     * keydown covers Android and hardware keyboards; beforeinput covers iOS,
+     * where the virtual keyboard may report Unidentified on keydown. An IME
+     * composition is never intercepted. Once a character is consumed the
+     * modifier clears, so it cannot leak into the next key.
+     */
+    function onSpecialKeyTextKeyDown(event) {
+      const state = TERMINAL_KEY_ROWS.get(event.currentTarget);
+      if (state === undefined || !state.control || event.isComposing === true || event.keyCode === 229) return;
+      if (event.target !== terminalTextarea(state.section)) return;
+      if (event.ctrlKey === true || event.altKey === true || event.metaKey === true) return;
+      const byte = terminalControlByte(event.key);
+      if (byte === null) {
+        if (typeof event.key === "string" && event.key.length > 1) setSpecialKeyControl(state, false);
+        return;
+      }
+      if (event.cancelable) event.preventDefault();
+      if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+      sendTerminalBytes(state.section, byte);
+      setSpecialKeyControl(state, false);
+    }
+
+    function onSpecialKeyBeforeInput(event) {
+      const state = TERMINAL_KEY_ROWS.get(event.currentTarget);
+      if (state === undefined || !state.control || event.isComposing === true) return;
+      if (event.target !== terminalTextarea(state.section)) return;
+      if (typeof event.data !== "string" || event.data.length !== 1) return;
+      const byte = terminalControlByte(event.data);
+      if (byte === null) return;
+      if (event.cancelable) event.preventDefault();
+      if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+      sendTerminalBytes(state.section, byte);
+      setSpecialKeyControl(state, false);
+    }
+
+    /** Build one row for a mounted terminal section. */
+    function mountTerminalKeyRow(section) {
+      const terminal = section.querySelector(".xterm");
+      const mount = terminal === null || terminal === undefined ? null : terminal.parentElement;
+      if (mount === null || mount === undefined) return false;
+      const row = document.createElement("div");
+      row.className = "rdsh-mux-terminal-keys";
+      row.setAttribute("data-rdsh-special-keys", "");
+      row.setAttribute("role", "group");
+      row.setAttribute("aria-label", t("terminalKeys.label"));
+      let ctrlButton = null;
+      for (const spec of TERMINAL_KEYS) {
+        const button = document.createElement("button");
+        button.setAttribute("type", "button");
+        button.className = "rdsh-mux-terminal-key";
+        button.setAttribute("data-rdsh-terminal-key", spec.id);
+        button.setAttribute("aria-label", t(spec.labelKey));
+        button.textContent = t(spec.textKey);
+        if (spec.id === "ctrl") {
+          button.setAttribute("aria-pressed", "false");
+          ctrlButton = button;
+        }
+        row.append(button);
+      }
+      row.addEventListener("pointerdown", onSpecialKeyPointerDown);
+      row.addEventListener("keydown", onSpecialKeyButtonKeyDown);
+      const state = {
+        section,
+        row,
+        control: false,
+        ctrlButton,
+      };
+      TERMINAL_KEY_ROWS.set(section, state);
+      section.insertBefore(row, mount);
+      section.addEventListener("keydown", onSpecialKeyTextKeyDown, true);
+      section.addEventListener("beforeinput", onSpecialKeyBeforeInput, true);
+      return true;
+    }
+
+    function disposeTerminalKeyRow(section) {
+      const state = TERMINAL_KEY_ROWS.get(section);
+      if (state === undefined) return false;
+      TERMINAL_KEY_ROWS.delete(section);
+      section.removeEventListener("keydown", onSpecialKeyTextKeyDown, true);
+      section.removeEventListener("beforeinput", onSpecialKeyBeforeInput, true);
+      state.row.remove();
+      return true;
+    }
+
+    /** Drop every row and listener; safe when none was mounted. */
+    function disposeTerminalKeys() {
+      for (const section of [...TERMINAL_KEY_ROWS.keys()]) disposeTerminalKeyRow(section);
+      for (const row of document.querySelectorAll("[data-rdsh-special-keys]")) row.remove();
+    }
+
+    /**
+     * Reconcile the row with the mounted terminal sections.
+     *
+     * One row per visible mounted terminal. A section hidden behind another
+     * tab loses its row and gets a fresh one when it comes back, so a stale
+     * listener can never outlive its emulator. Only a phone gets here.
+     */
+    function decorateTerminalKeys() {
+      if (!phone()) {
+        disposeTerminalKeys();
+        return;
+      }
+      const sections = [];
+      for (const section of document.querySelectorAll("[data-sidebar-terminal]")) {
+        if (section.closest("[hidden]") !== null) continue;
+        const terminal = section.querySelector(".xterm");
+        if (terminal === null || terminal === undefined || terminal.parentElement === null) continue;
+        sections.push(section);
+      }
+      const keep = new Set(sections);
+      let changed = false;
+      for (const section of [...TERMINAL_KEY_ROWS.keys()]) {
+        const state = TERMINAL_KEY_ROWS.get(section);
+        if (state === undefined) continue;
+        if (!keep.has(section) || section.isConnected === false || state.row.isConnected === false) {
+          disposeTerminalKeyRow(section);
+          changed = true;
+        }
+      }
+      for (const section of sections) {
+        const state = TERMINAL_KEY_ROWS.get(section);
+        if (state !== undefined && state.row.parentElement === section) continue;
+        if (state !== undefined) disposeTerminalKeyRow(section);
+        if (mountTerminalKeyRow(section)) changed = true;
+      }
+      if (changed) scheduleTerminalFit();
     }
 
     // ---------------------------------------------------------------------
@@ -12018,6 +12363,50 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
      as a pan/zoom before the touchmove handler sees it. (This alone cannot
      make the terminal scroll: there is no scrollable node behind it.) */
   .xterm, .xterm .xterm-screen, .xterm .xterm-scrollable-element { touch-action: none; }
+  /* #78: the special-key row is a flex child of upstream's terminal section,
+     before the .screen mount. It keeps a finger-sized target without opening
+     a second layout path: the section is already a column, so .screen takes
+     the remaining height and the existing fit still measures the real band. */
+  [data-rdsh-special-keys] {
+    flex: 0 0 auto;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-height: 38px;
+    padding: 4px 8px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    background: var(--dsw-alias-bg-l2, #232324);
+    border-bottom: .5px solid var(--dsw-alias-border-l3, rgba(255, 255, 255, .12));
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+  [data-rdsh-special-keys]::-webkit-scrollbar { display: none; }
+  [data-rdsh-special-keys] button {
+    flex: none;
+    box-sizing: border-box;
+    min-width: 42px;
+    height: 30px;
+    padding: 0 8px;
+    border: .5px solid var(--dsw-alias-border-l3, rgba(255, 255, 255, .16));
+    border-radius: 7px;
+    background: var(--dsw-alias-button-elevated-fill, rgba(255, 255, 255, .08));
+    color: var(--dsw-alias-label-primary, #f9fafb);
+    font: inherit;
+    font-size: 13px;
+    line-height: 1;
+  }
+  [data-rdsh-special-keys] button:active,
+  [data-rdsh-special-keys] button[aria-pressed="true"] {
+    background: var(--dsw-alias-state-business-primary, #4d6bfe);
+    color: #fff;
+  }
+  [data-rdsh-special-keys] button:focus-visible {
+    outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary, #4d6bfe));
+    outline-offset: 1px;
+  }
 
   /* #79: a terminal-only dark surface. The first selector is the screen
      wrapper upstream reads with getComputedStyle for xterm's default
@@ -12554,6 +12943,11 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           // Diagnostics used by the unit tests: the layout predicate and the
           // restored scroll hooks have to be observable without a browser.
           decorateNow: decorate,
+          specialKeys: {
+            decorate: decorateTerminalKeys,
+            sequence: terminalKeySequence,
+            controlByte: terminalControlByte,
+          },
           phone,
           markMobileSession,
           closeDrawer,

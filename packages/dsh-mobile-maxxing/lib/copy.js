@@ -50,6 +50,22 @@ export const COPY = {
 		"localDisplay.reason.localeShape": "The locale service does not expose a mutable locale.",
 		"localDisplay.reason.noLocales": "No display language is registered.",
 
+		// --- terminal key row ----------------------------------------------
+		"terminalKeys.label": "Terminal keys",
+		"terminalKeys.esc": "Esc",
+		"terminalKeys.escape": "Escape",
+		"terminalKeys.tab": "Tab",
+		"terminalKeys.up": "↑",
+		"terminalKeys.down": "↓",
+		"terminalKeys.left": "←",
+		"terminalKeys.right": "→",
+		"terminalKeys.arrowUp": "Arrow up",
+		"terminalKeys.arrowDown": "Arrow down",
+		"terminalKeys.arrowLeft": "Arrow left",
+		"terminalKeys.arrowRight": "Arrow right",
+		"terminalKeys.ctrl": "Ctrl",
+		"terminalKeys.control": "Control",
+
 		// --- PWA section ----------------------------------------------------
 		"pwa.install.promptable": "Install DSH as an app",
 		"pwa.install.iosHint": "Add it to your Home Screen from Safari's Share menu",
@@ -311,6 +327,22 @@ export const COPY = {
 		"localDisplay.reason.localeMissing": "ロケールサービスがありません。",
 		"localDisplay.reason.localeShape": "ロケールサービスが表示言語の変更に対応していません。",
 		"localDisplay.reason.noLocales": "表示言語が登録されていません。",
+
+		// --- terminal key row ----------------------------------------------
+		"terminalKeys.label": "ターミナルキー",
+		"terminalKeys.esc": "Esc",
+		"terminalKeys.escape": "エスケープ",
+		"terminalKeys.tab": "Tab",
+		"terminalKeys.up": "↑",
+		"terminalKeys.down": "↓",
+		"terminalKeys.left": "←",
+		"terminalKeys.right": "→",
+		"terminalKeys.arrowUp": "上矢印",
+		"terminalKeys.arrowDown": "下矢印",
+		"terminalKeys.arrowLeft": "左矢印",
+		"terminalKeys.arrowRight": "右矢印",
+		"terminalKeys.ctrl": "Ctrl",
+		"terminalKeys.control": "コントロール",
 
 		// --- PWA section ----------------------------------------------------
 		"pwa.install.promptable": "DSH をアプリとしてインストールできます",

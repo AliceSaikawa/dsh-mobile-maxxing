@@ -291,8 +291,8 @@ window.__ModuleLoader__.load({
      * a new worker instead of reusing the bytes it already has (#25). Bump this
      * whenever the worker's push handling changes.
      */
-    // Experiment: ack-less hand-off.
-    const SW_REVISION = "20261026c";
+    // Every received push is shown; the host suppresses pushes while visible.
+    const SW_REVISION = "20261026e";
     const SW_URL = new URL(`sw.js?v=${SW_REVISION}`, SCOPE).href;
     /** Script URL of the notification plugin's worker (see unifyWorker below). */
     const PUSH_WORKER_PATH = "/push/sw.js";

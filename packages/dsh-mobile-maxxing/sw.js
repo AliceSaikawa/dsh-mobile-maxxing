@@ -259,8 +259,15 @@ function pushPayload(event) {
 	return payload;
 }
 
-/** How long a visible page has to acknowledge a banner hand-off. */
-const NOTIFY_ACK_TIMEOUT_MS = 400;
+/**
+ * How long a visible page has to acknowledge a banner hand-off.
+ *
+ * A phone under load can take longer than 400ms to mount the toast (React
+ * render + the plugin's notice root), and the old value then fell through to a
+ * system notification while the app was on screen (#25). Wait long enough for
+ * the page to answer on a slow device.
+ */
+const NOTIFY_ACK_TIMEOUT_MS = 1500;
 
 /**
  * Hand one notification to a live page and wait for it to take it.
@@ -305,7 +312,15 @@ self.addEventListener("push", (event) => {
 		// to the system banner when none arrives.
 		const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
 		const visible = windows.find((client) => client.visibilityState === "visible");
-		if (visible !== undefined && (await handOff(visible, payload))) return;
+		if (visible !== undefined) {
+			// The app is on screen: it owns the notification. Falling back to a
+			// system banner duplicates it (#25). If the hand-off is not acked we
+			// leave a breadcrumb instead of stacking a second banner on top.
+			if (!(await handOff(visible, payload))) {
+				console.warn("[dsh-mobile-maxxing] push handed to a visible window without an ack");
+			}
+			return;
+		}
 		await self.registration.showNotification(payload.title, {
 			body: payload.body,
 			icon: new URL("pwa/icon-192.png", SCOPE).href,

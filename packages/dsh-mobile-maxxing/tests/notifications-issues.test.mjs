@@ -897,12 +897,13 @@ class FakeCacheStorage {
 }
 
 /** Load sw.js into a sandbox that looks like one service-worker global. */
-function loadServiceWorker({ origin, build = "build-a", cacheStorage, network = "ok" }) {
+function loadServiceWorker({ origin, build = "build-a", cacheStorage, network = "ok", clients = [] }) {
 	const listeners = new Map();
+	const shown = [];
 	const self = {
-		registration: { scope: `${origin}/`, showNotification: async () => {} },
+		registration: { scope: `${origin}/`, showNotification: async (...args) => { shown.push(args); } },
 		location: { origin },
-		clients: { matchAll: async () => [], claim: async () => {} },
+		clients: { matchAll: async () => clients, claim: async () => {} },
 		addEventListener(type, handler) {
 			listeners.set(type, handler);
 		},
@@ -926,10 +927,16 @@ function loadServiceWorker({ origin, build = "build-a", cacheStorage, network = 
 		console,
 		setTimeout,
 		clearTimeout,
+		MessageChannel: class {
+			constructor() {
+				this.port1 = { onmessage: null };
+				this.port2 = {};
+			}
+		},
 	};
 	vm.createContext(context);
 	new vm.Script(SW_SOURCE, { filename: "sw.js" }).runInContext(context);
-	return { listeners, self };
+	return { listeners, self, shown };
 }
 
 /** Run one lifecycle event and wait for its work. */
@@ -1076,4 +1083,27 @@ test("an offline launch falls back to the cached shell, not the network error", 
 	assert.equal(navigation.responded, true, "the navigation was not handled at all");
 	const response = await navigation.response;
 	assert.notEqual(response?.error, true, "the offline launch fell through to Response.error() despite a cached shell");
+});
+// ---------------------------------------------------------------------------
+// #25: a visible app owns the notification
+// ---------------------------------------------------------------------------
+
+test("#25 a visible window receives the hand-off and no system notification is shown", async () => {
+	const origin = "https://app.test";
+	const storage = new FakeCacheStorage(origin);
+	const posted = [];
+	const clients = [{ visibilityState: "visible", postMessage(message) { posted.push(message); } }];
+	const { listeners, shown } = loadServiceWorker({ origin, cacheStorage: storage, clients });
+	await fire(listeners, "push");
+	assert.equal(posted.length, 1, "the visible window did not receive the hand-off");
+	assert.equal(posted[0].type, "dsh-mobile-maxxing:notify");
+	assert.equal(shown.length, 0, "a system notification was shown while the app was visible");
+});
+
+test("#25 with no visible window the push falls back to the system notification", async () => {
+	const origin = "https://app.test";
+	const storage = new FakeCacheStorage(origin);
+	const { listeners, shown } = loadServiceWorker({ origin, cacheStorage: storage, clients: [] });
+	await fire(listeners, "push");
+	assert.equal(shown.length, 1, "the background push did not reach the system banner");
 });

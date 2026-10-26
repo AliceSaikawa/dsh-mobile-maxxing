@@ -43,13 +43,15 @@ separate because it changes the PC renderer.
 ### One Mobile settings tab
 
 This package contributes only **Settings → Mobile**. It contains the per-device theme,
-notification controls and sounds, Enter-key behavior, and app installation/update/status.
+the device-local chat view, text/code/terminal sizes (including a terminal-only dark
+palette), notification controls and sounds, Enter-key behavior, and
+app installation/update/status.
 There are no separate App or Input tabs. Hidden-control lists and browser-level overrides,
 extra hide-label editing, basic UI status, screen-size diagnostics, and scroll diagnostics
 have been removed. Standard mobile-only control hiding remains; old saved hide overrides
 are no longer read. No browser data is deleted. PCs receive no settings from this package.
 
-### Display and permission for this device only
+### Display, chat view and permission for this device only
 
 Mobile also holds settings that affect this browser alone. Each one lives in `localStorage`;
 none writes the shared DSH profile.
@@ -57,6 +59,7 @@ none writes the shared DSH profile.
 | Setting | Effect |
 | --- | --- |
 | Font sizes (text / code / terminal) | Changes this device's rendering only |
+| Terminal-only dark | Keeps the terminal dark on a light page; the shared theme and the rest of the UI are unchanged |
 | Display language | Changes this device's UI language; only registered locales are offered (Japanese is registered on this device) |
 | Default permission | Applies to new sessions started on this device only |
 
@@ -64,9 +67,16 @@ The permission choice is recorded as the session's own `/permission` right after
 Host `defaultPreset` is untouched. The composer stays disabled until that command settles, so
 the first send already runs under the chosen permission.
 
-Work-details verbosity, collapse timing, busy-send behavior and performance detail are not in
-this build: upstream exposes no device-local setter for them, and they cannot be separated
-without writing the shared configuration.
+### Chat view (this device only)
+
+**Settings → Mobile → "Chat view (this device)"** overrides four General chat preferences
+for this browser: work-details verbosity, when a completed turn collapses, what Enter does
+while a turn runs (queue or steer), and performance detail. A choice is written into the
+client's live view and kept in `localStorage`; the shared configuration form and the Host
+settings are never written. A row you have not changed follows the Host setting; the
+"Follow Host setting" button (shown when an override is set) drops the override and returns
+to the latest value the Host accepted. If upstream does not expose an entry or hook, that
+row is disabled and says why instead of looking saved.
 
 ### Theme (light / dark)
 
@@ -90,6 +100,20 @@ reach the PC**. The shared theme stays in Settings → General → Appearance.
 - One meta cannot switch the status bar between black and white glyphs, so the default is
   `black-translucent` again (white glyphs over a dark background), matching the previous
   layout. Set `appleStatusBarStyle: "default"` for dark glyphs on a light palette.
+- The stored choice is applied when the theme service resolves, so a synchronous frame can
+  briefly use the shared palette before the device palette takes over. This is observed on
+  the first load and on a font-size change: the shared dark palette is written, then the
+  device palette returns in a microtask. The palette read at rAF is the device one; a
+  physical flash on a real device has not been verified.
+
+### Terminal-only dark
+
+**Settings → Mobile → Display → "Dark terminal only"** keeps the terminal dark while the
+page stays light. The choice is browser-local (`localStorage`) and applies on a phone only.
+It paints the terminal body and asks the terminal to reread that palette through the theme
+service; the surrounding UI, the shared theme and the Host settings stay as they are, and
+the terminal keeps its own ANSI palette with upstream's contrast floor. It is off by
+default, and nothing is painted until the theme service is available.
 
 ### Language
 
@@ -160,12 +184,28 @@ What changes:
 - The composer stays above the keyboard
 - Session rows keep their actions hidden until the menu or a long press
 - Right-panel tabs are finger-sized, and the tab strip scrolls sideways
+- The phone sheet names the panel kind above the tab strip ("Terminal" or "Subagent"); other
+  tabs get no heading
 - Dragging inside the terminal scrolls it (the bundled xterm has no touch support)
 - The terminal gets a top key row for Esc, Tab, arrows and Ctrl; it stays above the keyboard.
   Ctrl applies to the next key only: Ctrl then C sends SIGINT, and tapping Ctrl again cancels it.
+- Scrolling to the top of a conversation loads older messages automatically while history
+  remains: after a real scroll settles at the top, the existing load-earlier control is
+  pressed once. A new send that scrolls to the bottom, or any programmatic scroll, does not
+  trigger it
+- On a phone, the Trajectory conversation tab is hidden while the standard mobile control
+  hiding is active; if it was the selected view, another tab is selected first
+- The workspace file search has a clear button; clearing the field also resets the filter,
+  the highlight and the "no matches" state
+- The model picker menu is kept inside the left and right safe area of the visible viewport
+  (notch included); only when that band is narrower than the menu is its width capped
 
 The long press opens the same menu as the `...` button. Swipe right on an open drawer to
-close it; swipe left to open it.
+close it; swipe left to open it. On a plugin detail (including nested levels) or an
+automation task detail whose list is hidden, a left-edge swipe presses that screen's own
+back control instead of opening the drawer, so one swipe goes back one level. The
+Automation route starts below the floating drawer button, so scrolled rows are not covered
+by it.
 
 ## Notifications
 

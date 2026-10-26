@@ -27,6 +27,8 @@ dsh plugin --profile web add https://github.com/kuraneko1/dsh-mobile-maxxing
 | 通知 | アプリを見ている間はアプリ内バナー、それ以外は Web Push |
 | 通知音 | 合成した5種類。音量も設定可。音声ファイルは同梱しません |
 | スマホ/タブレットのレイアウト | サイドバーがドロワーに、設定は1タップ、コードは既定で折り返し（解除可）。幅ではなく端末で判定 |
+| チャット表示（この端末のみ） | 作業の詳細・完了ターンの折りたたみ・実行中の Enter・性能表示を、この端末だけ上書き（共有設定は変更しない） |
+| モバイル操作の細部 | ターミナルだけダーク、上端スクロールで過去ログを自動読み込み、Trajectory タブの非表示、右パネルの見出し、ファイル検索のクリア、モデルメニューのセーフエリア、左端スワイプで戻る |
 | CJK 表示の修正（任意） | 別パッケージ `rdsh-markdown-cjk` を入れた場合のみ。このパッケージ本体は PC 側を変えないため、Markdown レンダラを書き換えません |
 | セッションIDのコピー | セッションメニューに1行追加 |
 
@@ -99,6 +101,8 @@ push library are needed.
 | Notifications | In-app banner while the app is on screen, Web Push otherwise |
 | Notification sounds | Five synthesised presets with a volume control; no audio files ship |
 | Mobile layout | Sidebar becomes a drawer, settings open in one tap, code wraps by default (toggle available) |
+| Chat view (this device) | Work-details verbosity, turn collapse, Enter while a turn runs and performance detail overridden for this browser only; the Host setting is untouched |
+| Mobile polish | Terminal-only dark, older history on scroll-to-top, hidden Trajectory tab, right-panel heading, file-search clear, model-menu safe area, left-edge swipe back |
 | CJK rendering (optional) | Only with the separate `rdsh-markdown-cjk` package; this package leaves the Markdown renderer stock to avoid changing the PC |
 | Session id copy | One row in the session row menu |
 

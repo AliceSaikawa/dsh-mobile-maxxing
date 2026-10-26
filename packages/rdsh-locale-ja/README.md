@@ -10,13 +10,14 @@ UI copy. This package is not installed or enabled by the mobile tarball, is
 not added to a profile automatically, and never writes the shared display
 language: the phone picker only projects the catalog for this device.
 
-**It is not a complete translation yet.** The `ja` catalog currently has
-**83 reviewed values** and development-only English fallbacks for the other
-2823 keys; selecting `ja` shows Japanese only in `common`, `settings` and
-`settings.locale`. A release tarball is produced only when the generated
-`locale/translation-status.json` reports **64 namespaces / 2906 keys, all
-translated, zero English fallback** (see [Install](#install-optional-local-tarball)).
-The package stays `private` until that actual release.
+**The `ja` catalog is complete (2026-10-26).** All **64 namespaces / 2906
+keys** have a reviewed Japanese value, and `locale/translation-status.json`
+reports `complete` with zero English fallback. The migrated seed of **83
+values** is unchanged, and the other **2823 keys were reviewed and merged in
+94 batches**. The package is still `private` and optional: it is not
+published, the local tarball is the only install path, and a live-profile
+install is unverified: the loader contract is verified in isolation, but the
+real GUI and a real profile are not (see [Status and limits](#status-and-limits)).
 
 ## What the package contains
 
@@ -26,13 +27,14 @@ The package stays `private` until that actual release.
   (`common` 41, `settings` 41, `settings.locale` 1). They are pinned by
   `test/fixtures/seed-ja-83.json` and its SHA-256, so a later edit cannot
   silently change a migrated value;
-- **2823 development-only English fallbacks** for the remaining keys. They
-  repeat the English snapshot verbatim so every namespace can register a
-  complete `ja` dictionary; they are not translations and are marked in
-  `locale/translation-status.json` and the generated `client.js`;
+- **2823 further reviewed Japanese values** for the remaining keys, merged
+  from 94 batches after independent review. Together with the seed they cover
+  every key, so the generated `client.js` contains no English fallback;
 - a generated package manifest, host entry and browser client;
 - a reviewable batch manifest with **97 batches** of 40-50 keys (small
-  namespaces and final remainders may be shorter);
+  namespaces and final remainders may be shorter). 94 of them (2823 keys)
+  were reviewed and merged; the 3 batches whose keys are the migrated seed
+  (`common-01`, `settings-01`, `settings.locale-01`) were already satisfied;
 - `tools/build-client.mjs` and `tools/merge-batches.mjs`.
 
 ## Migration from the mobile pack (#80)
@@ -56,8 +58,9 @@ Consequences:
 
 ## Install (optional, local tarball)
 
-This package is not part of the mobile tarball and is not published yet. Install
-it separately, only from a tarball produced by a complete translation:
+This package is not part of the mobile tarball and is not published yet. The
+catalog is complete, so `scripts/pack-all.mjs` will build the locale tarball;
+install it separately from that local file:
 
 ```sh
 node scripts/pack-all.mjs            # dist/rdsh-locale-ja-<version>.tgz only when complete
@@ -65,13 +68,14 @@ dsh plugin --profile web add ./dist/rdsh-locale-ja-0.1.0.tgz
 # restart DSH to load the client half
 ```
 
-`scripts/pack-all.mjs` refuses to create the locale tarball while
-`locale/translation-status.json` is incomplete (nonzero translated count with
-English fallback). It prints `REFUSED` with the current counts and produces no
-locale tarball, so an English fallback pack can never be released as Japanese.
-Use `node scripts/pack-all.mjs --require-locale` to make that refusal fail the
-command. There are no release-download URLs for this package until an actual
-release exists; use the local tarball path shown above.
+The gate stays in place as a safeguard: `scripts/pack-all.mjs` refuses to
+create the locale tarball whenever `locale/translation-status.json` is not
+`complete` (zero fallback with full 64/2906 coverage). It prints `REFUSED`
+with the current counts and produces no locale tarball, so an English
+fallback pack can never be released as Japanese. Use `node
+scripts/pack-all.mjs --require-locale` to make that refusal fail the command.
+There are still no release-download URLs for this package; the local tarball
+path above is preparation, not a verified production install.
 
 ## Layout
 
@@ -85,21 +89,25 @@ locale/
   batches.json               generated batch manifest
   translation-status.json    generated complete/incomplete accounting
   namespaces/en/*.json       stage-1 English snapshot (read-only here)
-  namespaces/ja/*.json       reviewed Japanese values only (currently 3 files)
+  namespaces/ja/*.json       reviewed Japanese values only (64 files, one per namespace)
 test/
   extract-upstream.test.mjs  stage-1 extraction/reproducibility tests
   stage2.test.mjs            generation, ownership, parity, complete/incomplete and merge tests
   distribution.test.mjs      npm pack / install smoke, exports, no work/, dispose tests
   client-loader.mjs          browser-loader harness (window.__ModuleLoader__ capture)
   fixtures/seed-ja-83.json   immutable 83-value migration evidence and SHA-256
+LICENSE                      MIT license text plus the upstream copyright
+NOTICE                       upstream attribution notice
 work/                        local batch inputs/outputs, gitignored and not shipped
 ```
 
-The English files are the key/value source of truth. A Japanese source file
-may be absent or partial; a missing key becomes the development-only English
-fallback at generation time. `locale/translation-status.json` reports
-`translated` and `fallback` counts per namespace and names the policy
-`development-only-english`.
+The English files remain the key/value source of truth. The generator can
+fill a missing `ja` key with the English value as a development-only
+fallback, but that path is a test/development safeguard (it is what the
+incomplete fixture exercises), not the current state: every source key has a
+reviewed Japanese value, so the generated client has zero fallback.
+`locale/translation-status.json` reports `translated` and `fallback`
+counts per namespace and names the policy `development-only-english`.
 
 ## Generating the package
 
@@ -123,7 +131,9 @@ plugin's client file verbatim into a classic `<script>` batch, so the file only
 calls `window.__ModuleLoader__.load({ id: "rdsh-locale-ja", factory })`; the
 loader queues that registration and materializes the factory once on first
 import. Raw `export` statements would fail to parse in that position and
-register nothing. The factory returns:
+register nothing, so `./client` cannot be loaded with a bare Node `import`
+either; that export is for the browser loader only. `index.js` stays the ESM
+host entry. The factory returns:
 
 - `language`: `{ id: "ja", label: "日本語", fallback: "en" }`;
 - `dictionaries`: all 64 complete `ja` dictionaries;
@@ -198,17 +208,20 @@ JSON keys are hard errors.
 
 ## Status and limits
 
-- **Release condition, not a current claim:** a locale tarball may exist only
-  when `locale/translation-status.json` reports the complete 64 namespaces /
-  2906 keys with zero English fallback. The status in this checkout is the
-  source of truth; while it says `incomplete`, the numbers below apply.
-- **Current incomplete state:** 83 of 2906 values are Japanese; 3 namespaces
-  are translated, 61 are English fallback, and 0 are partial. Do not describe
-  this package as a completed Japanese localization before the status says
-  `complete`.
-- **Fallback is not translation:** the English values under `ja` are a
-  development aid so the locale can be selected and the namespace registration
-  can be exercised. They may be replaced batch by batch.
+- **Packing gate (safeguard):** a locale tarball is produced only when
+  `locale/translation-status.json` reports the complete 64 namespaces / 2906
+  keys with zero English fallback. The current status already satisfies it;
+  the gate remains so a future incomplete edit cannot be packed as Japanese.
+- **Current coverage (2026-10-26):** `complete` — 64 of 64 namespaces and
+  2906 of 2906 keys have a reviewed Japanese value; 0 fallback, 0 partial. 83
+  are the migrated seed and 2823 were reviewed and merged in 94 batches.
+  `locale/translation-status.json` is the source of truth;
+  `node tools/build-client.mjs --check` fails if the generated files drift
+  from it.
+- **Fallback is test/development behavior:** the English fallback exists so
+  the generator and the incomplete fixture can exercise selection and
+  namespace registration. It is not used by the current catalog and must not
+  be described as translation.
 - **Sole ownership:** this package is the only `ja` language and namespace
   owner. The mobile package no longer registers `ja`, so both may be enabled
   together; only this package's effects add or remove the catalog entries. It
@@ -218,9 +231,14 @@ JSON keys are hard errors.
   package, does not depend on it and does not enable it. Nothing is installed
   into a DSH profile until the operator runs the separate local-tarball command
   above.
-- **Not yet verified live:** the repository tests and generation verify the
-  package; they do not install it into a live DSH profile or run a browser
-  acceptance test. Do not claim device or live success from them.
+- **Loader verified in isolation, not live:** the tests materialize the real
+  registration through a `window.__ModuleLoader__` harness, and a separate
+  check with the real ClientModuleSystem and the upstream locale bundle in an
+  isolated Chrome completed `modules.import` with 64 namespaces / 2906 keys /
+  65 disposers. This is not a live-profile or device test: a real-profile
+  install, use beside the real GUI (still being verified) and device
+  acceptance remain unverified. Do not claim a production install, GUI success
+  or device success yet.
 - **Batch sizing:** namespaces with at least 40 keys use 40-50 key chunks except
   the final remainder; namespaces below 40 keys stay in one short batch so a
   worker always owns one namespace per output file.

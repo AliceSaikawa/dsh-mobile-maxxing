@@ -1,5 +1,5 @@
 /**
- * Behavioural checks for the interaction issues #31, #32 and #38.
+ * Behavioural checks for the interaction issues #31, #32, #38 and #76.
  *
  * These do not need a browser: the client bundle is evaluated in a stub DOM
  * with real event dispatch, timer and animation-frame queues. The assertions
@@ -16,6 +16,11 @@
  *   the app's ResizeObserver runs the real xterm fit. No scroll event is
  *   synthesised: xterm 6's SmoothScrollableElement is an internal model, its
  *   DOM wrapper has no overflow, and a wheel would be application input.
+ * - #76: iPadOS standalone can hide the keyboard with the composer still
+ *   focused and without a visualViewport resize. The mobile half re-runs its
+ *   existing measurement/decorate/fit pass from the document-blur, focusout
+ *   and visibility lifecycle signals; it never blurs the composer, writes a
+ *   fake height or forces a reflow. The native blank strip is WebKit's.
  */
 
 import assert from "node:assert/strict";
@@ -1131,6 +1136,191 @@ test("a desktop never observes or fits the terminal scrollbar", () => {
 	assert.equal(terminal.screen.hasAttribute("data-rdsh-terminal-fit"), false, "a desktop wrote the fit hook");
 	assert.equal(terminal.screen.style.height, undefined, "a desktop wrote a fitted height");
 	desktop.disposeAll();
+});
+
+/* ---------------------------------------------------------------------- */
+/* #76: keyboard hide without a visual-viewport resize                    */
+/* ---------------------------------------------------------------------- */
+
+/**
+ * A contenteditable composer and its focus state. The recovery must never
+ * blur it: the reported iPad path keeps focus while the keyboard goes away.
+ */
+function composerFixture(doc) {
+	const composer = new FakeElement("div");
+	composer.setAttribute("contenteditable", "true");
+	composer._closest = (selector) => (String(selector).includes("contenteditable") ? composer : null);
+	let blurs = 0;
+	composer.blur = () => {
+		blurs += 1;
+	};
+	doc.activeElement = composer;
+	return { composer, blurs: () => blurs };
+}
+
+function windowHandler(booted, type, name) {
+	return [...booted.windowHandlers].reverse()
+		.find(([registered, handler]) => registered === type && handler.name === name)?.[1];
+}
+
+function countRecoveryFrames(booted) {
+	return [...booted.frames.values()].filter((callback) => callback.name === "applyKeyboardRecovery").length;
+}
+
+test("#76 a keyboard hide with focus retained recovers without a viewport resize", () => {
+	const booted = bootGestures({ narrow: true });
+	booted.drainFrames();
+	const { composer, blurs } = composerFixture(booted.doc);
+	// The keyboard was up and the browser has cleared its geometry, but the
+	// affected iPad build never delivered a visualViewport resize for it.
+	booted.visualViewport.height = 544;
+	booted.visualViewport.height = 844;
+	booted.doc.documentElement.style.removeProperty("--rdsh-safe-top");
+
+	const blur = windowHandler(booted, "blur", "scheduleKeyboardRecovery");
+	assert.equal(typeof blur, "function", "the document blur is not watched");
+	blur();
+	assert.equal(countRecoveryFrames(booted), 1, "no recovery pass was queued");
+	booted.drainFrames();
+
+	assert.equal(booted.doc.documentElement.style.getPropertyValue("--rdsh-safe-top"), "0px", "the layout was not re-measured");
+	assert.equal(booted.doc.activeElement, composer, "the recovery stole focus from the composer");
+	assert.equal(blurs(), 0, "the recovery blurred the composer");
+	booted.disposeAll();
+});
+
+test("#76 a composer focusout refreshes the layout, an unrelated focusout does not", () => {
+	const booted = bootGestures({ narrow: true });
+	booted.drainFrames();
+	const { composer } = composerFixture(booted.doc);
+	const focusout = booted.handler("focusout", "onKeyboardFocusOut");
+	assert.equal(typeof focusout, "function", "the composer focusout is not watched");
+
+	booted.doc.documentElement.style.removeProperty("--rdsh-safe-top");
+	focusout({ target: composer });
+	booted.drainFrames();
+	assert.equal(booted.doc.documentElement.style.getPropertyValue("--rdsh-safe-top"), "0px", "the dismissed keyboard was not recovered");
+	assert.equal(booted.doc.activeElement, composer, "the focusout recovery stole focus");
+
+	// A button cannot have raised the keyboard, so it must not trigger the
+	// measurement pass (this listener also sees every other focus move).
+	booted.doc.documentElement.style.removeProperty("--rdsh-safe-top");
+	focusout({ target: new FakeElement("button") });
+	booted.drainFrames();
+	assert.equal(booted.doc.documentElement.style.getPropertyValue("--rdsh-safe-top"), "", "an unrelated focusout re-measured");
+	booted.disposeAll();
+});
+
+test("#76 repeated lifecycle events share one recovery pass, and a burst can run again", () => {
+	const booted = bootGestures({ narrow: true });
+	booted.drainFrames();
+	const { composer } = composerFixture(booted.doc);
+	booted.visualViewport.height = 844;
+	const blur = windowHandler(booted, "blur", "scheduleKeyboardRecovery");
+	const focus = windowHandler(booted, "focus", "scheduleKeyboardRecovery");
+	const visible = booted.handler("visibilitychange", "onKeyboardVisibility");
+	assert.equal(typeof focus, "function", "the document focus is not watched");
+	assert.equal(typeof visible, "function", "visibility is not watched");
+
+	booted.doc.documentElement.style.removeProperty("--rdsh-safe-top");
+	for (let index = 0; index < 5; index += 1) {
+		blur();
+		focus();
+	}
+	visible();
+	assert.equal(countRecoveryFrames(booted), 1, "the events were not coalesced");
+	booted.drainFrames();
+	assert.equal(booted.doc.documentElement.style.getPropertyValue("--rdsh-safe-top"), "0px", "the coalesced pass did not run");
+	assert.equal(booted.doc.activeElement, composer, "the burst stole focus");
+
+	// The next real keyboard hide is a new pass, not a swallowed event.
+	booted.doc.documentElement.style.removeProperty("--rdsh-safe-top");
+	for (let index = 0; index < 5; index += 1) blur();
+	assert.equal(countRecoveryFrames(booted), 1, "the second burst was not queued once");
+	booted.drainFrames();
+	assert.equal(booted.doc.documentElement.style.getPropertyValue("--rdsh-safe-top"), "0px", "the second burst was swallowed");
+	booted.disposeAll();
+});
+
+test("#76 a keyboard-shrunk layout height is not published as a native gap", () => {
+	const booted = bootGestures({ narrow: true });
+	booted.drainFrames();
+	// Standalone iPad: innerHeight is the web view height. Opening the keyboard
+	// shrank it, and the dismiss left it there without an event. Only the
+	// window's navigator is wrapped: the boot's service-worker stub stays live.
+	const bootNavigator = booted.sandbox.window.navigator;
+	booted.sandbox.window.navigator = new Proxy(bootNavigator, {
+		get(target, key) {
+			if (key === "standalone") return true;
+			return Reflect.get(target, key);
+		},
+	});
+	booted.sandbox.window.innerHeight = 544;
+	booted.sandbox.innerHeight = 544;
+	booted.visualViewport.height = 544;
+	booted.doc.documentElement.style.removeProperty("--rdsh-safe-top");
+
+	const blur = windowHandler(booted, "blur", "scheduleKeyboardRecovery");
+	blur();
+	booted.drainFrames();
+	assert.equal(booted.doc.documentElement.style.getPropertyValue("--rdsh-safe-top"), "", "the stale layout was measured");
+	assert.equal(booted.doc.documentElement.hasAttribute("data-rdsh-native-gap"), false, "a keyboard-sized gap was published");
+	assert.equal(hasTimer(booted, 350), true, "there is no late retry for the dismiss animation");
+
+	// The browser finally restores the layout height, still with no event.
+	booted.sandbox.window.innerHeight = 844;
+	booted.sandbox.innerHeight = 844;
+	booted.visualViewport.height = 844;
+	booted.runTimers(350);
+	booted.drainFrames();
+	assert.equal(booted.doc.documentElement.style.getPropertyValue("--rdsh-safe-top"), "0px", "the restored layout was not measured");
+	assert.equal(booted.doc.documentElement.hasAttribute("data-rdsh-native-gap"), false, "a native gap appeared on a full-height layout");
+	booted.disposeAll();
+});
+
+test("#76 a recovery pass does not disturb the rotation follow-up", () => {
+	const booted = bootGestures({ narrow: true });
+	booted.drainFrames();
+	composerFixture(booted.doc);
+	booted.visualViewport.height = 844;
+	const blur = windowHandler(booted, "blur", "scheduleKeyboardRecovery");
+	const orientation = [...booted.windowHandlers].reverse().find(([type]) => type === "orientationchange")?.[1];
+	assert.equal(typeof orientation, "function", "rotation is not watched");
+
+	booted.doc.documentElement.style.removeProperty("--rdsh-safe-top");
+	blur();
+	// A rotation lands before the queued recovery frame runs. It runs the full
+	// geometry pass itself and must keep its own 350ms follow-up.
+	booted.visualViewport.height = 390;
+	orientation();
+	booted.drainFrames();
+	assert.equal(booted.doc.documentElement.style.getPropertyValue("--rdsh-safe-top"), "0px", "the recovery/rotation pass did not measure");
+	assert.equal(hasTimer(booted, 350), true, "the rotation follow-up was lost");
+	booted.disposeAll();
+});
+
+test("#76 a desktop installs no keyboard-hide recovery", () => {
+	const desktop = bootGestures({ mode: "desktop", width: 1024 });
+	desktop.drainFrames();
+	assert.equal(windowHandler(desktop, "blur", "scheduleKeyboardRecovery"), undefined, "a desktop watches blur");
+	assert.equal(windowHandler(desktop, "focus", "scheduleKeyboardRecovery"), undefined, "a desktop watches focus");
+	assert.equal(desktop.handler("visibilitychange", "onKeyboardVisibility"), undefined, "a desktop watches visibility");
+	assert.equal(desktop.handler("focusout", "onKeyboardFocusOut"), undefined, "a desktop watches focusout");
+	desktop.disposeAll();
+});
+
+test("#76 a queued recovery frame and timer die with the boot effect", () => {
+	const booted = bootGestures({ narrow: true });
+	booted.drainFrames();
+	booted.visualViewport.height = 544;
+	booted.sandbox.window.innerHeight = 544;
+	booted.sandbox.innerHeight = 544;
+	const blur = windowHandler(booted, "blur", "scheduleKeyboardRecovery");
+	blur();
+	assert.equal(countRecoveryFrames(booted), 1, "no recovery frame was queued");
+	booted.disposeAll();
+	assert.equal(countRecoveryFrames(booted), 0, "a recovery frame survived teardown");
+	assert.equal(hasTimer(booted, 350), false, "a recovery timer survived teardown");
 });
 
 test("every dockkit tab layer lets the browser pan natively", () => {

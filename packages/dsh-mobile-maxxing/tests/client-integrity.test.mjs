@@ -449,6 +449,40 @@ test("resize only drops gestures on a real width change or a rotation", () => {
 	assert.match(CLIENT, /attributeFilter: \[[^\]]*"data-rightbar-collapsed"/, "panel changes are not observed");
 });
 
+test("#76 keyboard-hide recovery only re-runs the existing layout pass", () => {
+	// iPadOS can hide the keyboard with the composer focused and no
+	// visualViewport resize. The recovery must be measurement + decorate + fit
+	// from lifecycle signals, not a fake reflow, a document scroll or a blur:
+	// the native blank strip belongs to WebKit and the composer to upstream.
+	const at = CLIENT.indexOf("const applyKeyboardRecovery =");
+	assert.ok(at >= 0, "no keyboard-hide recovery");
+	const end = CLIENT.indexOf("const scheduleKeyboardRecovery", at);
+	assert.ok(end > at, "the recovery body is unterminated");
+	const body = CLIENT.slice(at, end);
+	assert.match(body, /measureSafeArea()/, "the recovery does not re-measure");
+	assert.match(body, /scheduleDecorate()/, "the recovery does not redecorate");
+	assert.match(body, /scheduleTerminalFit()/, "the recovery does not refit the terminal");
+	assert.doesNotMatch(body, /scrollTo|scrollTop|style\.(?:height|display|transform)|offsetHeight|blur\(|\.focus\(/, "the recovery fakes a reflow, scrolls or moves focus");
+	// A keyboard-shrunk layout height must not become a published native gap.
+	assert.match(body, /keyboardSettled\(\)/, "the recovery ignores whether the keyboard has gone");
+	assert.match(CLIENT, /layoutHeightMax - window\.innerHeight > LAYOUT_SHRINK_MAX_PX/, "a keyboard-sized layout height can be published as a native gap");
+	const installAt = CLIENT.indexOf("if (phone()) {\n          document.addEventListener(\"focusout\", onKeyboardFocusOut, true);", at);
+	assert.ok(installAt > at, "the recovery listeners are not mobile-only");
+});
+
+test("#76 the keyboard-hide listeners and pending work are torn down", () => {
+	for (const line of [
+		'document.removeEventListener("focusout", onKeyboardFocusOut, true)',
+		'document.removeEventListener("visibilitychange", onKeyboardVisibility)',
+		'window.removeEventListener("blur", scheduleKeyboardRecovery)',
+		'window.removeEventListener("focus", scheduleKeyboardRecovery)',
+	]) {
+		assert.ok(CLIENT.includes(line), `teardown lost: ${line}`);
+	}
+	assert.match(CLIENT, /if \(keyboardRecoveryFrame !== 0\) \{\s*cancelAnimationFrame\(keyboardRecoveryFrame\)/, "a queued recovery frame survives teardown");
+	assert.match(CLIENT, /clearTimeout\(keyboardRecoveryTimer\)/, "a pending recovery timer survives teardown");
+});
+
 test("the right panel is only looked for inside its own subtree", () => {
 	// A hidden route keeps a 0x0 copy of the collapse button; walking up from
 	// it without a boundary tagged the app frame as the panel, which then hid

@@ -11798,6 +11798,85 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           resetGestures();
           onLayoutResize();
         };
+        // #76: iPadOS standalone can dismiss the soft keyboard while the
+        // composer keeps focus. That path fires neither a focusout on the
+        // editor nor (on the affected builds) a visualViewport resize, so the
+        // layout stays sized for the keyboard until a rotation. The document
+        // does lose focus on that dismiss, and visibility covers an app that
+        // comes back with stale geometry; both re-run this plugin's existing
+        // measurement/decorate/fit pass. The native blank strip itself belongs
+        // to WebKit (see the viewport-fit=cover note above measureSafeArea);
+        // nothing here touches the composer, scrolls the document or forces a
+        // reflow to fake one.
+        //
+        // iPadOS can also leave innerHeight itself at the keyboard-shrunk
+        // value. A native gap is at most the status-bar strip; a layout that
+        // is hundreds of px shorter than the tallest height seen at this width
+        // is the keyboard, not a gap to publish. Remember the height per width
+        // so a rotation starts from the new geometry instead of portrait's.
+        const LAYOUT_SHRINK_MAX_PX = 100;
+        const KEYBOARD_SETTLE_MS = 350;
+        const KEYBOARD_RECOVERY_MS = 800;
+        let keyboardRecoveryFrame = 0;
+        let keyboardRecoveryTimer = 0;
+        let keyboardRecoveryUntil = 0;
+        let layoutWidth = window.innerWidth;
+        let layoutHeightMax = window.innerHeight;
+        const rememberLayoutHeight = () => {
+          if (window.innerWidth !== layoutWidth) {
+            layoutWidth = window.innerWidth;
+            layoutHeightMax = window.innerHeight;
+          }
+          if (window.innerHeight > layoutHeightMax) layoutHeightMax = window.innerHeight;
+        };
+        const keyboardSettled = () => {
+          if (document.visibilityState === "hidden") return false;
+          rememberLayoutHeight();
+          const viewport = window.visualViewport;
+          if (viewport !== null && viewport !== undefined && viewport.height < window.innerHeight - 100) return false;
+          return !(window.navigator.standalone === true && layoutHeightMax - window.innerHeight > LAYOUT_SHRINK_MAX_PX);
+        };
+        const applyKeyboardRecovery = () => {
+          keyboardRecoveryFrame = 0;
+          keyboardRecoveryTimer = 0;
+          if (!phone()) return;
+          if (!keyboardSettled()) {
+            // The dismiss animation can still be running when focus leaves.
+            // Retry once it should be over, but never keep polling a keyboard
+            // that is genuinely open (the user moved to another field).
+            if (Date.now() < keyboardRecoveryUntil) {
+              keyboardRecoveryTimer = window.setTimeout(applyKeyboardRecovery, KEYBOARD_SETTLE_MS);
+            } else {
+              keyboardRecoveryUntil = 0;
+            }
+            return;
+          }
+          keyboardRecoveryUntil = 0;
+          measureSafeArea();
+          scheduleDecorate();
+          scheduleTerminalFit();
+        };
+        const scheduleKeyboardRecovery = () => {
+          if (!phone()) return;
+          if (typeof requestAnimationFrame !== "function") {
+            applyKeyboardRecovery();
+            return;
+          }
+          keyboardRecoveryUntil = Date.now() + KEYBOARD_RECOVERY_MS;
+          if (keyboardRecoveryFrame !== 0) return;
+          keyboardRecoveryFrame = requestAnimationFrame(applyKeyboardRecovery);
+        };
+        const onKeyboardFocusOut = (event) => {
+          if (!phone()) return;
+          const target = event.target;
+          if (target === null || target === undefined || target.closest === undefined) return;
+          // Only a field that can raise the keyboard can have had one to hide.
+          if (textBoxOf(target) === null) return;
+          scheduleKeyboardRecovery();
+        };
+        const onKeyboardVisibility = () => {
+          if (document.visibilityState === "visible") scheduleKeyboardRecovery();
+        };
         window.addEventListener("resize", onResize);
         window.addEventListener("orientationchange", onOrientation);
         // The visual viewport reports the keyboard and the rotation's own
@@ -11808,6 +11887,14 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         // The visual viewport can move without resizing (the browser scrolls a
         // focused field above the keyboard); both events share the rAF fit.
         window.visualViewport?.addEventListener("scroll", onLayoutResize);
+        // #76: mobile-mode only, like the drawer and terminal hooks above. A
+        // desktop keeps upstream's composer focus and installs none of these.
+        if (phone()) {
+          document.addEventListener("focusout", onKeyboardFocusOut, true);
+          document.addEventListener("visibilitychange", onKeyboardVisibility);
+          window.addEventListener("blur", scheduleKeyboardRecovery);
+          window.addEventListener("focus", scheduleKeyboardRecovery);
+        }
         patchCommandUi(ctx);
         document.addEventListener("dragstart", onDragStartCapture, true);
         document.addEventListener("dragend", onDragEndCapture, true);
@@ -11891,6 +11978,16 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             window.removeEventListener("orientationchange", onOrientation);
             window.visualViewport?.removeEventListener("resize", onLayoutResize);
             window.visualViewport?.removeEventListener("scroll", onLayoutResize);
+            document.removeEventListener("focusout", onKeyboardFocusOut, true);
+            document.removeEventListener("visibilitychange", onKeyboardVisibility);
+            window.removeEventListener("blur", scheduleKeyboardRecovery);
+            window.removeEventListener("focus", scheduleKeyboardRecovery);
+            if (keyboardRecoveryFrame !== 0) {
+              cancelAnimationFrame(keyboardRecoveryFrame);
+              keyboardRecoveryFrame = 0;
+            }
+            clearTimeout(keyboardRecoveryTimer);
+            keyboardRecoveryUntil = 0;
             clearTerminalFit();
             resetGestures();
             clearTimeout(rotationTimer);

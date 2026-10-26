@@ -3708,9 +3708,13 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * The panel kinds that get a heading, keyed by upstream's stable body
      * attribute. The text stays generic: the tab chip already carries the
      * per-tab name (the terminal number, the child session's label).
+     *
+     * #93: the terminal is deliberately absent. Its chip already names the
+     * shell ("bash"), so the heading was a duplicate that only cost the
+     * terminal ~30px of height. The child-session panel keeps one because its
+     * chip names the instance, not the kind.
      */
     const RIGHT_PANEL_HEADING_KEYS = {
-      "data-sidebar-terminal": "localDisplay.terminal",
       "data-sidebar-chat": "localDisplay.subagent",
     };
 
@@ -4446,7 +4450,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     /**
      * Which panel-type heading the active tab needs, or "" for any other tab.
      *
-     * A panel body carries the same id as its chip (data-sidebar-right-tab and
+     * The map is the whole list of named kinds (#93: the terminal is not in it,
+     * so a terminal tab answers "" and the heading comes down). A panel body
+     * carries the same id as its chip (data-sidebar-right-tab and
      * data-dockkit-tab), so the selected chip picks the active body even while
      * dockkit keeps another tab's section mounted. The chip title is
      * deliberately not read: it names the instance, the heading names the kind.
@@ -4458,23 +4464,48 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const selected = selectedTab === null || selectedTab === undefined
         ? null
         : selectedTab.getAttribute("data-dockkit-tab");
-      let fallback = "";
-      for (const body of scope.querySelectorAll("[data-sidebar-terminal], [data-sidebar-chat]")) {
-        if (body.closest("[hidden]") !== null) continue;
-        const key = body.hasAttribute("data-sidebar-terminal")
-          ? RIGHT_PANEL_HEADING_KEYS["data-sidebar-terminal"]
-          : RIGHT_PANEL_HEADING_KEYS["data-sidebar-chat"];
-        const tab = body.closest("[data-sidebar-right-tab]");
-        if (selected !== null && tab !== null && tab.getAttribute("data-sidebar-right-tab") === selected) return key;
-        if (fallback === "") fallback = key;
+      // The selected chip decides through its own body (#93). Without this, a
+      // chat body that dockkit keeps mounted for another tab would answer as
+      // the fallback and put "Subagent" above the terminal. A selected tab of
+      // an unnamed kind (terminal, preview, file) answers "" and gets no
+      // heading at all.
+      if (selected !== null) {
+        const selectedBody = scope.querySelector(`[data-sidebar-right-tab="${selected}"]`);
+        if (selectedBody !== null) {
+          for (const [attribute, key] of Object.entries(RIGHT_PANEL_HEADING_KEYS)) {
+            if (selectedBody.hasAttribute(attribute) || selectedBody.querySelector(`[${attribute}]`) !== null) return key;
+          }
+          return "";
+        }
       }
-      return fallback;
+      // A build that puts no wrapper on the selected tab: name the first
+      // visible body of a named kind, as before.
+      for (const [attribute, key] of Object.entries(RIGHT_PANEL_HEADING_KEYS)) {
+        for (const body of scope.querySelectorAll(`[${attribute}]`)) {
+          if (body.closest("[hidden]") === null) return key;
+        }
+      }
+      return "";
     }
 
-    /** Drop the heading node; safe to call when none exists. */
+    /**
+     * Drop the heading node; safe to call when none exists.
+     *
+     * The sweep covers a heading that an earlier client generation left in the
+     * DOM: a replaced module keeps the document but forgets its node, and
+     * without it the terminal would keep a heading the current code never
+     * inserts (#93). Returns whether anything was actually taken down, so the
+     * caller can refit the terminal that just grew.
+     */
     function removeRightPanelHeading() {
+      let removed = rightPanelHeadingNode !== null;
       rightPanelHeadingNode?.remove();
       rightPanelHeadingNode = null;
+      for (const stale of document.querySelectorAll("[data-rdsh-panel-heading]")) {
+        stale.remove();
+        removed = true;
+      }
+      return removed;
     }
 
     /**
@@ -4482,9 +4513,13 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      *
      * Only the mobile surface writes this node. It follows the active tab
      * (and a language change on the next pass), stays outside the tab strip
-     * and the terminal body, and is removed when the panel closes, moves to
+     * and the panel body, and is removed when the panel closes, moves to
      * another node, or the module tears down. The panel itself carries the
      * safe-area padding, so the heading only supplies its own gutters.
+     *
+     * #93: the terminal is not a named kind any more, so opening one (or
+     * switching to one) goes through the removal branch below; the terminal
+     * keeps the close X and the tab strip.
      */
     function decorateRightPanelHeading() {
       const open = document.documentElement.hasAttribute("data-rdsh-rightpanel-open");
@@ -4497,11 +4532,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const scope = activeRightPanelScope(rightPanelNode);
       const key = rightPanelHeadingKey(scope);
       if (key === "") {
-        // A file/preview tab takes the strip back: refit the terminal that a
-        // previous tab heading shortened, if one is still mounted.
-        const removed = rightPanelHeadingNode !== null;
-        removeRightPanelHeading();
-        if (removed) scheduleTerminalFit();
+        // A terminal or file/preview tab takes the strip back: refit the
+        // terminal that a previous heading shortened, if one is still mounted.
+        if (removeRightPanelHeading()) scheduleTerminalFit();
         return;
       }
       const label = t(key);
@@ -6143,19 +6176,31 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     // ---------------------------------------------------------------------
-    // #59: landscape drawer nav — one More row for the three stock actions
+    // #59 / #92: landscape drawer nav — one More row for the three stock actions
     //
     // Plugins, Automation tasks and Settings are wide rows; in landscape the
     // drawer is wider than the phone but still leaves the chat too little
     // room. Only the three rows are folded, and only while the viewport is
     // landscape: the stock nodes stay in place (React keeps its own state, the
     // single #87 Settings row keeps its lifecycle) and receive a hide
-    // attribute. The More row and its menu are this module's nodes and are
-    // removed on portrait, desktop and dispose.
+    // attribute.
+    //
+    // #92: rc.3 ships its own More launcher and portal menu, so a second row
+    // here would show "More" twice. When that launcher exists it is the only
+    // one; the folded rows' labels and glyphs are appended to its menu instead
+    // (decorateSidebarShellMore). A shell without the launcher keeps the #59
+    // row and its own menu, exactly as before.
     // ---------------------------------------------------------------------
     const NAV_MORE_HIDDEN = "data-rdsh-nav-more-hidden";
+    /** The shell slot rendered inside rc.3's More portal; its parent is the list. */
+    const SHELL_MORE_SLOT = "sidebar.panellist.actions";
     let sidebarNavMore = null;
     let sidebarNavMoreSeq = 0;
+    /** The menu our #92 rows live in, the stock rows they borrow from, and the exact nodes we appended. */
+    let shellMoreMenu = null;
+    let shellMoreRows = [];
+    let shellMoreNodes = [];
+    let shellMoreKey = "";
 
     /** #59: landscape means geometry, not the device mode; the mode gate is separate. */
     function navMoreLandscape() {
@@ -6335,6 +6380,117 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       return button;
     }
 
+    /** #92: the shell's own More launcher, matched structurally; never our row. */
+    function sidebarShellMoreLauncher(nav) {
+      if (nav === null) return null;
+      return [...nav.querySelectorAll('button[aria-haspopup="menu"]')]
+        .find((button) => !button.hasAttribute("data-rdsh-nav-more")) ?? null;
+    }
+
+    /** Remove the rows #92 appended to the shell menu and forget the menu. */
+    function clearSidebarShellMore() {
+      for (const node of shellMoreNodes) node.remove();
+      shellMoreNodes = [];
+      shellMoreRows = [];
+      shellMoreMenu = null;
+      shellMoreKey = "";
+    }
+
+    /**
+     * #92: close rc.3's More menu the way #41 closes a chip's menu — with the
+     * Escape its Menu already listens for — after dropping our own rows.
+     */
+    function dismissSidebarShellMore(menu) {
+      clearSidebarShellMore();
+      try {
+        menu.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+      } catch (error) {
+        /* a detached portal has already closed */
+      }
+    }
+
+    /**
+     * #92: put the three folded rows into the shell's own More menu.
+     *
+     * The stock launcher is the only More row now, so its menu must carry
+     * Plugins, Automation tasks and Settings. Labels and glyphs are borrowed
+     * from the hidden stock rows, which keeps the en/ja copy and the icons
+     * identical without another dictionary. These nodes live inside React's
+     * portal but React does not own them, so an open menu rebuilds them from
+     * scratch (a reused portal must not show them twice, #87) and a closed or
+     * unmounted portal drops them with its subtree.
+     */
+    function decorateSidebarShellMore(rows, launcher) {
+      if (launcher.getAttribute("aria-expanded") === "false") {
+        clearSidebarShellMore();
+        return;
+      }
+      const slot = document.querySelector(`[data-slot="${SHELL_MORE_SLOT}"]`);
+      const list = slot === null ? null : slot.parentElement;
+      const menu = slot === null ? null : slot.closest('[role="menu"]');
+      const stockRows = [rows.plugins, rows.automation, rows.settings];
+      const labels = [navRowLabel(stockRows[0]), navRowLabel(stockRows[1]), navRowLabel(stockRows[2])];
+      const key = labels.join("\u0000");
+      // Every decorate pass runs on the observer, including the one our own
+      // append wakes. Only a different menu, a different locale, a replaced
+      // stock row or a detached row list rebuilds; otherwise the pass must
+      // leave the DOM alone or it would rebuild once per frame.
+      const intact = list !== null
+        && menu === shellMoreMenu
+        && key === shellMoreKey
+        && shellMoreRows.length === 3
+        && shellMoreRows.every((row, index) => row === stockRows[index])
+        && shellMoreNodes.length === 4
+        && shellMoreNodes.every((node) => node.parentElement === list);
+      if (intact) return;
+      clearSidebarShellMore();
+      if (slot === null || list === null || menu === null) return;
+      const nodes = [];
+      for (const [index, row] of stockRows.entries()) {
+        const item = document.createElement("button");
+        item.type = "button";
+        item.className = "rdsh-mux-more-item";
+        item.setAttribute("role", "menuitem");
+        item.setAttribute("tabindex", "-1");
+        item.setAttribute("data-rdsh-more-item", "");
+        item.setAttribute("aria-label", labels[index]);
+        const glyph = row.querySelector(".hHd-Xa_panelGlyph svg") ?? row.querySelector("svg");
+        if (glyph !== null) {
+          const icon = document.createElement("span");
+          icon.className = "rdsh-mux-more-icon";
+          icon.setAttribute("aria-hidden", "true");
+          icon.append(glyph.cloneNode(true));
+          item.append(icon);
+        }
+        const text = document.createElement("span");
+        text.className = "rdsh-mux-more-label";
+        text.textContent = labels[index];
+        item.append(text);
+        item.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          // The stock row is display:none, but .click() still runs React's
+          // handler. Close first: Settings opens a second menu, and the Escape
+          // above would close that one instead if it were already mounted.
+          dismissSidebarShellMore(menu);
+          row.click();
+        });
+        nodes.push(item);
+      }
+      const separator = document.createElement("div");
+      separator.className = "rdsh-mux-more-sep";
+      separator.setAttribute("role", "separator");
+      separator.setAttribute("data-rdsh-more-item", "");
+      nodes.push(separator);
+      // The slot outlet is display:contents, so the list's own flex layout
+      // sees these rows and the shell rows as siblings in source order.
+      for (const node of nodes) list.insertBefore(node, slot);
+      shellMoreMenu = menu;
+      shellMoreRows = stockRows;
+      shellMoreNodes = nodes;
+      shellMoreKey = key;
+    }
+
     function decorateSidebarNavMore() {
       const nav = navMoreLandscape() ? document.querySelector("nav.hHd-Xa_panelList") : null;
       if (nav === null) {
@@ -6352,12 +6508,24 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         if (row !== rows.plugins && row !== rows.automation && row !== rows.settings) row.removeAttribute(NAV_MORE_HIDDEN);
       }
       for (const row of [rows.plugins, rows.automation, rows.settings]) row.setAttribute(NAV_MORE_HIDDEN, "");
+      const launcher = sidebarShellMoreLauncher(nav);
+      if (launcher !== null) {
+        // rc.3+: one launcher. Retire the #59 row (and its menu) if an older
+        // shell passed on the same page, then feed the shell menu instead.
+        if (sidebarNavMore !== null) closeSidebarNavMore();
+        for (const node of document.querySelectorAll("[data-rdsh-nav-more]")) node.remove();
+        decorateSidebarShellMore(rows, launcher);
+        return;
+      }
+      // rc.2 and older: no stock menu to feed, so #59's row stays the launcher.
+      clearSidebarShellMore();
       const button = ensureSidebarNavMore(nav, rows.plugins);
       if (sidebarNavMore !== null && sidebarNavMore.button !== button) closeSidebarNavMore();
     }
 
     function clearSidebarNavMore() {
       closeSidebarNavMore();
+      clearSidebarShellMore();
       for (const node of document.querySelectorAll("[data-rdsh-nav-more]")) node.remove();
       for (const row of document.querySelectorAll(`[${NAV_MORE_HIDDEN}]`)) row.removeAttribute(NAV_MORE_HIDDEN);
     }
@@ -13285,10 +13453,12 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
        it to this full-width pane as well double-insets the panel (and cost 47px
        of height in portrait). */
   }
-  /* #82: name the kind of panel above dockkit's tab strip. The panel already
-     applies the safe-area insets; the heading only adds its own gutters. It
-     is pointer-transparent and sits outside the strip and the terminal body,
-     so it cannot claim a tab drag or resize the xterm mount. */
+  /* #82: name the kind of panel above dockkit's tab strip. #93: the terminal
+     gets no heading (its chip already says "bash"), so this rule only styles
+     the child-session panel now. The panel already applies the safe-area
+     insets; the heading only adds its own gutters. It is pointer-transparent
+     and sits outside the strip and the panel body, so it cannot claim a tab
+     drag or resize the xterm mount. */
   [data-rdsh-rightpanel] [data-rdsh-panel-heading] {
     flex: 0 0 auto;
     box-sizing: border-box;
@@ -13478,6 +13648,41 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
 .rdsh-mux-nav-more-menu button[disabled] {
   color: var(--dsw-alias-label-tertiary, #a1a1aa);
   cursor: default;
+}
+
+/* #92: the three folded rows appended to the shell's own More menu. React does
+   not reconcile these nodes, so they cannot use a hashed shell class; the
+   dimensions mirror a shell menu row (36px, 16px glyph + 8px gap, 14px label)
+   and the hover tint is the same alias. */
+.rdsh-mux-more-item {
+  box-sizing: border-box; width: 100%; min-height: 36px;
+  margin: 0; padding: 7px 10px; border: 0; border-radius: var(--dsw-radius-md, 8px);
+  display: flex; align-items: center; gap: 8px;
+  font: inherit; font-size: 14px; line-height: 22px; text-align: left;
+  color: var(--dsw-alias-label-primary, #f9fafb); background: transparent;
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.rdsh-mux-more-item:hover,
+.rdsh-mux-more-item:focus-visible {
+  background: var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,.08));
+  outline: none;
+}
+.rdsh-mux-more-item:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary, #7aaaff);
+  outline-offset: -2px;
+}
+.rdsh-mux-more-icon {
+  flex: none; width: 16px; height: 16px;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.rdsh-mux-more-icon svg { width: 16px; height: 16px; display: block; }
+.rdsh-mux-more-label {
+  min-width: 0; overflow: hidden;
+  white-space: nowrap; text-overflow: ellipsis;
+}
+.rdsh-mux-more-sep {
+  flex: none; height: 1px; margin: 4px 6px;
+  background: var(--dsw-alias-border-l3, rgba(255,255,255,.16));
 }
 
 `;

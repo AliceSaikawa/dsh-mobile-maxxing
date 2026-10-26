@@ -1257,7 +1257,14 @@ test("#40 only a running chip animates, and the safety poll is under a second", 
 	assert.match(CLIENT, /\.rdsh-activity-ring \{[^}]*animation: none;/);
 	assert.match(CLIENT, /\[data-rdsh-activity-chip\]\[data-rdsh-activity-running\] \.rdsh-activity-ring \{[^}]*animation: rdsh-activity-spin/);
 	assert.match(CLIENT, /\[data-rdsh-activity-chip\]\[data-rdsh-activity-running\] \.rdsh-activity-ring \{[^}]*border-top-color/);
-	assert.equal(/cloneNode/.test(CLIENT), false, "the ring is never cloned from an upstream spinner");
+	// #92 appends the drawer rows to the shell's More menu by cloning their own
+	// svg glyphs, so scope this guard to the ring code rather than the whole file.
+	const ringSource = CLIENT.slice(
+		CLIENT.indexOf("function ensureActivityRing"),
+		CLIENT.indexOf("function decorateHeaderActivityChips"),
+	);
+	assert.equal(ringSource.length > 0, true, "the ring source could not be located");
+	assert.equal(/cloneNode/.test(ringSource), false, "the ring is never cloned from an upstream spinner");
 });
 
 // ---------------------------------------------------------------------------

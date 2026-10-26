@@ -267,6 +267,7 @@ function bootClient({
 	config = null,
 	fetchImpl = null,
 	navigator = null,
+	notification = null,
 	computedStyle = () => stub(),
 	theme = null,
 	locale = null,
@@ -353,7 +354,9 @@ function bootClient({
 		TouchEvent: class TouchEvent {},
 		Touch: class Touch {},
 		MessageChannel: class MessageChannel {},
-		Notification: stub(),
+		// `Notification` has to be replaceable for the push tests: the browser
+		// half reads `permission` to decide whether it may re-register (#98).
+		Notification: notification ?? stub(),
 		AudioContext: class AudioContext {},
 		screen: stub(),
 		innerWidth: narrow ? 390 : 1024,
@@ -3811,11 +3814,14 @@ function localNoticeHarness({
 	commits = "auto",
 	onlyMobileTurns = undefined,
 	pushTest = "ok",
+	notification = null,
+	storage = null,
 } = {}) {
 	const rendered = [];
 	const roots = [];
 	const ackPosts = [];
 	const testPushes = [];
+	const subscribePosts = [];
 	let latestBanner = null;
 	let lastKey = null;
 	let mountedOnce = false;
@@ -3833,7 +3839,8 @@ function localNoticeHarness({
 		pushManager: {
 			getSubscription: async () => {
 				if (subscriptionGate !== null) await subscriptionGate;
-				return endpoint === "" ? null : { endpoint };
+				// A real PushSubscription serializes itself for /subscribe.
+				return endpoint === "" ? null : { endpoint, toJSON: () => ({ endpoint }) };
 			},
 		},
 	};
@@ -3866,9 +3873,15 @@ function localNoticeHarness({
 			__RDSH_NOTICE_TEST__: {},
 			location: { origin: "https://app.example:8446", href: "https://app.example:8446/" },
 		},
+		notification,
+		storage,
 		fetchImpl: async (url, options) => {
 			const target = String(url);
 			if (target.endsWith("/push/ack")) ackPosts.push({ url: target, options });
+			if (target.endsWith("/push/subscribe")) {
+				subscribePosts.push({ url: target, options });
+				return { status: 200, ok: true, json: async () => ({ ok: true, count: 1 }) };
+			}
 			if (target.endsWith("/push/config")) {
 				// The real route answers with the host's copy, which carries
 				// onlyMobileTurns. An absent key is the host default (true).
@@ -3930,6 +3943,7 @@ function localNoticeHarness({
 		roots,
 		ackPosts,
 		testPushes,
+		subscribePosts,
 		api,
 		// A turn this browser sent is the one the host will route back to it.
 		markSend: (sessionId) => api.markMobileSession(sessionId),
@@ -4235,25 +4249,96 @@ test("the old worker's hand-off is answered only after the banner commits", asyn
 	booted.disposeAll();
 });
 
-test("a failed test push is not hidden by a local banner", async () => {
+test("a foreground test shows one banner and never asks for a push", async () => {
 	const endpoint = "https://web.push.apple.com/device";
-	const { booted, api, rendered, testPushes, ackPosts } = localNoticeHarness({ endpoint, pushTest: "fail" });
+	const { booted, api, rendered, testPushes, ackPosts } = localNoticeHarness({ endpoint });
+	await settleNoticeWork();
+	await api.sendTestNotification();
+	assert.equal(rendered.length, 1, "the foreground test raised no banner");
+	assert.equal(rendered[0], "DSH test notification — This banner is how it arrives while the app is open.");
+	// The host's test route sends a real Web Push, and the worker must show
+	// every push it receives, so asking for it would put an OS notification on
+	// top of the app the user is looking at (#98).
+	assert.deepEqual(testPushes, [], "a foreground test still took the push path");
+	assert.deepEqual(ackPosts, [], "the test banner acknowledged an event");
+	booted.disposeAll();
+});
+
+test("a foreground test without a subscription reports it instead of a banner", async () => {
+	const { booted, api, rendered, testPushes } = localNoticeHarness({ endpoint: "" });
+	await settleNoticeWork();
+	await assert.rejects(() => api.sendTestNotification(), /not enabled on this device/);
+	assert.equal(rendered.length, 0, "a banner claimed push works with no subscription");
+	assert.deepEqual(testPushes, [], "a missing subscription still took the push path");
+	booted.disposeAll();
+});
+
+test("a backgrounded page still takes the push path for a test", async () => {
+	const endpoint = "https://web.push.apple.com/device";
+	const { booted, api, rendered, testPushes } = localNoticeHarness({ endpoint, initialVisibility: "hidden" });
+	await settleNoticeWork();
+	await api.sendTestNotification();
+	assert.equal(testPushes.length, 1, "the background test did not reach the push path");
+	assert.equal(rendered.length, 0, "a hidden page rendered a banner");
+	booted.disposeAll();
+});
+
+test("a failed test push on a hidden page is reported", async () => {
+	const endpoint = "https://web.push.apple.com/device";
+	const { booted, api, rendered, testPushes, ackPosts } = localNoticeHarness({ endpoint, pushTest: "fail", initialVisibility: "hidden" });
 	await settleNoticeWork();
 	await assert.rejects(() => api.sendTestNotification(), /Push was rejected/);
 	assert.equal(testPushes.length, 1, "the test did not reach the push path");
 	assert.equal(rendered.length, 0, "the test raised a local banner before the push result");
-	assert.deepEqual(ackPosts, [], "the test acknowledged a foreground event");
+	assert.deepEqual(ackPosts, [], "the test acknowledged an event");
 	booted.disposeAll();
 });
 
-test("a successful test push raises no extra local banner", async () => {
+test("a launch re-registers this device's subscription and names the one it replaced", async () => {
 	const endpoint = "https://web.push.apple.com/device";
-	const { booted, api, rendered, testPushes } = localNoticeHarness({ endpoint });
+	const previous = "https://web.push.apple.com/previous";
+	const { booted, subscribePosts } = localNoticeHarness({
+		endpoint,
+		notification: { permission: "granted" },
+		storage: { "rdsh-mobile-ux:push-endpoint": previous },
+	});
 	await settleNoticeWork();
-	await api.sendTestNotification();
-	assert.equal(testPushes.length, 1, "the test did not reach the push path");
-	assert.equal(rendered.length, 0, "a successful test push stacked a local banner on the system one");
+	assert.equal(subscribePosts.length, 1, "the launch did not refresh the subscription");
+	const body = JSON.parse(subscribePosts[0].options.body);
+	assert.equal(body.subscription.endpoint, endpoint);
+	assert.equal(body.previousEndpoint, previous, "the replaced endpoint was not named");
+	assert.equal(body.origin, "https://app.example:8446");
+	// The next launch names the endpoint it now holds.
+	assert.equal(booted.sandbox.localStorage.getItem("rdsh-mobile-ux:push-endpoint"), endpoint);
 	booted.disposeAll();
+});
+
+test("a launch names no previous endpoint while the registration did not change", async () => {
+	const endpoint = "https://web.push.apple.com/device";
+	const { booted, subscribePosts } = localNoticeHarness({
+		endpoint,
+		notification: { permission: "granted" },
+		storage: { "rdsh-mobile-ux:push-endpoint": endpoint },
+	});
+	await settleNoticeWork();
+	assert.equal(subscribePosts.length, 1);
+	assert.equal(JSON.parse(subscribePosts[0].options.body).previousEndpoint, "", "an unchanged endpoint was reported as replaced");
+	booted.disposeAll();
+});
+
+test("a launch without permission or a subscription registers nothing", async () => {
+	const noPermission = localNoticeHarness({
+		endpoint: "https://web.push.apple.com/device",
+		notification: { permission: "default" },
+	});
+	await settleNoticeWork();
+	assert.deepEqual(noPermission.subscribePosts, [], "a permission-less launch registered a subscription");
+	noPermission.booted.disposeAll();
+
+	const noSubscription = localNoticeHarness({ endpoint: "", notification: { permission: "granted" } });
+	await settleNoticeWork();
+	assert.deepEqual(noSubscription.subscribePosts, [], "a launch with no subscription posted one");
+	noSubscription.booted.disposeAll();
 });
 
 test("a local-only notice still marks the banner for the worker hand-off", async () => {

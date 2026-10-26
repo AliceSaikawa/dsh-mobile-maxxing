@@ -11158,6 +11158,65 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       emit({ notifications: await notificationStatus() });
     }
 
+    /**
+     * The endpoint this browser registered last, remembered in localStorage.
+     *
+     * The host retires that exact entry when the next registration arrives
+     * (#98): a replaced endpoint is unreachable from this page but still
+     * delivered to this device, so it must stop being a fan-out target.
+     * localStorage is per browser and per origin, so the value names this
+     * device's own previous endpoint and never another device's.
+     */
+    const PUSH_ENDPOINT_KEY = "rdsh-mobile-ux:push-endpoint";
+
+    /** The endpoint this browser registered last, or "". */
+    function readPushEndpoint() {
+      try {
+        const value = localStorage.getItem(PUSH_ENDPOINT_KEY);
+        return typeof value === "string" ? value : "";
+      } catch {
+        /* private mode */
+        return "";
+      }
+    }
+
+    /** Remember the endpoint this browser holds now. */
+    function rememberPushEndpoint(endpoint) {
+      if (typeof endpoint !== "string" || endpoint === "") return;
+      try {
+        localStorage.setItem(PUSH_ENDPOINT_KEY, endpoint);
+      } catch {
+        /* private mode */
+      }
+    }
+
+    /**
+     * Store this browser's subscription, naming the endpoint it replaces.
+     *
+     * @param {PushSubscription} subscription - the browser's current registration.
+     * @returns {Promise<Response>} the host's answer.
+     */
+    async function savePushSubscription(subscription) {
+      const endpoint = typeof subscription?.endpoint === "string" ? subscription.endpoint : "";
+      const previousEndpoint = readPushEndpoint();
+      const saved = await fetch(`${PUSH_API}/subscribe`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        // `origin` becomes the VAPID contact for pushes: Apple rejects
+        // mailto:root@localhost with 403 BadJwtToken, but accepts the app's own
+        // https origin. `previousEndpoint` is this browser's own earlier
+        // registration ("" on the first run), which the host retires.
+        body: JSON.stringify({
+          subscription: subscription.toJSON(),
+          label: navigator.userAgent,
+          origin: location.origin,
+          previousEndpoint: previousEndpoint === endpoint ? "" : previousEndpoint,
+        }),
+      });
+      if (saved.ok) rememberPushEndpoint(endpoint);
+      return saved;
+    }
+
     async function enableNotifications() {
       if (typeof Notification === "undefined") throw new Error(t("notify.unsupported"));
       const permission = await Notification.requestPermission();
@@ -11170,16 +11229,35 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const subscription = existing === null
         ? await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(publicKey) })
         : existing;
-      const saved = await fetch(`${PUSH_API}/subscribe`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        // `origin` becomes the VAPID contact for pushes: Apple rejects
-        // mailto:root@localhost with 403 BadJwtToken, but accepts the app's own
-        // https origin.
-        body: JSON.stringify({ subscription: subscription.toJSON(), label: navigator.userAgent, origin: location.origin }),
-      });
+      const saved = await savePushSubscription(subscription);
       if (!saved.ok) throw new Error(t("notify.subscribeFailed", { status: saved.status }));
       await refreshNotificationStatus();
+    }
+
+    /**
+     * Re-register this browser's existing subscription on every launch (#98).
+     *
+     * A browser can rotate its registration, and the host retires the old
+     * endpoint only when a page names it. Registering again also refreshes the
+     * entry's timestamp, which is the host's evidence that this device still
+     * holds that endpoint: the stale-entry valve keys on it, so an entry is
+     * never pruned while its device keeps opening the app. Nothing is created
+     * here — without permission or an existing subscription there is nothing
+     * to send.
+     */
+    async function syncPushSubscription() {
+      if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+      if (!("serviceWorker" in navigator)) return;
+      try {
+        const registration = await navigator.serviceWorker.getRegistration();
+        const subscription = registration === null || registration === undefined
+          ? null
+          : await registration.pushManager.getSubscription();
+        if (subscription === null || subscription === undefined) return;
+        await savePushSubscription(subscription);
+      } catch {
+        // A failed sync leaves the stored entry alone; Settings can retry.
+      }
     }
 
     async function disableNotifications() {
@@ -11203,9 +11281,28 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     async function sendTestNotification() {
-      // A local showNotification always succeeds, so it proves nothing about
-      // the push path. Ask the host to push for real, and fall back to the
-      // local notification only when the host has no such route.
+      // A visible page draws the banner itself. The host's `/push/test` sends
+      // a real Web Push, and the service worker has to show every push it
+      // receives (WebKit revokes a subscription after silent pushes), so a
+      // foreground test would put a system notification on top of the app the
+      // user is looking at (#98). Push is exercised only when this page cannot
+      // draw a banner — the one case that needs an OS notification. A missing
+      // subscription is still an error: a banner alone must not claim that
+      // push works.
+      if (pageVisible()) {
+        const status = await notificationStatus();
+        if (!status.subscribed) throw new Error(t("notify.notSubscribed"));
+        const shown = notifyUser({
+          title: t("notify.testTitle"),
+          body: t("notify.testBody"),
+          sessionId: currentSessionId ?? "",
+          kind: "test",
+        });
+        if (shown) return;
+      }
+      // A backgrounded page (or a shell with no banner to mount) still proves
+      // the real path: ask the host to push, and fall back to the local
+      // notification only when the host has no such route.
       let pushed = null;
       try {
         const response = await fetch(`${PUSH_API}/test`, {
@@ -14268,6 +14365,9 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
 
         scheduleDecorate();
         void refreshNotificationStatus();
+        // #98: re-assert this device's subscription so a rotated endpoint
+        // retires the one it replaced, and the host sees this device as live.
+        void syncPushSubscription();
 
         globalThis.__RDSH_MOBILE_UX__ = {
           get state() { return { ...state }; },

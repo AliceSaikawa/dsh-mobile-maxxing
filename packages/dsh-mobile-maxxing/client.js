@@ -7573,6 +7573,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     let workspacePickerState = null;
     let workspacePickerWatch = null;
     let workspacePickerWatchTimer = 0;
+    let workspaceMenuWatch = null;
+    let workspaceMenuWatched = null;
+    let workspaceMenuBand = null;
 
     /**
      * Stop watching for the picker's portal and release the reserved band.
@@ -7658,6 +7661,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const state = workspacePickerState;
       workspacePickerState = null;
       workspacePickerPending = false;
+      stopWorkspaceMenuWatch();
       document.documentElement.removeAttribute("data-rdsh-workspace-picking");
       if (state === null) return;
       state.input.removeEventListener("keydown", state.keydown);
@@ -7742,6 +7746,87 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       return null;
     }
 
+    /**
+     * Keep the open picker inside the phone's safe band (#39).
+     *
+     * Upstream places the panel with a 12px margin against
+     * `window.innerWidth/innerHeight`, which is the layout viewport: on a
+     * phone that includes the status bar and the landscape notch. The first
+     * frame of the original bug proved it (a raw 169x820 panel at y=12), and a
+     * panel pushed against the top edge puts its search row inside the cut-out.
+     * The band the user can see is the one measureSafeArea() published plus the
+     * visual viewport, so the panel is shifted inside it; a panel that already
+     * fits is never touched (a desktop or a device without insets is a no-op).
+     */
+    function clampWorkspaceMenu(menu) {
+      const style = menu.style;
+      if (style === null || style === undefined) return;
+      const top = parseFloat(style.top);
+      const left = parseFloat(style.left);
+      // Upstream has not placed the panel yet (or it is a test fixture): its
+      // own inline top/left is the only thing this pass may correct.
+      if (!Number.isFinite(top) || !Number.isFinite(left)) return;
+      const viewport = window.visualViewport;
+      const vvTop = Number.isFinite(viewport?.offsetTop) ? viewport.offsetTop : 0;
+      const vvLeft = Number.isFinite(viewport?.offsetLeft) ? viewport.offsetLeft : 0;
+      const vvWidth = Number.isFinite(viewport?.width) && viewport.width > 0 ? viewport.width : window.innerWidth;
+      const vvHeight = Number.isFinite(viewport?.height) && viewport.height > 0 ? viewport.height : window.innerHeight;
+      const minTop = Math.ceil(vvTop + safeInset("top") + 8);
+      const maxBottom = vvTop + vvHeight - safeInset("bottom") - 8;
+      const minLeft = Math.ceil(vvLeft + safeInset("left") + 8);
+      const maxRight = vvLeft + vvWidth - safeInset("right") - 8;
+      if (!(maxBottom > minTop) || !(maxRight > minLeft)) return;
+      const rect = typeof menu.getBoundingClientRect === "function" ? menu.getBoundingClientRect() : null;
+      const width = menu.offsetWidth || (rect === null ? 0 : rect.width) || 0;
+      const height = menu.offsetHeight || (rect === null ? 0 : rect.height) || 0;
+      const nextTop = height > 0
+        ? Math.min(Math.max(top, minTop), Math.max(minTop, Math.floor(maxBottom - height)))
+        : Math.max(top, minTop);
+      const nextLeft = width > 0
+        ? Math.min(Math.max(left, minLeft), Math.max(minLeft, Math.floor(maxRight - width)))
+        : Math.max(left, minLeft);
+      if (nextTop !== top) style.top = `${nextTop}px`;
+      if (nextLeft !== left) style.left = `${nextLeft}px`;
+    }
+
+    /**
+     * Follow the picker's own inline top/left (upstream rewrites them on
+     * scroll/resize) and the visible band (rotation, keyboard pan). A style
+     * observer alone would miss a band change: the panel's inline position does
+     * not change when the notch or the keyboard moves the safe area.
+     */
+    function watchWorkspaceMenu(menu) {
+      if (workspaceMenuWatched === menu && workspaceMenuWatch !== null) {
+        clampWorkspaceMenu(menu);
+        return;
+      }
+      stopWorkspaceMenuWatch();
+      workspaceMenuWatched = menu;
+      clampWorkspaceMenu(menu);
+      if (typeof MutationObserver === "function") {
+        workspaceMenuWatch = new MutationObserver(() => clampWorkspaceMenu(menu));
+        workspaceMenuWatch.observe(menu, { attributes: true, attributeFilter: ["style"] });
+      }
+      workspaceMenuBand = () => clampWorkspaceMenu(menu);
+      for (const target of [window, window.visualViewport]) {
+        target?.addEventListener?.("resize", workspaceMenuBand);
+        target?.addEventListener?.("scroll", workspaceMenuBand);
+      }
+    }
+
+    function stopWorkspaceMenuWatch() {
+      workspaceMenuWatch?.disconnect();
+      workspaceMenuWatch = null;
+      workspaceMenuWatched = null;
+      const band = workspaceMenuBand;
+      workspaceMenuBand = null;
+      if (band === null) return;
+      for (const target of [window, window.visualViewport]) {
+        target?.removeEventListener?.("resize", band);
+        target?.removeEventListener?.("scroll", band);
+      }
+    }
+
     function decorateWorkspacePicker() {
       if (!phone()) {
         clearWorkspacePicker();
@@ -7814,6 +7899,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       viewport.append(empty);
       menu.setAttribute("data-rdsh-workspace-menu", "");
       viewport.setAttribute("data-rdsh-workspace-viewport", "");
+      watchWorkspaceMenu(menu);
       workspacePickerState = { menu, viewport, wrappers, input, search, empty, keydown };
       workspacePickerPending = false;
       apply();

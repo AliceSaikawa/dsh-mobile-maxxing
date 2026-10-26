@@ -7,14 +7,13 @@ English: [USAGE.en.md](USAGE.en.md)
 
 ## このパッケージについて
 
-もともと別々だった3つのプラグインを1つにまとめたものです。CJK 修正だけは、PC 側の描画を
+もともと別々だったプラグインを1つにまとめたものです。CJK 修正だけは、PC 側の描画を
 変えない方針のため別パッケージのままです。
 
 | 元 | いま |
 | --- | --- |
 | `rdsh-pwa` | PWA（インストール可能化・オフライン起動・通知の送受信・通知音） |
 | `rdsh-mobile-ux` | モバイル端末のUX（ドロワー・設定・入力・コード表示・アプリ内バナー） |
-| `rdsh-session-id-copy` | セッションメニューにセッションIDのコピー行を足す |
 | `rdsh-markdown-cjk`（別パッケージ） | CJK の自動リンク崩れ修正。本体にはマウントしません |
 
 **分けていない理由**: DSH のクライアントモジュールシステムは1パッケージ＝1ブラウザモジュールです。
@@ -147,7 +146,7 @@ UA・幅・ポインタ種別・タッチ点数から判定し直しません。
 読み込み順は、**有効な `__RDSH_DEVICE_MODE__` → 有効な
 `html[data-rdsh-device-mode]` → どちらも無効なら desktop**（fail closed）です。
 矛盾する場合は global が優先されます。desktop ではクライアントは**何も構築せず**
-（PWA・設定タブ・セッションIDコピー等すべての part を適用せず）、DOM・style・listener・
+（PWA・設定タブ等すべての part を適用せず）、DOM・style・listener・
 storage のいずれにも触れません。
 
 - スマホ（iPhone/Android、縦横とも）とタブレット（iPad、Android タブレット）は mobile。
@@ -326,7 +325,7 @@ rdsh-mobile-ui / rdsh-answer-guard など）は不要で、素の DSH にその�
 
 - `rdsh-mobile-ux` の `runningAnimation` / `hideLabels` / `showHiddenControls` は
   `dsh-mobile-maxxing` の `mobileUx.*` へ移す
-- 統合版と重なる `rdsh-mobile-ux` / `rdsh-session-id-copy` / `dsh-notify-push` を profile から外す。
+- 旧構成の `rdsh-mobile-ux` / `rdsh-session-id-copy` / `dsh-notify-push` を profile から外す。
   レイアウト用の `rdsh-mobile-ui` と通知音の `@local/dsh-sound` も、残すと二重制御・二重再生に
   なるため外す
 - CJK 修正はこのパッケージに含まれない。必要なら `rdsh-markdown-cjk` を別途残す

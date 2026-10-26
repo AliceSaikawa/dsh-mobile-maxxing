@@ -676,7 +676,6 @@ test("representative Japanese copy matches the reference wording", () => {
 		"crop.cancel": "キャンセル",
 		"crop.save": "クエリに追加",
 		"frame.menu": "色枠",
-		"sessionId.label": "セッションIDをコピー",
 		"notify.turn.completed": "作業完了",
 		"notify.questionHeader": "確認",
 		"notify.previewQuestion": "このまま進めますか？",
@@ -693,6 +692,16 @@ test("representative Japanese copy matches the reference wording", () => {
 		assert.equal(copyFor("ja")[key], value, `${key} does not match the reference Japanese`);
 	}
 	assert.equal(copyFor("en")["tab.mobile"], "Mobile");
+});
+
+test("the local session-id copy row is gone (#99)", () => {
+	// rc.3 registers its own `session-id` row in the same menu slot, so the
+	// local part made the menu show two identical copy rows. Upstream is the
+	// only owner now: the factory, its slot id and its copy keys stay gone.
+	assert.equal(CLIENT.includes("sessionIdCopyPart"), false, "the local factory is still in the bundle");
+	assert.equal(CLIENT.includes("rdsh-session-id-copy"), false, "the local slot id is still in the bundle");
+	const copy = readFileSync(new URL("../lib/copy.js", import.meta.url), "utf8");
+	assert.equal(/["']sessionId\./.test(copy), false, "a sessionId.* copy key is still shipped");
 });
 
 test("the retired diagnostics and custom hide are gone", () => {

@@ -267,9 +267,6 @@ export const COPY = {
 		// --- composer / session menu ----------------------------------------
 		"add.label": "Add image or file",
 		"add.stock": "Add files or run commands",
-		"sessionId.label": "Copy Session ID to clipboard",
-		"sessionId.copied": "Session ID copied",
-		"sessionId.manualPrompt": "Session ID (copy it manually)",
 
 		// --- workspace picker / right-panel files ---------------------------
 		"workspace.search.placeholder": "Search workspaces",
@@ -547,9 +544,6 @@ export const COPY = {
 		// --- composer / session menu ----------------------------------------
 		"add.label": "画像やファイルを追加",
 		"add.stock": "ファイルを追加またはコマンドを実行",
-		"sessionId.label": "セッションIDをコピー",
-		"sessionId.copied": "セッションIDをコピーしました",
-		"sessionId.manualPrompt": "セッションID（手動でコピーしてください）",
 
 		// --- workspace picker / right-panel files ---------------------------
 		"workspace.search.placeholder": "ワークスペースを検索",

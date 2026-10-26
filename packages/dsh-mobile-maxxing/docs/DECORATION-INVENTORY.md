@@ -93,8 +93,8 @@ drawer state stay released.
 
 `client.js` resolves the mode before it builds anything and returns
 `{ apply() {} }` for a desktop. A PC therefore gets **no part of this package**:
-no PWA shell (no manifest handling, no service worker registration), no
-session-id copy row, no Settings cards or tabs, no terminal touch bridge, and no
+no PWA shell (no manifest handling, no service worker registration),
+no Settings cards or tabs, no terminal touch bridge, and no
 listener, style, timer, fetch or storage read. Every surface described in this
 document is mobile mode only.
 

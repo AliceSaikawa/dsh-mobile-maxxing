@@ -32,7 +32,6 @@
 import { createHash } from "node:crypto";
 import { applyNotify, normalizeNotifyConfig } from "./notify/host.js";
 import { apply as applyMobileUx } from "./lib/mobile-ux.js";
-import { apply as applySessionIdCopy } from "./lib/session-id-copy.js";
 import { COPY, PROBES, copyFor, serviceWorkerCopy } from "./lib/copy.js";
 import { copyTable } from "./lib/copy-source.js";
 import { MANIFEST_FILE, MODE_GLOBAL, earlyModeScript } from "./lib/device-mode.js";
@@ -360,8 +359,6 @@ export function apply(ctx, config) {
 	// URLs for every client, desktops included. The module (lib/markdown-cjk.js)
 	// keeps its standalone API for the independent rdsh-markdown-cjk plugin; the
 	// merged plugin stays stock for PC and mobile alike.
-	// Registers nothing: its whole contribution is the browser half.
-	mountPart("rdsh-session-id-copy", [], applySessionIdCopy, undefined);
 	// Read once per activation: a deployment restart is what makes new bytes
 	// visible, which is also what bumps the service-worker build hash.
 	const files = new Map();

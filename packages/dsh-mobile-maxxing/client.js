@@ -3,8 +3,8 @@ window.__ModuleLoader__.load({
   factory(require) {
     // dsh-mobile-maxxing — browser half.
     //
-    // One module carries three behaviours that used to be separate plugins:
-    // the PWA shell, the mobile-device UX, and the session-id copy row.
+    // One module carries two behaviours that used to be separate plugins:
+    // the PWA shell and the mobile-device UX.
     // They ship together because the client module system maps one package to
     // one browser module: a package cannot register several.
     //
@@ -457,13 +457,12 @@ window.__ModuleLoader__.load({
 
     // Shared clipboard + toast
     //
-    // Two surfaces copy text: the session menu (its id) and the right-panel
-    // file tree (a path or a name). Both use the same secure-context path and
-    // the same fallback, so there is one place where a failed clipboard is
-    // handled.
+    // The right-panel file tree copies a path or a name. The secure-context
+    // path and the selection fallback stay in one place, so another copy
+    // surface can share the same failure handling.
     // ---------------------------------------------------------------------
-    const TOAST_HOST_ID = "rdsh-session-id-copy-toast";
-    const TOAST_ROOT_KEY = "__rdshSessionIdCopyToastRoot";
+    const TOAST_HOST_ID = "rdsh-copy-toast";
+    const TOAST_ROOT_KEY = "__rdshCopyToastRoot";
 
     async function copyText(text) {
       const clipboard =
@@ -3270,17 +3269,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         // Leaving the phone (or turning hiding off) must not leave a stale
         // attribute behind for the next pass to trip over.
         for (const row of modal.querySelectorAll("[data-rdsh-setting-hidden]")) row.removeAttribute("data-rdsh-setting-hidden");
-      }
-      // Two plugins can add a "copy this session's id" row. Keep one: prefer the
-      // localised rdsh row (it reports success) and drop the stock duplicate.
-      const menu = document.querySelector("[role='menu']");
-      if (menu !== null && hideOnThisDevice) {
-        const items = [...menu.querySelectorAll("[role='menuitem']")];
-        const localised = items.find((item) => (item.textContent || "").includes(t("sessionId.label")));
-        const stock = items.find((item) => /^Copy Session ID$/i.test(labelOf(item)));
-        if (localised !== undefined && stock !== undefined) {
-          stock.setAttribute("data-rdsh-hidden", "");
-        }
       }
     }
 
@@ -13085,6 +13073,18 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   [data-shortcut-modal="settings"] [class*="zGbnIq_rowName"] { min-width: 0 !important; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   [data-shortcut-modal="settings"] [class*="zGbnIq_rowActions"] { flex-shrink: 0; gap: 6px; }
   [data-shortcut-modal="settings"] [class*="zGbnIq_rowActions"] button { padding-left: 10px !important; padding-right: 10px !important; }
+  /* Settings > Models: the two-step "Add provider" tabs wrap instead of
+     running off the card. The primitive tab is nowrap and the panel has no
+     scroller of its own (overflow-x is hidden above), so a long ja label
+     overflowed the card with no way to reach it (#100). */
+  [data-shortcut-modal="settings"] [class*="zGbnIq_addModes"] { min-width: 0; max-width: 100%; }
+  [data-shortcut-modal="settings"] [class*="zGbnIq_addModes"] > [role="tablist"] {
+    max-width: 100% !important;
+    grid-auto-columns: minmax(0, 1fr) !important; box-sizing: border-box;
+  }
+  [data-shortcut-modal="settings"] [class*="zGbnIq_addModes"] > [role="tablist"] > [role="tab"] {
+    white-space: normal !important; height: auto !important; min-height: 28px; padding: 4px 10px !important;
+  }
 
   /* Model picker: value never runs into the chevron. */
   [class*="_7KE1Ra_menu"] { max-width: calc(100vw - 24px) !important; box-sizing: border-box !important; }
@@ -14219,72 +14219,16 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
     }
 
     // ---------------------------------------------------------------------
-    // rdsh-session-id-copy — copy a session id from its row menu.
-    // ---------------------------------------------------------------------
-    function sessionIdCopyPart() {
-
-    const React = require("react");
-    const primitives = require("@deepseek-ai/dsh-client-ui-primitives");
-    const h = React.createElement;
-
-    const SLOT = "sidebar.workspaces.session.menu.item";
-    const ENTRY_ID = "rdsh-session-id-copy";
-    // After the shipped rows (pin 100 / rename 200 / fork 300 / archive 400).
-    const ORDER = 500;
-    // Resolved at render time so the device-local display language reaches
-    // this row too; the registration label is likewise a getter.
-    const label = () => t("sessionId.label");
-
-    /** One "..." menu row: copy this Session's ID, then close the menu. */
-    function CopySessionIdMenuItem({ sessionId, useMenuOpenState }) {
-      const [, setMenuOpen] = useMenuOpenState();
-      const id = String(sessionId ?? "");
-      return h(primitives.MenuItemButton, {
-        // Icon seat of the shipped rows; the default 16px one-pixel outline,
-        // like pin / rename / fork beside it.
-        icon: h(primitives.IconCopyOutlineRegular, { key: "icon" }),
-        onSelect: () => {
-          setMenuOpen(false);
-          void copyText(id).then((copied) => {
-            if (copied) {
-              notify(t("sessionId.copied"));
-              return;
-            }
-            // 自動コピーが両方とも塞がれている環境では、選択済みの ID を見せる。
-            if (typeof window === "object" && window !== null && typeof window.prompt === "function") {
-              window.prompt(t("sessionId.manualPrompt"), id);
-            }
-          });
-        },
-        children: label(),
-      });
-    }
-
-    return {
-      inject: ["slots"],
-      apply(ctx) {
-        // Wait for ui-workspace's declaration before contributing to it.
-        ctx.slots.inject(SLOT, () =>
-          ctx.slots.register({ name: SLOT, id: ENTRY_ID, order: ORDER, label }, CopySessionIdMenuItem),
-        );
-      },
-    };
-    }
-
-    // ---------------------------------------------------------------------
     // Wiring
     // ---------------------------------------------------------------------
     return {
       inject: ["slots"],
       apply(ctx) {
-        // Order matters only for the one that touches the session menu: the id
-        // copy row registers into its own slot, so any order works. Each part
-        // is built and applied behind its own guard: one broken half must not
-        // take the other two down with it.
+        // Each part is built and applied behind its own guard: one broken half
+        // must not take the other one down with it.
         const factories = [
           ["pwa", pwaPart],
           ["mobile-ux", mobilePart],
-          ["session-id-copy", sessionIdCopyPart],
         ];
         for (const [name, factory] of factories) {
           let part;

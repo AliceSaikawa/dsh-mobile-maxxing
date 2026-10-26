@@ -6,14 +6,13 @@ Everything `dsh-mobile-maxxing` does, in detail. **For installation see the [REA
 
 ## What this package is
 
-Three plugins that used to be separate, merged into one. The CJK autolink fix remains a
+Plugins that used to be separate, merged into one. The CJK autolink fix remains a
 separate package because it rewrites the PC renderer.
 
 | Was | Now |
 | --- | --- |
 | `rdsh-pwa` | PWA: installable, offline launch, notification send/receive, notification sounds |
 | `rdsh-mobile-ux` | Phone-width UX: drawer, settings, composer, code view, in-app banners |
-| `rdsh-session-id-copy` | Adds a session-id copy row to the session menu |
 | `rdsh-markdown-cjk` (separate) | Fixes broken autolinks around CJK text; not mounted by this package |
 
 **Why not separate packages:** DSH maps one package to one browser module. Splitting them
@@ -30,7 +29,6 @@ separate because it changes the PC renderer.
 | Notification sounds | Five synthesised presets, volume, no audio files |
 | Mobile layout | Sidebar becomes a drawer, settings open in one tap, code wraps by default (toggle available) |
 | CJK rendering (optional) | Only with the separate `rdsh-markdown-cjk` package; this package leaves the Markdown renderer stock to avoid changing the PC |
-| Session id copy | One row in the session row menu |
 
 ## Screenshots
 
@@ -343,7 +341,7 @@ as follows. **This package never edits the profile.**
 
 - Move `rdsh-mobile-ux`'s `runningAnimation` / `hideLabels` / `showHiddenControls` to
   `dsh-mobile-maxxing.mobileUx.*`
-- Remove the plugins this package replaces from the profile: `rdsh-mobile-ux`,
+- Remove the old plugins from the profile: `rdsh-mobile-ux`,
   `rdsh-session-id-copy`, `dsh-notify-push`. Also remove `rdsh-mobile-ui` (layout) and
   `@local/dsh-sound` (sounds) if present, or the layout and the notification sound are
   controlled twice

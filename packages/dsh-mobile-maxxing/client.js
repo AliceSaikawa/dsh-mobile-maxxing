@@ -3608,6 +3608,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       "data-rdsh-question-frame",
       "data-rdsh-question-tile",
       "data-rdsh-question-arrow",
+      "data-rdsh-question-typing",
       "data-rdsh-todo-item",
       "data-rdsh-todo-text",
       "data-rdsh-todo-status",
@@ -4975,6 +4976,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     let modelMenuWatched = null;
     let modelMenuMaxWidth = null;
     let modelMenuNaturalWidth = null;
+    let modelMenuBand = null;
 
     /**
      * The open model picker (#97).
@@ -5073,6 +5075,15 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       clearModelMenuWatch();
       modelMenuWatched = menu;
       clampModelMenu(menu);
+      // #84: the safe band moves when the keyboard opens, the page pans or the
+      // phone rotates, and upstream's inline left does not change then. Without
+      // these listeners the clamp only ran on the menu's own style writes, so
+      // an open panel could sit outside the band the user can see.
+      modelMenuBand = () => clampModelMenu(menu);
+      for (const target of [window, window.visualViewport]) {
+        target?.addEventListener?.("resize", modelMenuBand);
+        target?.addEventListener?.("scroll", modelMenuBand);
+      }
       if (typeof MutationObserver !== "function") return;
       modelMenuWatch = new MutationObserver(() => clampModelMenu(menu));
       modelMenuWatch.observe(menu, { attributes: true, attributeFilter: ["style"] });
@@ -5081,6 +5092,14 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     function clearModelMenuWatch() {
       modelMenuWatch?.disconnect();
       modelMenuWatch = null;
+      const band = modelMenuBand;
+      modelMenuBand = null;
+      if (band !== null) {
+        for (const target of [window, window.visualViewport]) {
+          target?.removeEventListener?.("resize", band);
+          target?.removeEventListener?.("scroll", band);
+        }
+      }
       if (modelMenuWatched !== null && modelMenuMaxWidth !== null
         && modelMenuWatched.style !== null && modelMenuWatched.style !== undefined
         && modelMenuWatched.style.maxWidth === modelMenuMaxWidth) {
@@ -5816,10 +5835,127 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       update();
     }
 
+    /** Question cards whose Enter/validation behaviour is already installed. */
+    const questionBehaviorCards = new WeakSet();
+
+    /**
+     * Whether this card still needs a selected option, or null when it offers
+     * none: a free-text-only question has nothing to select, so its text is
+     * the whole answer and the required-choice rule cannot apply.
+     *
+     * Structure only: the option's role plus aria-checked is what the upstream
+     * card exposes in every locale, so no translated label is matched here.
+     *
+     * @param {Element} card - the question card.
+     * @returns {boolean|null}
+     */
+    function questionNeedsSelection(card) {
+      const options = card.querySelectorAll('[class*="_options"] [role="radio"], [class*="_options"] [role="checkbox"]');
+      if (options.length === 0) return null;
+      return card.querySelector('[role="radio"][aria-checked="true"], [role="checkbox"][aria-checked="true"]') === null;
+    }
+
+    /** The footer button that submits this question, or advances the set. */
+    function questionSubmitButton(card) {
+      const actions = card.querySelector('[class*="_footerActions"]');
+      const buttons = actions === null ? [] : [...actions.querySelectorAll("button")];
+      return buttons.length === 0 ? null : buttons[buttons.length - 1];
+    }
+
+    /** Scroll the focused answer field into the card's own body scroller. */
+    function revealQuestionField(card) {
+      const body = card.querySelector('[class*="_body"]');
+      const field = card.querySelector("textarea");
+      const row = field === null ? null : field.closest('[class*="_customRow"], [class*="_customBlock"], [class*="_field"]');
+      if (body === null || row === null || body.scrollHeight <= body.clientHeight + 2) return;
+      const bodyRect = body.getBoundingClientRect();
+      const rowRect = row.getBoundingClientRect();
+      if (rowRect.bottom > bodyRect.bottom - 4) body.scrollTop += rowRect.bottom - bodyRect.bottom + 8;
+      else if (rowRect.top < bodyRect.top + 4) body.scrollTop -= bodyRect.top - rowRect.top + 8;
+    }
+
+    /** Say why nothing was sent, in the card's own status line. */
+    function refuseEmptyQuestion(card) {
+      const feedback = card.querySelector('[class*="_feedback"]');
+      if (feedback !== null) feedback.textContent = t("question.selectRequired");
+    }
+
+    /** Take our refusal down once a choice exists; leave upstream errors alone. */
+    function clearQuestionFeedback(card) {
+      const feedback = card.querySelector('[class*="_feedback"]');
+      if (feedback !== null && feedback.textContent === t("question.selectRequired")) feedback.textContent = "";
+    }
+
+    /**
+     * The submit button stays the only way to send without a keyboard
+     * shortcut; the guard runs before the click, so upstream's "a custom
+     * answer counts" rule cannot send a zero-selection answer for a question
+     * that has options. Skip remains its own explicit, labelled action.
+     */
+    function submitQuestionCard(card) {
+      if (questionNeedsSelection(card) === true) {
+        refuseEmptyQuestion(card);
+        return;
+      }
+      questionSubmitButton(card)?.click();
+    }
+
+    /**
+     * Enter in the answer field is a line break; the button or Cmd/Ctrl+Enter
+     * sends. Upstream's React handler submits on any Enter, so this capture
+     * listener stops that handler. A plain Enter is not default-prevented and
+     * still inserts the newline.
+     *
+     * @param {KeyboardEvent} event - the field's keydown.
+     * @param {Element} card - the question card that owns the field.
+     */
+    function questionCardKeyDown(event, card) {
+      if (event.key !== "Enter" || event.shiftKey || event.isComposing || event.keyCode === 229) return;
+      event.stopPropagation();
+      if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+      if (!event.metaKey && !event.ctrlKey) return;
+      event.preventDefault();
+      submitQuestionCard(card);
+    }
+
+    /** Install the phone-only answer-field rules once per card node. */
+    function installQuestionCardBehavior(card) {
+      if (questionBehaviorCards.has(card) || card.querySelector('[class*="_options"]') === null) return;
+      const field = card.querySelector("textarea");
+      if (field === null || questionSubmitButton(card) === null) return;
+      questionBehaviorCards.add(card);
+      card.addEventListener("focusin", () => {
+        // The keyboard shrinks the layout viewport; this attribute lifts the
+        // 60vh cap while a field is focused, and the next frame keeps that
+        // field inside the card's scroller.
+        card.setAttribute("data-rdsh-question-typing", "");
+        requestAnimationFrame(() => revealQuestionField(card));
+      });
+      card.addEventListener("focusout", (event) => {
+        if (card.contains(event.relatedTarget)) return;
+        card.removeAttribute("data-rdsh-question-typing");
+      });
+      field.addEventListener("keydown", (event) => questionCardKeyDown(event, card), true);
+      card.addEventListener("click", (event) => {
+        const button = event.target?.closest?.("button") ?? null;
+        if (button === null || button !== questionSubmitButton(card)) {
+          // A choice lands after React commits; clear our message on that frame.
+          requestAnimationFrame(() => {
+            if (questionNeedsSelection(card) === false) clearQuestionFeedback(card);
+          });
+          return;
+        }
+        if (questionNeedsSelection(card) !== true) return;
+        event.preventDefault();
+        if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+        refuseEmptyQuestion(card);
+      }, true);
+    }
+
     function decorateQuestionCards() {
       if (!phone()) {
         clearQuestionArrows();
-        for (const attribute of ["data-rdsh-question-card", "data-rdsh-question-frame", "data-rdsh-question-tile"]) {
+        for (const attribute of ["data-rdsh-question-card", "data-rdsh-question-frame", "data-rdsh-question-tile", "data-rdsh-question-typing"]) {
           clearOwnedAttribute(attribute);
         }
         return;
@@ -5834,6 +5970,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           tile.setAttribute("data-rdsh-question-tile", "");
         }
         decorateQuestionArrow(card);
+        installQuestionCardBehavior(card);
+        if (card.hasAttribute("data-rdsh-question-typing")) revealQuestionField(card);
         live.add(card);
       }
       for (const [card, state] of questionArrowState) {
@@ -7591,6 +7729,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     let workspacePickerState = null;
     let workspacePickerWatch = null;
     let workspacePickerWatchTimer = 0;
+    let workspaceMenuWatch = null;
+    let workspaceMenuWatched = null;
+    let workspaceMenuBand = null;
 
     /**
      * Stop watching for the picker's portal and release the reserved band.
@@ -7676,6 +7817,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const state = workspacePickerState;
       workspacePickerState = null;
       workspacePickerPending = false;
+      stopWorkspaceMenuWatch();
       document.documentElement.removeAttribute("data-rdsh-workspace-picking");
       if (state === null) return;
       state.input.removeEventListener("keydown", state.keydown);
@@ -7760,6 +7902,87 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       return null;
     }
 
+    /**
+     * Keep the open picker inside the phone's safe band (#39).
+     *
+     * Upstream places the panel with a 12px margin against
+     * `window.innerWidth/innerHeight`, which is the layout viewport: on a
+     * phone that includes the status bar and the landscape notch. The first
+     * frame of the original bug proved it (a raw 169x820 panel at y=12), and a
+     * panel pushed against the top edge puts its search row inside the cut-out.
+     * The band the user can see is the one measureSafeArea() published plus the
+     * visual viewport, so the panel is shifted inside it; a panel that already
+     * fits is never touched (a desktop or a device without insets is a no-op).
+     */
+    function clampWorkspaceMenu(menu) {
+      const style = menu.style;
+      if (style === null || style === undefined) return;
+      const top = parseFloat(style.top);
+      const left = parseFloat(style.left);
+      // Upstream has not placed the panel yet (or it is a test fixture): its
+      // own inline top/left is the only thing this pass may correct.
+      if (!Number.isFinite(top) || !Number.isFinite(left)) return;
+      const viewport = window.visualViewport;
+      const vvTop = Number.isFinite(viewport?.offsetTop) ? viewport.offsetTop : 0;
+      const vvLeft = Number.isFinite(viewport?.offsetLeft) ? viewport.offsetLeft : 0;
+      const vvWidth = Number.isFinite(viewport?.width) && viewport.width > 0 ? viewport.width : window.innerWidth;
+      const vvHeight = Number.isFinite(viewport?.height) && viewport.height > 0 ? viewport.height : window.innerHeight;
+      const minTop = Math.ceil(vvTop + safeInset("top") + 8);
+      const maxBottom = vvTop + vvHeight - safeInset("bottom") - 8;
+      const minLeft = Math.ceil(vvLeft + safeInset("left") + 8);
+      const maxRight = vvLeft + vvWidth - safeInset("right") - 8;
+      if (!(maxBottom > minTop) || !(maxRight > minLeft)) return;
+      const rect = typeof menu.getBoundingClientRect === "function" ? menu.getBoundingClientRect() : null;
+      const width = menu.offsetWidth || (rect === null ? 0 : rect.width) || 0;
+      const height = menu.offsetHeight || (rect === null ? 0 : rect.height) || 0;
+      const nextTop = height > 0
+        ? Math.min(Math.max(top, minTop), Math.max(minTop, Math.floor(maxBottom - height)))
+        : Math.max(top, minTop);
+      const nextLeft = width > 0
+        ? Math.min(Math.max(left, minLeft), Math.max(minLeft, Math.floor(maxRight - width)))
+        : Math.max(left, minLeft);
+      if (nextTop !== top) style.top = `${nextTop}px`;
+      if (nextLeft !== left) style.left = `${nextLeft}px`;
+    }
+
+    /**
+     * Follow the picker's own inline top/left (upstream rewrites them on
+     * scroll/resize) and the visible band (rotation, keyboard pan). A style
+     * observer alone would miss a band change: the panel's inline position does
+     * not change when the notch or the keyboard moves the safe area.
+     */
+    function watchWorkspaceMenu(menu) {
+      if (workspaceMenuWatched === menu && workspaceMenuWatch !== null) {
+        clampWorkspaceMenu(menu);
+        return;
+      }
+      stopWorkspaceMenuWatch();
+      workspaceMenuWatched = menu;
+      clampWorkspaceMenu(menu);
+      if (typeof MutationObserver === "function") {
+        workspaceMenuWatch = new MutationObserver(() => clampWorkspaceMenu(menu));
+        workspaceMenuWatch.observe(menu, { attributes: true, attributeFilter: ["style"] });
+      }
+      workspaceMenuBand = () => clampWorkspaceMenu(menu);
+      for (const target of [window, window.visualViewport]) {
+        target?.addEventListener?.("resize", workspaceMenuBand);
+        target?.addEventListener?.("scroll", workspaceMenuBand);
+      }
+    }
+
+    function stopWorkspaceMenuWatch() {
+      workspaceMenuWatch?.disconnect();
+      workspaceMenuWatch = null;
+      workspaceMenuWatched = null;
+      const band = workspaceMenuBand;
+      workspaceMenuBand = null;
+      if (band === null) return;
+      for (const target of [window, window.visualViewport]) {
+        target?.removeEventListener?.("resize", band);
+        target?.removeEventListener?.("scroll", band);
+      }
+    }
+
     function decorateWorkspacePicker() {
       if (!phone()) {
         clearWorkspacePicker();
@@ -7832,6 +8055,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       viewport.append(empty);
       menu.setAttribute("data-rdsh-workspace-menu", "");
       viewport.setAttribute("data-rdsh-workspace-viewport", "");
+      watchWorkspaceMenu(menu);
       workspacePickerState = { menu, viewport, wrappers, input, search, empty, keydown };
       workspacePickerPending = false;
       apply();
@@ -8061,10 +8285,18 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       runFilesSearch(filesSearch?.input.value ?? "");
     }
 
-    /** Keep the explicit clear button in step with the field. */
+    /**
+     * Keep the explicit clear button in step with the field.
+     *
+     * #83: it used to wait for an `input` event, so on a phone the ✕ was
+     * invisible until a soft-keyboard keystroke arrived (and WebKit's native
+     * cancel can emit only `search`). It is shown while the field is focused,
+     * which is the state the user is in when looking for it.
+     */
     function syncFilesSearchClear() {
       if (filesSearch === null) return;
-      filesSearch.clear.hidden = filesSearch.input.value === "";
+      const { clear, input } = filesSearch;
+      clear.hidden = input.value === "" && document.activeElement !== input;
     }
 
     /** Clear the field, the filter and the highlight, then return focus. */
@@ -8124,6 +8356,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (filesSearch !== null) {
         filesSearch.input.removeEventListener("keydown", onFilesSearchKeyDown);
         filesSearch.input.removeEventListener("input", onFilesSearchInput);
+        filesSearch.input.removeEventListener("search", onFilesSearchInput);
+        filesSearch.input.removeEventListener("focus", syncFilesSearchClear);
+        filesSearch.input.removeEventListener("blur", syncFilesSearchClear);
         filesSearch.button.removeEventListener("click", onFilesSearchSubmit);
         filesSearch.clear.removeEventListener("click", onFilesSearchClear);
         filesSearch.search.remove();
@@ -8166,6 +8401,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       input.addEventListener("input", onFilesSearchInput);
       button.addEventListener("click", onFilesSearchSubmit);
       clear.addEventListener("click", onFilesSearchClear);
+      input.addEventListener("search", onFilesSearchInput);
+      input.addEventListener("focus", syncFilesSearchClear);
+      input.addEventListener("blur", syncFilesSearchClear);
       const body = root.querySelector("[data-files-body]");
       if (body === null) root.append(search);
       else root.insertBefore(search, body);
@@ -8533,6 +8771,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (filesSearch !== null) {
         filesSearch.input.removeEventListener("keydown", onFilesSearchKeyDown);
         filesSearch.input.removeEventListener("input", onFilesSearchInput);
+        filesSearch.input.removeEventListener("search", onFilesSearchInput);
+        filesSearch.input.removeEventListener("focus", syncFilesSearchClear);
+        filesSearch.input.removeEventListener("blur", syncFilesSearchClear);
         filesSearch.button.removeEventListener("click", onFilesSearchSubmit);
         filesSearch.clear.removeEventListener("click", onFilesSearchClear);
         filesSearch.search.remove();
@@ -13563,7 +13804,10 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   /* Model picker: value never runs into the chevron. The menu class hash
      changes between builds (#76), so the JS hook scopes the rule and only the
      stable cell suffix is matched. */
-  [data-rdsh-model-menu] { max-width: calc(100vw - 24px) !important; box-sizing: border-box !important; }
+  /* No !important on max-width: the clamp writes a narrower inline cap when the
+     safe band is smaller than the menu, and !important made that write lose, so
+     a wide menu crossed the right edge (#84). */
+  [data-rdsh-model-menu] { max-width: calc(100vw - 24px); box-sizing: border-box !important; }
   [data-rdsh-model-menu] [class*="_cell"] { min-width: 0 !important; gap: 8px !important; }
   [data-rdsh-model-menu] [class*="_cell"] > span:last-of-type { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   [data-rdsh-model-search]:disabled { opacity: 1 !important; cursor: text; }
@@ -13820,6 +14064,13 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   /* The answer field takes its height from a hidden mirror, so both layers
      must share the font size (16px here stops iOS from zooming on focus). */
   [data-rdsh-question-card] [class*="_field"] > * { font-size: 16px !important; }
+  /* The on-screen keyboard shrinks the layout viewport, and upstream's 60vh
+     cap then collapsed the card to its header and footer before the answer
+     field. While a field inside the card has focus, size the card from the
+     visible height; the phone JS keeps that field scrolled into view. */
+  [data-rdsh-question-card][data-rdsh-question-typing] {
+    max-height: calc(100dvh - 28px) !important;
+  }
   /* The card clips its overflow, so a long unbroken token used to be cut. */
   [data-rdsh-question-card] [class*="_optionLabel"],
   [data-rdsh-question-card] [class*="_title"],
@@ -14478,6 +14729,13 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             decorate: decorateTerminalKeys,
             sequence: terminalKeySequence,
             controlByte: terminalControlByte,
+          },
+          // The answer field's Enter/required-selection rules. The tests drive
+          // these closures the way folderFrames is driven above.
+          questionCard: {
+            keyDown: questionCardKeyDown,
+            needsSelection: questionNeedsSelection,
+            clearFeedback: clearQuestionFeedback,
           },
           phone,
           // Folder frames and the one-shot workspace-menu claim. The keys,

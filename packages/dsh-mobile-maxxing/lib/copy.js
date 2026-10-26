@@ -265,6 +265,9 @@ export const COPY = {
 		"notify.previewQuestion": "Continue as is?",
 		"notify.testPayloadBody": "Tap to open this session.",
 
+		// --- agent question card ---------------------------------------------
+		"question.selectRequired": "Select at least one option to continue.",
+
 		// --- composer / session menu ----------------------------------------
 		"add.label": "Add image or file",
 		"add.stock": "Add files or run commands",
@@ -542,6 +545,9 @@ export const COPY = {
 		"notify.questionMore": "（他 {count} 件）",
 		"notify.previewQuestion": "このまま進めますか？",
 		"notify.testPayloadBody": "タップするとこのセッションが開きます。",
+
+		// --- agent question card ---------------------------------------------
+		"question.selectRequired": "選択肢を1つ以上選んでください。",
 
 		// --- composer / session menu ----------------------------------------
 		"add.label": "画像やファイルを追加",

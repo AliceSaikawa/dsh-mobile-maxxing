@@ -4927,3 +4927,130 @@ test("#80 a full ja desktop keeps the stock nav and installs no phone controls",
 	assert.equal(fixture.docListeners.length, 0, "a ja desktop installed the mobile click listener");
 	fixture.booted.disposeAll();
 });
+
+
+/**
+ * A question card stand-in for the answer-field rules. Only the structural
+ * queries those rules make are answered; anything label-based throws, so a
+ * translation regression cannot pass through this fake.
+ */
+function questionCardFixture({ options = 2, checked = 0 } = {}) {
+	const feedback = { textContent: "" };
+	let clicks = 0;
+	const submit = {
+		click() {
+			clicks += 1;
+		},
+	};
+	return {
+		feedback,
+		get clicks() {
+			return clicks;
+		},
+		querySelectorAll(selector) {
+			assert.doesNotMatch(selector, /aria-label/, "the question guard matched a translated label");
+			assert.match(selector, /role="(?:radio|checkbox)"/, "the option list was not found structurally");
+			return new Array(options).fill({});
+		},
+		querySelector(selector) {
+			assert.doesNotMatch(selector, /aria-label/, "the question guard matched a translated label");
+			if (selector.includes('aria-checked="true"')) return checked > 0 ? {} : null;
+			if (selector.includes('_footerActions')) return { querySelectorAll: () => [{}, submit] };
+			if (selector.includes('_feedback')) return feedback;
+			return null;
+		},
+	};
+}
+
+/** A synthetic keydown; only what the rule reads. */
+function enterKey(overrides = {}) {
+	const event = {
+		key: "Enter",
+		shiftKey: false,
+		metaKey: false,
+		ctrlKey: false,
+		isComposing: false,
+		keyCode: 13,
+		prevented: 0,
+		stopped: 0,
+		preventDefault() {
+			event.prevented += 1;
+		},
+		stopPropagation() {
+			event.stopped += 1;
+		},
+		stopImmediatePropagation() {},
+		...overrides,
+	};
+	return event;
+}
+
+test("#26 a question with options needs one selected, a free-text question does not", () => {
+	const booted = bootClient({ mode: "mobile", narrow: true });
+	const { needsSelection } = booted.sandbox.__RDSH_MOBILE_UX__.questionCard;
+
+	assert.equal(needsSelection(questionCardFixture({ options: 2, checked: 0 })), true, "an empty question was accepted");
+	assert.equal(needsSelection(questionCardFixture({ options: 2, checked: 1 })), false, "a chosen option was rejected");
+	assert.equal(needsSelection(questionCardFixture({ options: 3, checked: 2 })), false, "two multi-select choices were rejected");
+	// A free-text-only question has no options to choose, so its text is the answer.
+	assert.equal(needsSelection(questionCardFixture({ options: 0 })), null, "a free-text-only question became unsendable");
+	booted.disposeAll();
+});
+
+test("#26 Enter in the answer field breaks the line; only Cmd/Ctrl+Enter sends", () => {
+	const booted = bootClient({ mode: "mobile", narrow: true, copy: COPY, lang: "ja" });
+	const { keyDown } = booted.sandbox.__RDSH_MOBILE_UX__.questionCard;
+
+	const plain = enterKey();
+	const plainCard = questionCardFixture({ options: 2, checked: 1 });
+	keyDown(plain, plainCard);
+	assert.equal(plain.stopped, 1, "plain Enter was left to upstream's submit handler");
+	assert.equal(plain.prevented, 0, "plain Enter lost its newline");
+	assert.equal(plainCard.clicks, 0, "plain Enter submitted the question");
+
+	const shifted = enterKey({ shiftKey: true });
+	keyDown(shifted, plainCard);
+	assert.equal(shifted.prevented, 0, "Shift+Enter lost its newline");
+	assert.equal(shifted.stopped, 0, "Shift+Enter was intercepted needlessly");
+
+	const composing = enterKey({ isComposing: true });
+	keyDown(composing, plainCard);
+	assert.equal(composing.stopped, 0, "an IME confirm was intercepted");
+	assert.equal(plainCard.clicks, 0, "an IME confirm submitted the question");
+
+	const chord = enterKey({ ctrlKey: true });
+	const empty = questionCardFixture({ options: 2, checked: 0 });
+	keyDown(chord, empty);
+	assert.equal(chord.prevented, 1, "Cmd/Ctrl+Enter was not taken over");
+	assert.equal(empty.clicks, 0, "Cmd/Ctrl+Enter sent a zero-selection answer");
+	assert.equal(empty.feedback.textContent, COPY.ja["question.selectRequired"], "the missing choice was not explained in ja");
+
+	const meta = enterKey({ metaKey: true });
+	const chosen = questionCardFixture({ options: 2, checked: 1 });
+	keyDown(meta, chosen);
+	assert.equal(chosen.clicks, 1, "Cmd/Ctrl+Enter did not press the submit button");
+	assert.equal(chosen.feedback.textContent, "", "a valid send showed the missing-choice message");
+
+	const freeText = enterKey({ ctrlKey: true });
+	const onlyText = questionCardFixture({ options: 0 });
+	keyDown(freeText, onlyText);
+	assert.equal(onlyText.clicks, 1, "a free-text-only question could not be sent from the keyboard");
+	booted.disposeAll();
+});
+
+
+test("#26 the missing-choice message clears when a choice lands, an upstream error stays", () => {
+	const booted = bootClient({ mode: "mobile", narrow: true, copy: COPY, lang: "ja" });
+	const { clearFeedback } = booted.sandbox.__RDSH_MOBILE_UX__.questionCard;
+	const card = questionCardFixture({ options: 2, checked: 1 });
+	card.feedback.textContent = COPY.ja["question.selectRequired"];
+	clearFeedback(card);
+	assert.equal(card.feedback.textContent, "", "the refusal stayed after a choice was made");
+	card.feedback.textContent = COPY.en["question.selectRequired"];
+	clearFeedback(card);
+	assert.equal(card.feedback.textContent, COPY.en["question.selectRequired"], "an en refusal was not cleared");
+	card.feedback.textContent = "Please complete this question first.";
+	clearFeedback(card);
+	assert.equal(card.feedback.textContent, "Please complete this question first.", "an upstream error was cleared");
+	booted.disposeAll();
+});

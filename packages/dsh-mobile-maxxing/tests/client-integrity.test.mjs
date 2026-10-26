@@ -510,6 +510,21 @@ test("a finger drag in the terminal becomes a wheel event", () => {
 	assert.match(CLIENT, /target\.closest\("input, textarea, \[contenteditable=true\], \.xterm/, "the back-swipe still claims terminal drags");
 });
 
+test("#59 landscape nav More is a mobile-sheet control", () => {
+	const phone = cssTemplate("CSS_PHONE");
+	const device = cssTemplate("CSS_DEVICE");
+	assert.match(phone, /\[data-rdsh-nav-more-hidden\] \{ display: none !important; \}/, "the folded rows have no hide rule");
+	assert.match(phone, /\.rdsh-mux-nav-more-menu/, "the More menu has no phone styling");
+	assert.doesNotMatch(device, /rdsh-nav-more|data-rdsh-nav-more/, "a landscape nav rule leaked into the device sheet");
+	// The gate is phone mode AND landscape geometry, not a width breakpoint.
+	assert.match(
+		CLIENT,
+		/function navMoreLandscape\(\) \{\s*return phone\(\) && window\.innerWidth > window\.innerHeight;\s*\}/,
+		"the More gate is not mobile-landscape",
+	);
+	assert.match(CLIENT, /function clearSidebarNavMore\(\)/, "the injected More row has no cleanup path");
+});
+
 test("the right panel keeps upstream tab dimensions but its tap replay", () => {
 	assert.match(functionHead("decorateRightPanelTabs", 600), /querySelectorAll\('\[data-rdsh-rightpanel\] \[role="tab"\]\[data-dockkit-tab\]'\)/, "the tab selector is not attribute-based");
 	assert.match(functionHead("decorateRightPanelTabs", 600), /tab\.setAttribute\("data-rdsh-rtab", ""\)/, "the tab hook is never written");
@@ -640,6 +655,9 @@ test("upstream label probes cover English and Japanese", () => {
 	}
 	assert.ok(PROBES.untitled.includes("new session"));
 	assert.ok(PROBES.untitled.includes("新しいセッション"));
+	// #59: the landscape More menu and the drawer route-close both use these.
+	assert.ok(PROBES.navPlugins.includes("Plugins"));
+	assert.ok(PROBES.navAutomation.includes("Automation tasks"));
 });
 
 test("representative Japanese copy matches the reference wording", () => {

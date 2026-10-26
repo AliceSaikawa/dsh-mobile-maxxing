@@ -2267,3 +2267,332 @@ test("font and language availability are independent and fail soft", () => {
 	assert.equal(localeOnlyService.snapshot.active, "zh");
 	assert.equal(localeOnly.sandbox.document.documentElement.lang, "zh-CN");
 });
+
+/* ---------------------------------------------------------------------- */
+/* #59: landscape drawer nav folds into one accessible More row           */
+/* ---------------------------------------------------------------------- */
+
+/** A small element with the event/children support the More menu needs. */
+function navNode(doc, tag = "div") {
+	const node = element();
+	const listeners = new Map();
+	node.tagName = String(tag).toUpperCase();
+	node.children = [];
+	node.parentElement = null;
+	node.className = "";
+	node.textContent = "";
+	node.addEventListener = (type, handler) => {
+		if (!listeners.has(type)) listeners.set(type, []);
+		listeners.get(type).push(handler);
+	};
+	node.removeEventListener = (type, handler) => {
+		const list = listeners.get(type);
+		if (list === undefined) return;
+		const at = list.indexOf(handler);
+		if (at >= 0) list.splice(at, 1);
+	};
+	node.dispatchNav = (type, props = {}) => {
+		const event = {
+			type,
+			target: node,
+			currentTarget: node,
+			defaultPrevented: false,
+			propagationStopped: false,
+			preventDefault() { this.defaultPrevented = true; },
+			stopPropagation() { this.propagationStopped = true; },
+			stopImmediatePropagation() { this.propagationStopped = true; },
+			...props,
+		};
+		for (const handler of [...(listeners.get(type) ?? [])]) handler.call(node, event);
+		return event;
+	};
+	node.click = () => node.dispatchNav("click");
+	node.focus = () => { doc.activeElement = node; };
+	node.appendChild = (child) => {
+		if (child.parentElement !== null) child.remove();
+		child.parentElement = node;
+		node.children.push(child);
+		return child;
+	};
+	node.append = (...children) => {
+		for (const child of children) node.appendChild(child);
+	};
+	node.insertBefore = (child, reference) => {
+		if (child.parentElement !== null) child.remove();
+		const at = node.children.indexOf(reference);
+		child.parentElement = node;
+		if (at < 0) node.children.push(child);
+		else node.children.splice(at, 0, child);
+		return child;
+	};
+	node.after = (sibling) => {
+		const parent = node.parentElement;
+		if (parent === null) return;
+		parent.insertBefore(sibling, node.nextElementSibling);
+	};
+	node.remove = () => {
+		const parent = node.parentElement;
+		if (parent === null) return;
+		const at = parent.children.indexOf(node);
+		if (at >= 0) parent.children.splice(at, 1);
+		node.parentElement = null;
+	};
+	node.contains = (target) => target === node || node.children.some((child) => child.contains(target));
+	node.querySelectorAll = (selector) => {
+		const found = [];
+		const walk = (current) => {
+			for (const child of current.children) {
+				if (navMatches(child, selector)) found.push(child);
+				walk(child);
+			}
+		};
+		walk(node);
+		return found;
+	};
+	node.querySelector = (selector) => node.querySelectorAll(selector)[0] ?? null;
+	Object.defineProperty(node, "nextElementSibling", {
+		get() {
+			if (node.parentElement === null) return null;
+			const siblings = node.parentElement.children;
+			return siblings[siblings.indexOf(node) + 1] ?? null;
+		},
+	});
+	Object.defineProperty(node, "lastElementChild", {
+		get() { return node.children[node.children.length - 1] ?? null; },
+	});
+	return node;
+}
+
+/** The tiny selector language the nav fixture and the menu use. */
+function navMatches(node, selector) {
+	for (const branch of selector.split(",")) {
+		const part = branch.trim();
+		if (part === "") continue;
+		const tag = (part.match(/^([A-Za-z][\w-]*)/) ?? [])[1];
+		if (tag !== undefined && node.tagName !== tag.toUpperCase()) continue;
+		const classMatch = part.match(/\.([A-Za-z0-9_-]+)/);
+		if (classMatch !== null && !String(node.className).split(/\s+/).includes(classMatch[1])) continue;
+		const attributes = [...part.matchAll(/\[([A-Za-z0-9_-]+)(?:=(?:"([^"]*)"|'([^']*)'))?\]/g)];
+		if (attributes.length === 0) {
+			if (tag !== undefined || classMatch !== null) return true;
+			continue;
+		}
+		if (attributes.every(([, name, doubleQuoted, singleQuoted]) => node.hasAttribute(name)
+			&& ((doubleQuoted ?? singleQuoted) === undefined || node.getAttribute(name) === (doubleQuoted ?? singleQuoted)))) return true;
+	}
+	return false;
+}
+
+function navBoot({ mode = "mobile", narrow = false } = {}) {
+	const frames = [];
+	const docListeners = [];
+	const windowListeners = [];
+	const created = [];
+	const counts = { plugins: 0, automation: 0, settings: 0 };
+	let nav = null;
+	let body = null;
+	let newSession = null;
+	let plugins = null;
+	let automation = null;
+	const booted = bootClient({
+		mode,
+		narrow,
+		copy: COPY,
+		frames,
+		windowAdd(type, handler) { windowListeners.push({ type, handler }); },
+		windowRemove(type, handler) {
+			const at = windowListeners.findIndex((entry) => entry.type === type && entry.handler === handler);
+			if (at >= 0) windowListeners.splice(at, 1);
+		},
+		configureDocument(doc) {
+			body = navNode(doc, "body");
+			nav = navNode(doc, "nav");
+			nav.className = "hHd-Xa_panelList";
+			newSession = navNode(doc, "button");
+			plugins = navNode(doc, "button");
+			automation = navNode(doc, "button");
+			newSession.setAttribute("aria-label", "New Session");
+			plugins.setAttribute("aria-label", "Plugins");
+			automation.setAttribute("aria-label", "Automation tasks");
+			nav.append(newSession, plugins, automation);
+			body.append(nav);
+			doc.body = body;
+			doc.createElement = (tag) => {
+				const node = navNode(doc, tag);
+				created.push(node);
+				return node;
+			};
+			doc.querySelector = (selector) => {
+				if (selector === "nav.hHd-Xa_panelList") return nav;
+				if (selector === "[data-rdsh-settings-row]"
+					|| selector === "[data-rdsh-settings-row], .rdsh-mux-settings-row") return nav.querySelector("[data-rdsh-settings-row]");
+				if (selector === "[data-rdsh-nav-more]") return nav.querySelector("[data-rdsh-nav-more]");
+				return null;
+			};
+			doc.querySelectorAll = (selector) => {
+				if (selector === "[data-rdsh-settings-row], .rdsh-mux-settings-row"
+					|| selector === "[data-rdsh-nav-more]"
+					|| selector === "[data-rdsh-nav-more-hidden]"
+					|| selector === "[data-rdsh-more-row]") return nav.querySelectorAll(selector);
+				return [];
+			};
+			doc.addEventListener = (type, handler, options) => {
+				const capture = options === true || (options !== undefined && options !== null && options.capture === true);
+				docListeners.push({ type, handler, capture });
+			};
+			doc.removeEventListener = (type, handler, options) => {
+				const capture = options === true || (options !== undefined && options !== null && options.capture === true);
+				const at = docListeners.findIndex((entry) => entry.type === type && entry.handler === handler && entry.capture === capture);
+				if (at >= 0) docListeners.splice(at, 1);
+			};
+		},
+	});
+	const run = () => {
+		while (frames.length > 0) frames.shift()();
+	};
+	run();
+	return {
+		booted,
+		doc: booted.sandbox.document,
+		sandbox: booted.sandbox,
+		nav,
+		body,
+		newSession,
+		plugins,
+		automation,
+		created,
+		docListeners,
+		windowListeners,
+		counts,
+		run,
+		settingsRow: () => nav.querySelector("[data-rdsh-settings-row]"),
+		more: () => nav.querySelector("[data-rdsh-nav-more]"),
+		menus: () => body.querySelectorAll(".rdsh-mux-nav-more-menu"),
+		items: () => body.querySelectorAll("button[role='menuitem']"),
+	};
+}
+
+test("#59 landscape folds the three nav rows into one More row", () => {
+	const fixture = navBoot();
+	const more = fixture.more();
+	assert.ok(more, "the landscape More row was not created");
+	assert.equal(more.getAttribute("aria-haspopup"), "menu");
+	assert.equal(more.getAttribute("aria-expanded"), "false");
+	assert.equal(more.getAttribute("aria-label"), COPY.en["mux.navMore"]);
+	assert.equal(more.className.includes("rdsh-mux-nav-more"), true);
+	assert.equal(more.nextElementSibling, fixture.plugins, "More is not in the first folded row's slot");
+	for (const row of [fixture.plugins, fixture.automation, fixture.settingsRow()]) {
+		assert.equal(row.hasAttribute("data-rdsh-nav-more-hidden"), true, "a folded row is still visible");
+	}
+	assert.equal(fixture.nav.querySelectorAll("[data-rdsh-settings-row]").length, 1, "the Settings row was duplicated");
+
+	// Repainting must not duplicate the More row or the single #87 Settings row.
+	for (let pass = 0; pass < 3; pass += 1) fixture.booted.sandbox.__RDSH_MOBILE_UX__.decorateNow();
+	assert.equal(fixture.nav.querySelectorAll("[data-rdsh-nav-more]").length, 1);
+	assert.equal(fixture.nav.querySelectorAll("[data-rdsh-settings-row]").length, 1);
+	assert.equal(fixture.nav.querySelectorAll("[data-rdsh-nav-more-hidden]").length, 3);
+	fixture.booted.disposeAll();
+});
+
+test("#59 the More menu focuses and activates each folded row", () => {
+	const fixture = navBoot();
+	const settingsRow = fixture.settingsRow();
+	fixture.plugins.click = () => { fixture.counts.plugins += 1; };
+	fixture.automation.click = () => { fixture.counts.automation += 1; };
+	settingsRow.click = () => { fixture.counts.settings += 1; };
+	const more = fixture.more();
+
+	for (const [index, countKey] of [[0, "plugins"], [1, "automation"], [2, "settings"]]) {
+		more.click();
+		const menus = fixture.menus();
+		assert.equal(menus.length, 1, "More did not open exactly one menu");
+		const menu = menus[0];
+		assert.equal(menu.getAttribute("role"), "menu");
+		assert.equal(menu.getAttribute("aria-label"), COPY.en["mux.navMore.menu"]);
+		const items = fixture.items();
+		assert.deepEqual(items.map((item) => item.textContent), ["Plugins", "Automation tasks", "Settings"]);
+		assert.equal(fixture.doc.activeElement, items[0], "the first menu item did not receive focus");
+		// ArrowDown moves focus without leaving the menu.
+		items[0].dispatchNav("keydown", { key: "ArrowDown" });
+		assert.equal(fixture.doc.activeElement, items[1], "ArrowDown did not move focus");
+		items[1].dispatchNav("keydown", { key: "ArrowUp" });
+		assert.equal(fixture.doc.activeElement, items[0], "ArrowUp did not move focus");
+		assert.equal(more.getAttribute("aria-expanded"), "true");
+		items[index].click();
+		assert.equal(fixture.counts[countKey], 1, `the ${countKey} row did not run`);
+		assert.equal(menu.parentElement, null, "the menu stayed after item selection");
+		assert.equal(more.getAttribute("aria-expanded"), "false");
+		assert.equal(more.hasAttribute("aria-controls"), false);
+	}
+	fixture.booted.disposeAll();
+});
+
+test("#59 the More menu dismisses on Escape, outside press, Tab and resize", () => {
+	const fixture = navBoot();
+	const more = fixture.more();
+	const lastDoc = (type) => [...fixture.docListeners].reverse().find((entry) => entry.type === type && entry.capture);
+	const lastWindow = (type) => [...fixture.windowListeners].reverse().find((entry) => entry.type === type);
+
+	more.click();
+	let menu = fixture.menus()[0];
+	assert.ok(menu, "the menu did not open");
+	lastDoc("pointerdown").handler({ target: fixture.body });
+	assert.equal(menu.parentElement, null, "an outside press did not close the menu");
+	assert.equal(more.getAttribute("aria-expanded"), "false");
+
+	more.click();
+	menu = fixture.menus()[0];
+	const escape = { key: "Escape", prevented: 0, stopped: 0, preventDefault() { this.prevented += 1; }, stopPropagation() { this.stopped += 1; } };
+	lastDoc("keydown").handler(escape);
+	assert.equal(menu.parentElement, null, "Escape did not close the menu");
+	assert.equal(escape.prevented, 1, "Escape was not consumed");
+	assert.equal(fixture.doc.activeElement, more, "Escape did not restore focus to More");
+
+	more.click();
+	menu = fixture.menus()[0];
+	fixture.items()[0].dispatchNav("keydown", { key: "Tab" });
+	assert.equal(menu.parentElement, null, "Tab left the menu behind");
+
+	more.click();
+	menu = fixture.menus()[0];
+	lastWindow("resize").handler();
+	assert.equal(menu.parentElement, null, "a resize did not close the menu");
+	assert.equal(more.getAttribute("aria-expanded"), "false");
+
+	// Rotating back to portrait removes More and restores the stock rows.
+	fixture.sandbox.innerWidth = 390;
+	fixture.sandbox.window.innerWidth = 390;
+	fixture.booted.sandbox.__RDSH_MOBILE_UX__.decorateNow();
+	assert.equal(fixture.more(), null, "portrait kept the landscape More row");
+	for (const row of [fixture.plugins, fixture.automation, fixture.settingsRow()]) {
+		assert.equal(row.hasAttribute("data-rdsh-nav-more-hidden"), false, "portrait kept a folded row hidden");
+	}
+	assert.equal(fixture.nav.querySelectorAll("[data-rdsh-settings-row]").length, 1);
+	fixture.booted.disposeAll();
+});
+
+test("#59 the More row is mobile-landscape only and is removed on dispose", () => {
+	const portrait = navBoot({ narrow: true });
+	assert.equal(portrait.more(), null, "a portrait phone got the landscape More row");
+	assert.equal(portrait.nav.querySelectorAll("[data-rdsh-nav-more-hidden]").length, 0);
+	assert.ok(portrait.settingsRow(), "the portrait Settings row is missing");
+	portrait.booted.disposeAll();
+
+	const desktop = navBoot({ mode: "desktop", narrow: false });
+	assert.equal(desktop.more(), null, "a desktop got the landscape More row");
+	assert.equal(desktop.nav.querySelectorAll("[data-rdsh-nav-more-hidden]").length, 0);
+	assert.equal(desktop.newSession.hasAttribute("aria-label"), true, "the desktop nav was rewritten");
+	desktop.booted.disposeAll();
+
+	const landscape = navBoot();
+	const more = landscape.more();
+	more.click();
+	assert.equal(landscape.menus().length, 1);
+	landscape.booted.disposeAll();
+	assert.equal(landscape.more(), null, "dispose left the More row");
+	assert.equal(landscape.menus().length, 0, "dispose left the More menu");
+	assert.equal(landscape.nav.querySelectorAll("[data-rdsh-nav-more-hidden]").length, 0, "dispose left folded rows hidden");
+	assert.equal(landscape.nav.children.includes(landscape.plugins), true, "dispose removed a stock row");
+	assert.equal(landscape.nav.children.includes(landscape.automation), true, "dispose removed a stock row");
+	assert.equal(landscape.settingsRow(), null, "dispose kept the injected Settings row");
+});

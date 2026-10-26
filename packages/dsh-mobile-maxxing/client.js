@@ -3402,6 +3402,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       clearTypingAnimations();
       removeRouteBack();
       removeDrawerNodes();
+      clearSidebarNavMore();
       removeSettingsRows();
       // Inline styles this module wrote onto upstream nodes.
       clearQueueDockHooks();
@@ -5872,6 +5873,219 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       }
     }
 
+    // ---------------------------------------------------------------------
+    // #59: landscape drawer nav — one More row for the three stock actions
+    //
+    // Plugins, Automation tasks and Settings are wide rows; in landscape the
+    // drawer is wider than the phone but still leaves the chat too little
+    // room. Only the three rows are folded, and only while the viewport is
+    // landscape: the stock nodes stay in place (React keeps its own state, the
+    // single #87 Settings row keeps its lifecycle) and receive a hide
+    // attribute. The More row and its menu are this module's nodes and are
+    // removed on portrait, desktop and dispose.
+    // ---------------------------------------------------------------------
+    const NAV_MORE_HIDDEN = "data-rdsh-nav-more-hidden";
+    let sidebarNavMore = null;
+    let sidebarNavMoreSeq = 0;
+
+    /** #59: landscape means geometry, not the device mode; the mode gate is separate. */
+    function navMoreLandscape() {
+      return phone() && window.innerWidth > window.innerHeight;
+    }
+
+    /** The three stock rows, matched by stable labels/attrs, never by a hashed class. */
+    function sidebarNavRows(nav) {
+      return {
+        plugins: nav.querySelector(ariaLabelSelector("button", "navPlugins", ["Plugins"])),
+        automation: nav.querySelector(ariaLabelSelector("button", "navAutomation", ["Automation tasks"])),
+        settings: nav.querySelector("[data-rdsh-settings-row]"),
+      };
+    }
+
+    function navRowLabel(row) {
+      const aria = row.getAttribute("aria-label");
+      if (aria !== null && aria.trim() !== "") return aria.trim();
+      return (row.textContent || "").trim().replace(/\s+/g, " ");
+    }
+
+    function onSidebarNavMoreButtonKey(event) {
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+      const button = event.currentTarget;
+      if (button === null || button === undefined) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const rows = sidebarNavRows(document.querySelector("nav.hHd-Xa_panelList"));
+      if (rows.plugins === null || rows.automation === null || rows.settings === null) return;
+      openSidebarNavMore(button, rows, event.key === "ArrowUp");
+    }
+
+    function onSidebarNavMoreItemKey(event) {
+      const state = sidebarNavMore;
+      if (state === null) return;
+      if (event.key === "Tab") {
+        // Let the browser move focus; a floating menu must not stay behind.
+        closeSidebarNavMore();
+        return;
+      }
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp" && event.key !== "Home" && event.key !== "End") return;
+      event.preventDefault();
+      const items = state.items;
+      if (items.length === 0) return;
+      const active = document.activeElement;
+      const at = items.indexOf(active);
+      let next = at < 0 ? 0 : at;
+      if (event.key === "ArrowDown") next = (at + 1 + items.length) % items.length;
+      else if (event.key === "ArrowUp") next = (at - 1 + items.length) % items.length;
+      else if (event.key === "Home") next = 0;
+      else next = items.length - 1;
+      items[next].focus({ preventScroll: true });
+    }
+
+    function onSidebarNavMoreEscape(event) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      closeSidebarNavMore({ restore: true });
+    }
+
+    function closeSidebarNavMore({ restore = false } = {}) {
+      const state = sidebarNavMore;
+      if (state === null) return false;
+      sidebarNavMore = null;
+      state.menu.remove();
+      if (state.dismiss !== null) {
+        document.removeEventListener("pointerdown", state.dismiss.pointer, true);
+        document.removeEventListener("keydown", state.dismiss.key, true);
+        window.removeEventListener("resize", state.dismiss.resize);
+      }
+      state.button.setAttribute("aria-expanded", "false");
+      state.button.removeAttribute("aria-controls");
+      if (restore && state.button.isConnected !== false) state.button.focus({ preventScroll: true });
+      return true;
+    }
+
+    function positionSidebarNavMore(button, menu) {
+      const rect = button.getBoundingClientRect();
+      const left = safeInset("left");
+      const right = safeInset("right");
+      const floor = safeInset("top") + 12;
+      const width = Math.min(260, Math.max(160, window.innerWidth - left - right - 24));
+      menu.style.width = `${width}px`;
+      const height = menu.getBoundingClientRect().height;
+      let top = rect.bottom + 6;
+      const bottom = window.innerHeight - safeInset("bottom") - 12;
+      if (height > 0 && top + height > bottom) top = Math.max(floor, rect.top - height - 6);
+      menu.style.top = `${Math.round(top)}px`;
+      menu.style.left = `${Math.round(Math.max(left + 12, Math.min(rect.left, window.innerWidth - right - width - 12)))}px`;
+    }
+
+    function openSidebarNavMore(button, rows, focusLast = false) {
+      closeSidebarNavMore();
+      const menu = document.createElement("div");
+      menu.className = "rdsh-mux-nav-more-menu";
+      menu.setAttribute("role", "menu");
+      menu.setAttribute("aria-label", t("mux.navMore.menu"));
+      menu.id = `rdsh-nav-more-menu-${++sidebarNavMoreSeq}`;
+      const items = [];
+      for (const row of [rows.plugins, rows.automation, rows.settings]) {
+        const item = document.createElement("button");
+        item.type = "button";
+        item.setAttribute("role", "menuitem");
+        item.setAttribute("tabindex", "-1");
+        item.textContent = navRowLabel(row);
+        item.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          closeSidebarNavMore();
+          row.click();
+        });
+        item.addEventListener("keydown", onSidebarNavMoreItemKey);
+        items.push(item);
+        menu.append(item);
+      }
+      const dismiss = (event) => {
+        if (sidebarNavMore === null) return;
+        if (sidebarNavMore.menu.contains(event.target)) return;
+        if (sidebarNavMore.button.contains(event.target)) return;
+        closeSidebarNavMore();
+      };
+      const key = (event) => onSidebarNavMoreEscape(event);
+      const resize = () => closeSidebarNavMore();
+      sidebarNavMore = { button, menu, items, dismiss: { pointer: dismiss, key, resize } };
+      document.addEventListener("pointerdown", dismiss, true);
+      document.addEventListener("keydown", key, true);
+      window.addEventListener("resize", resize);
+      document.body.append(menu);
+      positionSidebarNavMore(button, menu);
+      button.setAttribute("aria-expanded", "true");
+      button.setAttribute("aria-controls", menu.id);
+      const first = focusLast ? items[items.length - 1] : items[0];
+      first?.focus({ preventScroll: true });
+      return true;
+    }
+
+    function toggleSidebarNavMore(button) {
+      if (sidebarNavMore !== null && sidebarNavMore.button === button) {
+        closeSidebarNavMore({ restore: true });
+        return;
+      }
+      const rows = sidebarNavRows(document.querySelector("nav.hHd-Xa_panelList"));
+      if (rows.plugins === null || rows.automation === null || rows.settings === null) return;
+      openSidebarNavMore(button, rows);
+    }
+
+    function ensureSidebarNavMore(nav, firstRow) {
+      let button = nav.querySelector("[data-rdsh-nav-more]") ?? document.querySelector("[data-rdsh-nav-more]");
+      if (button === null) {
+        button = document.createElement("button");
+        button.type = "button";
+        button.className = "hHd-Xa_panelRow rdsh-mux-nav-more";
+        button.setAttribute("data-rdsh-nav-more", "");
+        button.setAttribute("aria-label", t("mux.navMore"));
+        button.setAttribute("aria-haspopup", "menu");
+        button.setAttribute("aria-expanded", "false");
+        button.innerHTML = `<span class="hHd-Xa_panelGlyph" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><circle cx="3.2" cy="8" r="1.45"/><circle cx="8" cy="8" r="1.45"/><circle cx="12.8" cy="8" r="1.45"/></svg></span><span class="hHd-Xa_panelTitle hHd-Xa_wide">${t("mux.navMore")}</span>`;
+        button.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          toggleSidebarNavMore(button);
+        });
+        button.addEventListener("keydown", onSidebarNavMoreButtonKey);
+      }
+      if (button.parentElement !== nav || button.nextElementSibling !== firstRow) {
+        if (firstRow.parentElement === nav) nav.insertBefore(button, firstRow);
+        else nav.append(button);
+      }
+      return button;
+    }
+
+    function decorateSidebarNavMore() {
+      const nav = navMoreLandscape() ? document.querySelector("nav.hHd-Xa_panelList") : null;
+      if (nav === null) {
+        clearSidebarNavMore();
+        return;
+      }
+      const rows = sidebarNavRows(nav);
+      if (rows.plugins === null || rows.automation === null || rows.settings === null) {
+        clearSidebarNavMore();
+        return;
+      }
+      // A rerender can replace a stock row; drop a hide attribute from a node
+      // that no longer belongs to the trio before marking the current three.
+      for (const row of document.querySelectorAll(`[${NAV_MORE_HIDDEN}]`)) {
+        if (row !== rows.plugins && row !== rows.automation && row !== rows.settings) row.removeAttribute(NAV_MORE_HIDDEN);
+      }
+      for (const row of [rows.plugins, rows.automation, rows.settings]) row.setAttribute(NAV_MORE_HIDDEN, "");
+      const button = ensureSidebarNavMore(nav, rows.plugins);
+      if (sidebarNavMore !== null && sidebarNavMore.button !== button) closeSidebarNavMore();
+    }
+
+    function clearSidebarNavMore() {
+      closeSidebarNavMore();
+      for (const node of document.querySelectorAll("[data-rdsh-nav-more]")) node.remove();
+      for (const row of document.querySelectorAll(`[${NAV_MORE_HIDDEN}]`)) row.removeAttribute(NAV_MORE_HIDDEN);
+    }
+
     /**
      * Locate the drawer's own header toggle for the mobile stylesheet and the
      * drawer actions.
@@ -6096,6 +6310,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       decorateComposer();
       decorateHeaderActivityChips();
       decorateSidebarSettingsRow();
+      decorateSidebarNavMore();
       decorateSidebarToggle();
       // The right panel keeps its chrome mounted even while closed (it is
       // clipped by a zero-width column), so presence of its buttons says
@@ -9273,12 +9488,14 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * phone drawer must not stay over that screen. New Session, session rows
      * and Settings are handled separately.
      */
-    const PANEL_ROUTE_PATTERN = /^(?:Plugins|Automation tasks)$/i;
-
     function isPanelRouteButton(target) {
       const button = target.closest("button[aria-label]");
       if (button === null) return false;
-      return PANEL_ROUTE_PATTERN.test(button.getAttribute("aria-label") || "");
+      const label = button.getAttribute("aria-label") || "";
+      // #59: the same probe vocabulary the landscape More menu uses; a zh shell
+      // must close the drawer for its folded rows too.
+      return probeValues("navPlugins", ["Plugins"]).includes(label)
+        || probeValues("navAutomation", ["Automation tasks"]).includes(label);
     }
 
     function onClickCapture(event) {
@@ -11732,6 +11949,11 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
      desktop keeps all three tabs. */
   [data-rdsh-settings-tab-hidden] { display: none !important; }
 
+  /* #59: landscape folds the three stock panel rows into one More row. The
+     rows stay in the DOM (and the single Settings row keeps its #87
+     lifecycle); only the visible row is replaced. */
+  [data-rdsh-nav-more-hidden] { display: none !important; }
+
   [data-rdsh-settings-nav-arrow] {
     position: fixed; z-index: 1006; width: 30px; height: 30px;
     display: grid; place-items: center; padding: 0;
@@ -12615,7 +12837,8 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
   outline-offset: 1px;
 }
 .rdsh-mux-preview-kebab svg { fill: currentColor; }
-.rdsh-mux-preview-menu {
+.rdsh-mux-preview-menu,
+.rdsh-mux-nav-more-menu {
   position: fixed; z-index: 995; box-sizing: border-box;
   padding: 6px; border-radius: 12px;
   display: flex; flex-direction: column; gap: 2px;
@@ -12623,7 +12846,8 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
   border: .5px solid var(--dsw-alias-border-l3, rgba(255,255,255,.16));
   box-shadow: var(--dsw-elevation-prominent, 0 14px 40px rgba(0,0,0,.3));
 }
-.rdsh-mux-preview-menu button {
+.rdsh-mux-preview-menu button,
+.rdsh-mux-nav-more-menu button {
   box-sizing: border-box; width: 100%; min-height: 40px;
   margin: 0; padding: 8px 10px; border: 0; border-radius: 8px;
   display: block; text-align: left; overflow: hidden; white-space: nowrap;
@@ -12632,15 +12856,19 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
   cursor: pointer; -webkit-tap-highlight-color: transparent;
 }
 .rdsh-mux-preview-menu button:hover,
-.rdsh-mux-preview-menu button:focus-visible {
+.rdsh-mux-preview-menu button:focus-visible,
+.rdsh-mux-nav-more-menu button:hover,
+.rdsh-mux-nav-more-menu button:focus-visible {
   background: var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,.08));
   outline: none;
 }
-.rdsh-mux-preview-menu button:focus-visible {
+.rdsh-mux-preview-menu button:focus-visible,
+.rdsh-mux-nav-more-menu button:focus-visible {
   outline: 2px solid var(--dsw-alias-state-business-primary, #7aaaff);
   outline-offset: -2px;
 }
-.rdsh-mux-preview-menu button[disabled] {
+.rdsh-mux-preview-menu button[disabled],
+.rdsh-mux-nav-more-menu button[disabled] {
   color: var(--dsw-alias-label-tertiary, #a1a1aa);
   cursor: default;
 }

@@ -118,6 +118,8 @@ export const COPY = {
 		"mux.stats.tokPerSec": "{speed} tok/s",
 		"mux.stats.cacheHit": "Cache hit {percent}%",
 		"mux.settingsRow": "Settings",
+		"mux.navMore": "More",
+		"mux.navMore.menu": "More actions",
 		"mux.fab.open": "Open session list",
 		"mux.fab.openWithCount": "Open session list ({count} unread or waiting)",
 		"mux.route.back": "Back",
@@ -396,6 +398,8 @@ export const COPY = {
 		"mux.stats.tokPerSec": "{speed} tok/s",
 		"mux.stats.cacheHit": "Cache hit {percent}%",
 		"mux.settingsRow": "Settings",
+		"mux.navMore": "その他",
+		"mux.navMore.menu": "その他の操作",
 		"mux.fab.open": "セッション一覧を開く",
 		"mux.fab.openWithCount": "セッション一覧を開く（未読・質問待ち {count}件）",
 		"mux.route.back": "戻る",
@@ -584,6 +588,9 @@ export const PROBES = {
 	accountMenu: ["Account menu", "設定"],
 	/** The Settings row inside that menu. */
 	settingsMenu: ["Settings", "設定"],
+	/** Sidebar rows folded into the landscape More menu. */
+	navPlugins: ["Plugins", "插件"],
+	navAutomation: ["Automation tasks", "自动化任务"],
 	/** The Automation-tasks detail's close control: the only way back to the list
 	 *  once upstream hides the list on a phone. */
 	closeTaskDetail: ["Close details", "关闭详情"],

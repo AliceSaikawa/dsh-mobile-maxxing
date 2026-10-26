@@ -401,6 +401,33 @@ DSH も Apple 専用メタを外している。以前は確認用に `/launch` �
 `#root` を `100%` にして、本文（`scrollBody`）だけがスクロールするようにしている。
 47pxの未描画帯そのものはネイティブで、CSSでは消えない。
 
+## iOS 27 の上端ブラー
+
+iOS 27 のホーム画面 PWA は、画面上端に `position: fixed` の要素が無いと、上端にプログレッシブ
+ブラーを重ねる。そこで standalone の iOS（WebKit）でだけ、上端に高さ 11px の固定要素
+（`.dsh-mobile-maxxing-top-edge`）を1つ置いている。`background-color` に背景色を指定し、
+`background-clip: text` で何も描かない。WebKit は描画結果ではなく計算済みスタイルから色を読む
+ため、見た目を変えずに判定だけを満たせる（[参考](https://qiita.com/na-trium-144/items/0add98a80ca2391e3f17)）。
+`opacity: 0`・`visibility: hidden`・`display: none` で隠すと判定から外れ、ブラーが戻る。
+Safari のタブでは同じ要素がツールバーを不透明にするため、standalone 以外では無効にしている。
+
+WebKit がこの要素を使うのは、上端がホスト側に覆われている（obscured inset がある）ときだけで
+ある（[WebKit のソースを追った記事](https://zenn.dev/uakihir0/articles/260920-ios27-pwa-blur)）。
+iPhone の実機（2026-10-26、iOS 27.2）で次を確認した。
+
+- 既定の `appleStatusBarStyle: "black-translucent"` では、ページが時計の下まで描かれ、この要素を
+  置いてもブラーは消えない。
+- profile patch で `appleStatusBarStyle: "default"` にし、ホーム画面のアイコンを削除して追加し
+  直すと、ページは時計の下から始まり、時計の帯がこの要素の色で塗られ、ブラーが消える。
+- 設定を変えただけでは、追加済みのアイコンは元のスタイルのまま動く。追加し直しが必要で、その際
+  そのアプリの通知の購読と端末ごとの設定（localStorage）は消える。
+- 確認したのはダークモードだけで、時計などの文字は白だった。ライトモードの文字色と、iOS 26 で
+  `"default"` にしたときの表示は未確認。
+
+`"default"` ではページがステータスバーの下から始まり、画面が短い分は上端の帯になる。下端の
+未描画帯（`data-rdsh-native-gap`）として扱うと入力欄がホームインジケーターに重なるため、その
+判定は `black-translucent` のときだけ行う。
+
 ## クレジット
 
 このパッケージは次の実装を**参考（設計の参照）**として書かれています。コードの流用はしていません

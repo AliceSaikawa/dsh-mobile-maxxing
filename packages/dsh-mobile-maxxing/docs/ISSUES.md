@@ -1,5 +1,12 @@
 # Known issues
 
+## iOS 27 standalone: 上端のブラー（`appleStatusBarStyle: "default"` でのみ解消）
+
+- 2026-10-26
+- 上端に高さ 11px の固定要素を置き、`background-clip: text` で何も描かずに WebKit の上端判定だけを満たす（詳細は USAGE.ja.md「iOS 27 の上端ブラー」）。
+- iPhone 実機（iOS 27.2）では、既定の `black-translucent` のままだとブラーは消えない。`"default"` にしてアイコンを追加し直すと消える。既定値は `black-translucent` のままで、変えるかは未決定である。
+- ライトモードでのステータスバーの文字色と、iOS 26 で `"default"` にしたときの表示は未確認である。
+
 ## 修正済み: #59 横画面のナビを "More" に畳む
 
 - 2026-10-26

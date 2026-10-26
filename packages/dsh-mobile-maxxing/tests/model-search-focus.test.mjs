@@ -98,6 +98,9 @@ function fixture({ mobile = true } = {}) {
 	const sandbox = vm.createContext({
 		phone: () => state.mobile,
 		document,
+		// #84 reads the visible viewport; this fixture never measures layout.
+		window: { innerWidth: 390, visualViewport: { width: 390, offsetLeft: 0 } },
+		safeInset: () => 0,
 		requestAnimationFrame(callback) {
 			frames.push(callback);
 			return frames.length;

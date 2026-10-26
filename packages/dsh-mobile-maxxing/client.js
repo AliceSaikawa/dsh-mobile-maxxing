@@ -4343,10 +4343,112 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * search.
      */
     let modelSearchState = null;
+    /** The observer watching the open picker's own inline position. */
+    let modelMenuWatch = null;
+    let modelMenuWatched = null;
+    let modelMenuMaxWidth = null;
+    let modelMenuNaturalWidth = null;
+
+    /**
+     * Keep the open picker inside the safe area of the visible viewport.
+     *
+     * Upstream positions the menu with a 12px margin against
+     * `window.innerWidth`, which ignores both the notch and the keyboard.
+     * `visualViewport` is the part the user can actually see: its
+     * `offsetLeft` is how far that part is inside the layout viewport (a
+     * pinch-zoom or a keyboard-driven pan), and its `width` is narrower than
+     * `innerWidth` while zoomed. The menu is left where upstream put it
+     * unless it crosses an edge; the horizontal position (and, only when the
+     * safe band is narrower than the menu, its width) is corrected.
+     */
+    function clampModelMenu(menu) {
+      const style = menu.style;
+      if (style === null || style === undefined) return;
+      const current = parseFloat(style.left);
+      if (!Number.isFinite(current)) return;
+      const viewport = window.visualViewport;
+      const viewportWidth = viewport !== null && viewport !== undefined
+        && Number.isFinite(viewport.width) && viewport.width > 0
+        ? viewport.width
+        : window.innerWidth;
+      const viewportLeft = viewport !== null && viewport !== undefined && Number.isFinite(viewport.offsetLeft)
+        ? viewport.offsetLeft
+        : 0;
+      // Integer bounds keep a fractional inset from rounding the menu back
+      // across the edge it was just clamped to.
+      const minLeft = Math.ceil(viewportLeft + safeInset("left") + 8);
+      const maxRight = viewportLeft + viewportWidth - safeInset("right") - 8;
+      if (!(maxRight > minLeft)) return;
+      const rect = typeof menu.getBoundingClientRect === "function" ? menu.getBoundingClientRect() : null;
+      let width = menu.offsetWidth || (rect === null ? 0 : rect.width)
+        || menu.clientWidth || parseFloat(style.width) || 0;
+      // The menu cannot satisfy both gutters if it is wider than the band
+      // between them. Upstream's max-width still uses the full window, so cap
+      // it only in that case (the normal path leaves upstream's width alone).
+      const room = maxRight - minLeft;
+      if (width > room) {
+        // Remember what the menu wanted before our cap, so widening the band
+        // (rotation, keyboard down) can drop the cap again.
+        if (modelMenuMaxWidth === null) modelMenuNaturalWidth = width;
+        modelMenuMaxWidth = null;
+        const cap = `${Math.max(1, Math.floor(room))}px`;
+        if (style.maxWidth !== cap) style.maxWidth = cap;
+        modelMenuMaxWidth = cap;
+        width = Math.max(1, Math.floor(room));
+      } else if (modelMenuMaxWidth !== null && modelMenuNaturalWidth !== null
+        && modelMenuNaturalWidth <= room) {
+        // The band grew past the menu's natural width; upstream's own
+        // max-width should apply again instead of this pass's old cap.
+        if (style.maxWidth === modelMenuMaxWidth) style.removeProperty("max-width");
+        modelMenuMaxWidth = null;
+        width = modelMenuNaturalWidth;
+      }
+      // An unmeasured menu has no right edge yet; only the left floor is
+      // meaningful until its ResizeObserver gives upstream a size.
+      const left = width > 0
+        ? Math.min(Math.max(current, minLeft), Math.max(minLeft, Math.floor(maxRight - width)))
+        : Math.max(current, minLeft);
+      if (left !== current) style.left = `${left}px`;
+    }
+
+    /**
+     * Follow upstream's own inline repositioning (its scroll/resize handler
+     * and ResizeObserver write `style.left` directly). Observing just this
+     * one style attribute avoids a rAF poll, and the write above is skipped
+     * once the target stops changing, so the observer cannot loop.
+     */
+    function watchModelMenu(menu) {
+      if (modelMenuWatch !== null && modelMenuWatched === menu) {
+        clampModelMenu(menu);
+        return;
+      }
+      // A new menu also retires the old one's cap before this pass records
+      // its own; the old node may still be connected for a rerender.
+      clearModelMenuWatch();
+      modelMenuWatched = menu;
+      clampModelMenu(menu);
+      if (typeof MutationObserver !== "function") return;
+      modelMenuWatch = new MutationObserver(() => clampModelMenu(menu));
+      modelMenuWatch.observe(menu, { attributes: true, attributeFilter: ["style"] });
+    }
+
+    function clearModelMenuWatch() {
+      modelMenuWatch?.disconnect();
+      modelMenuWatch = null;
+      if (modelMenuWatched !== null && modelMenuMaxWidth !== null
+        && modelMenuWatched.style !== null && modelMenuWatched.style !== undefined
+        && modelMenuWatched.style.maxWidth === modelMenuMaxWidth) {
+        modelMenuWatched.style.removeProperty("max-width");
+      }
+      modelMenuWatched = null;
+      modelMenuMaxWidth = null;
+      modelMenuNaturalWidth = null;
+    }
 
     function clearModelSearch() {
       const record = modelSearchState;
       modelSearchState = null;
+      clearModelMenuWatch();
       if (record === null) return;
       if (record.row !== null) record.row.removeEventListener("pointerdown", record.handler, true);
       if (record.input.isConnected) record.input.disabled = record.wasDisabled;
@@ -4361,10 +4463,22 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // that enabled it, so the next open starts disabled again.
       if (modelSearchState !== null && !modelSearchState.input.isConnected) clearModelSearch();
       const menu = document.querySelector('[class*="_7KE1Ra_menu"]');
-      if (menu === null) return;
+      if (menu === null) {
+        clearModelMenuWatch();
+        return;
+      }
+      // The root pane (Model / Effort rows) has no search field, but it is
+      // the same upstream menu and needs the same safe-area clamp.
       const input = menu.querySelector("input");
-      if (input === null) return;
+      if (input === null) {
+        watchModelMenu(menu);
+        return;
+      }
+      // Retire the previous picker before watching this one: clearModelSearch
+      // also disconnects the style observer, and watching first would leave
+      // the new menu unobserved for a pass.
       if (modelSearchState !== null && modelSearchState.input !== input) clearModelSearch();
+      watchModelMenu(menu);
       if (!input.hasAttribute("data-rdsh-model-search")) {
         input.setAttribute("data-rdsh-model-search", "");
         const row = input.closest('[class*="_7KE1Ra_searchRow"]') ?? input.parentElement;

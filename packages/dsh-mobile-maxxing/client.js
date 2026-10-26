@@ -11313,11 +11313,17 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         ctx.inject(["remote", "remote.permissionPresets"], (scope) => {
           if (phone()) void loadPermissionCatalog(scope.remote);
         });
-        try {
-          attachDeviceTheme(ctx);
-        } catch (error) {
-          console.error("[rdsh-mobile-ux] device theme failed", error);
-        }
+        // The shared theme presenter can boot after this plugin. Resolve the
+        // service through injection so a stored device choice is applied as
+        // soon as the palette contract exists, instead of being skipped at
+        // apply time because ctx.get("theme") was still undefined (#73).
+        ctx.inject(["theme"], (scope) => {
+          try {
+            attachDeviceTheme(scope);
+          } catch (error) {
+            console.error("[rdsh-mobile-ux] device theme failed", error);
+          }
+        });
         ctx.inject(["theme", "locale"], (scope) => {
           try {
             attachLocalDisplay(scope);

@@ -605,6 +605,9 @@ function makePreview(env, { secondary = ["Reload", "Save"], hidden = true } = {}
 	panel.append(collapse);
 	const boundary = document.createElement("div");
 	boundary.setAttribute("data-sidebar-right-panel", "");
+	// #72: upstream marks an expanded panel with this attribute, and the tablet
+	// tier uses it to tell an open dock from the collapsed chrome.
+	boundary.setAttribute("data-sidebar-right-open", "");
 	boundary.getBoundingClientRect = screenRect;
 	boundary.append(panel);
 	document.body.append(boundary);

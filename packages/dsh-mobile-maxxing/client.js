@@ -2956,6 +2956,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       clearModelSearch();
       clearActivityChips();
       clearPreviewTools();
+      // #72: the open marker and the measured dock width are style state, not
+      // just attributes; forgetRightPanel retires both and the panel observers.
+      forgetRightPanel();
       // The file-tree tools own document-level pointer/scroll listeners. This
       // teardown must retire them too, or a mobile boot leaves them behind.
       disposeWorkspaceTools();
@@ -3059,6 +3062,16 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // The heading is part of the open-surface chrome: add it before the fit
       // measures the terminal, and take it down with the panel.
       decorateRightPanelHeading();
+      if (open && !narrow()) {
+        // #72: the tablet tier reserves upstream's right track. The stylesheet
+        // cannot read the panel's inline width (it sits on a child), so the
+        // measured dock width is published once per pass; a drag-resize keeps
+        // this observer firing through the panel's style mutation.
+        const width = Math.round(panel.getBoundingClientRect().width);
+        if (width > 0) document.documentElement.style.setProperty("--rdsh-rightbar-width", `${width}px`);
+      } else {
+        document.documentElement.style.removeProperty("--rdsh-rightbar-width");
+      }
       if (open) scheduleTerminalFit();
       else clearTerminalFit();
     }
@@ -3093,6 +3106,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       rightPanelIO = null;
       rightPanelNode = null;
       document.documentElement.removeAttribute("data-rdsh-rightpanel-open");
+      document.documentElement.style.removeProperty("--rdsh-rightbar-width");
     }
 
     /**
@@ -3120,7 +3134,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     function ensureRightPanelFits() {
-      if (!phone()) {
+      // #72: upstream already fullscreens its own panel below 768px. At tablet
+      // widths it docks, and forcing the phone sheet there would take the
+      // conversation away instead of reserving the right column.
+      if (!phone() || !narrow()) {
         rightPanelFitPending = false;
         return;
       }
@@ -3668,8 +3685,26 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         return;
       }
       const boundary = collapse.closest(RIGHT_PANEL_ROOT);
-      // The panel is the nearest ancestor that already spans the phone (the
-      // fullscreen layer), not a hash-named class that changes per release.
+      // #72: at tablet widths upstream docks the panel instead of covering the
+      // phone, so the "spans >=85% of the viewport" test below never matches.
+      // Tag the stable upstream root itself, and only while upstream says the
+      // panel is expanded; the root owns the measured dock width the tablet
+      // stylesheet reserves.
+      if (!narrow()) {
+        if (!boundary.hasAttribute("data-sidebar-right-open")) {
+          if (rightPanelNode !== null) forgetRightPanel();
+          return;
+        }
+        for (const stale of document.querySelectorAll("[data-rdsh-rightpanel]")) {
+          if (stale !== boundary) stale.removeAttribute("data-rdsh-rightpanel");
+        }
+        boundary.setAttribute("data-rdsh-rightpanel", "");
+        watchRightPanel(boundary);
+        return;
+      }
+      // The phone panel is the nearest ancestor that already spans the phone
+      // (the fullscreen layer), not a hash-named class that changes per
+      // release.
       let node = collapse.parentElement;
       while (node !== null && node !== boundary && node !== document.body) {
         const rect = node.getBoundingClientRect();
@@ -10711,6 +10746,23 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   [data-rdsh-frame] [data-rdsh-center-col] { grid-column: 2 !important; }
   [data-rdsh-frame] [data-rdsh-rightbar-col] { grid-column: 3 !important; }
   [data-rdsh-frame][data-rightbar-fullscreen] { grid-template-columns: 0 minmax(0, 1fr) 0 !important; }
+  /* #72: mobile at 768px and up is a tablet, not a phone. Upstream already
+     fullscreens below 768px and docks at or above it, so the drawer keeps the
+     first column at 0 while the right track is reserved at the panel's own
+     measured width. The conversation keeps upstream's 400px minimum and the
+     dock never shrinks below upstream's 300px floor. The value is published by
+     syncRightPanelOpen; 45% is upstream's first-open default and only a
+     fallback for the frame before that measurement lands. User fullscreen
+     keeps the phone sheet above, hence the :not(). */
+  @media (min-width: 768px) {
+    html[data-rdsh-rightpanel-open] [data-rdsh-frame]:not([data-rightbar-fullscreen]) {
+      grid-template-columns: 0 minmax(400px, 1fr) minmax(300px, var(--rdsh-rightbar-width, 45%)) !important;
+    }
+    /* The tablet is wide enough for a user to leave fullscreen; keep the exit
+       control that the phone hides. Split stays hidden everywhere: this plugin
+       never uses dockkit's pane split as the iPad layout. */
+    [data-rdsh-rightpanel] [aria-label="Exit fullscreen"] { display: inline-flex !important; }
+  }
   [data-rdsh-sidebar] {
     position: fixed !important; inset: 0 auto 0 0 !important;
     box-sizing: border-box;

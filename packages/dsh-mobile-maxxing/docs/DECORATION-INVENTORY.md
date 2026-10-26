@@ -25,7 +25,9 @@ There is **no `@media (max-width: 767px)` wrapper**. The mobile half is a
 separate `<style data-rdsh-mux-style="phone">` appended only when the
 bootstrapped mode is `"mobile"`; a desktop never receives it and a resize never
 adds or removes it. Sizing-only breakpoints may still live inside `CSS_PHONE`
-(the 380px composer compression is the only one today). The PWA install/toast
+(the 768px tablet dock tier and the 380px composer compression are the two today).
+The tablet tier still only exists when the device mode is `"mobile"`; it does not
+re-introduce a width mode switch. The PWA install/toast
 geometry uses `html[data-rdsh-device-mode="mobile"]` instead of a width query.
 `boundary-issues.test.mjs` and `pc-parity.test.mjs` pin the style split, and
 fail if a width feature query or the old wrapper comes back.
@@ -47,7 +49,7 @@ mode. The mode never changes during a page, so the cleanup path is dispose
 | `decorateEditCards` | edit card/header/row | mobile mode only | attributes removed before the scan |
 | `decorateTranscript` | transcript column hooks | mobile mode only | attributes removed |
 | `decorateUserBubbles` | user stack/bubble | mobile mode only | attributes removed |
-| `decorateRightPanel` | panel node + `data-rdsh-rightpanel-open`, observers | mobile mode only | `forgetRightPanel()` |
+| `decorateRightPanel` | panel node + `data-rdsh-rightpanel-open`, observers, `--rdsh-rightbar-width` | mobile mode only | `forgetRightPanel()` clears the attribute, the width variable and the observers |
 | `decorateRightPanelTabs` | `data-rdsh-rtab` | mobile mode only | attribute removed |
 | `decorateCodePreview` | code pre/scroll locks | mobile mode only | attributes removed |
 | `decorateQuestionCards` / `decorateQuestionArrow` | question card/frame/tile + injected arrow button | mobile mode only | attributes + arrows removed |

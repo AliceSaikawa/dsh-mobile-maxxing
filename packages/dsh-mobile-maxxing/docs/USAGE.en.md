@@ -136,12 +136,16 @@ disagree, the global wins and the root attribute is synchronised to it.
 - Detection has limits: an Android tablet that requests the desktop site may lose the
   Android token and be treated as desktop. It is not infallible.
 
-The layout (sidebar becomes a drawer) uses the same mode. The only remaining size
-breakpoint is the existing <=380px composer compression.
+The layout (sidebar becomes a drawer) uses the same mode. Width never selects the
+mode, but the right panel has one size tier: at **768px and wider** it docks beside
+the conversation (upstream's own dock), and below 768px it opens as the phone sheet.
+The existing <=380px composer compression is the only other size tweak.
 
 What changes:
 
 - The sidebar becomes an overlay drawer you open with the floating button
+- At 768px and wider the right panel docks beside the conversation instead of
+  covering it; below 768px it stays the full-screen sheet
 - Settings get a single column and a scrolling tab strip
 - The code viewer wraps by default; the header's wrap button turns that
   off and long lines scroll sideways again

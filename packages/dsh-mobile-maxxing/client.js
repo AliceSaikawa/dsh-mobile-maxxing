@@ -1375,6 +1375,220 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     // ---------------------------------------------------------------------
+    // #71 — phone-only automatic loading of older conversation messages.
+    //
+    // Upstream renders its "Load earlier" button only while history has more,
+    // disables it while a page is in flight, and its own loadEarlier() retains
+    // the paging anchor. This helper only presses that existing control after a
+    // real reader scroll settles at the top; it never renders, fetches, writes
+    // scrollTop, or calls scrollTo/scrollBy. The scroller is recognised
+    // structurally as the element whose direct child carries upstream's
+    // data-chat-flow tag, and the older wrapper is the first non-message direct
+    // child with a direct <button>. No class hash or label text is involved.
+    // ---------------------------------------------------------------------
+    function createOlderMessageLoader({ doc, win, isPhone }) {
+      const SETTLE_MS = 160;
+      // A gesture arms the loader only briefly; momentum refreshes this on
+      // every real scroll, while a stale tap cannot arm a later programmatic
+      // scroll to the top.
+      const INTENT_MS = 1500;
+      // iOS reports overscroll as a negative scrollTop; both are "at the top".
+      const TOP_PX = 24;
+      let installed = false;
+      let armed = true;
+      let loading = false;
+      let intentScroller = null;
+      let intentAt = 0;
+      let pendingScroller = null;
+      let activeScroller = null;
+      let settleTimer = 0;
+      let observer = null;
+
+      function columnOf(scroller) {
+        if (scroller === null || scroller === undefined || scroller.nodeType !== 1) return null;
+        for (const child of scroller.children) {
+          if (child.nodeType === 1 && child.hasAttribute("data-chat-flow")) return child;
+        }
+        return null;
+      }
+
+      /** Walk up from an event target to the transcript scroller, if any. */
+      function scrollerOf(node) {
+        let element = node !== null && node !== undefined && node.nodeType === 1 ? node : null;
+        while (element !== null) {
+          if (columnOf(element) !== null) return element;
+          element = element.parentElement;
+        }
+        return null;
+      }
+
+      /**
+       * Upstream's older wrapper is the first direct non-message child of the
+       * flow column with a direct button; message rows carry data-chat-flow-kind.
+       */
+      function controlFor(scroller) {
+        const column = columnOf(scroller);
+        if (column === null) return null;
+        for (const wrapper of column.children) {
+          if (wrapper.nodeType !== 1 || wrapper.hasAttribute("data-chat-flow-kind")) continue;
+          for (const child of wrapper.children) {
+            if (child.nodeType === 1 && child.tagName === "BUTTON") return child;
+          }
+        }
+        return null;
+      }
+
+      function disconnectObserver() {
+        if (observer !== null) {
+          observer.disconnect();
+          observer = null;
+        }
+      }
+
+      function clearSettle() {
+        if (settleTimer !== 0) {
+          win.clearTimeout(settleTimer);
+          settleTimer = 0;
+        }
+      }
+
+      function resetState() {
+        armed = true;
+        loading = false;
+        intentScroller = null;
+        intentAt = 0;
+        pendingScroller = null;
+        activeScroller = null;
+        clearSettle();
+        disconnectObserver();
+      }
+
+      /** A different session replaced the scroller; a new gesture is still required. */
+      function adopt(scroller) {
+        if (activeScroller === scroller) return;
+        clearSettle();
+        disconnectObserver();
+        activeScroller = scroller;
+        armed = true;
+        loading = false;
+      }
+
+      /**
+       * Re-arm only after upstream's own loading state ends: the control is
+       * enabled again or gone (history exhausted). DOM mutations never click.
+       */
+      function finish() {
+        if (!loading) return;
+        loading = false;
+        armed = true;
+        disconnectObserver();
+      }
+
+      function onMutations() {
+        if (!installed || !loading) return;
+        if (activeScroller === null) {
+          finish();
+          return;
+        }
+        const control = controlFor(activeScroller);
+        if (control === null || control.disabled !== true) finish();
+      }
+
+      function observe(column) {
+        disconnectObserver();
+        const Observer = win.MutationObserver
+          ?? (typeof MutationObserver === "function" ? MutationObserver : null);
+        if (Observer === null) return;
+        observer = new Observer(onMutations);
+        observer.observe(column, {
+          childList: true,
+          subtree: true,
+          characterData: true,
+          attributes: true,
+          attributeFilter: ["disabled"],
+        });
+      }
+
+      /** Only input inside the transcript counts as a real reader scroll. */
+      function noteIntent(event) {
+        if (!installed || !isPhone()) return;
+        const scroller = scrollerOf(event.target);
+        if (scroller === null) return;
+        intentScroller = scroller;
+        intentAt = Date.now();
+      }
+
+      function onScroll(event) {
+        if (!installed || !isPhone()) return;
+        const scroller = event.target;
+        if (columnOf(scroller) === null) return;
+        // Programmatic anchor/follow scrolling carries no intent and is ignored.
+        if (intentScroller !== scroller) return;
+        if (Date.now() - intentAt > INTENT_MS) {
+          intentScroller = null;
+          return;
+        }
+        // This scroll is part of a live gesture: keep the gesture armed while
+        // momentum continues.
+        intentAt = Date.now();
+        if (activeScroller !== scroller) adopt(scroller);
+        if (!armed || loading) return;
+        pendingScroller = scroller;
+        clearSettle();
+        settleTimer = win.setTimeout(onSettled, SETTLE_MS);
+      }
+
+      function onSettled() {
+        settleTimer = 0;
+        if (!installed || !isPhone()) return;
+        const scroller = pendingScroller;
+        pendingScroller = null;
+        if (scroller === null || scroller !== activeScroller || intentScroller !== scroller) return;
+        // One load per reader gesture; a new scroll is needed to re-arm.
+        intentScroller = null;
+        if (!armed || loading) return;
+        if (!(scroller.scrollTop <= TOP_PX)) return;
+        const column = columnOf(scroller);
+        if (column === null) return;
+        const control = controlFor(scroller);
+        if (control === null || control.disabled === true) return;
+        armed = false;
+        loading = true;
+        observe(column);
+        try {
+          control.click();
+        } catch {
+          finish();
+        }
+      }
+
+      function install() {
+        if (installed || !isPhone()) return false;
+        installed = true;
+        resetState();
+        doc.addEventListener("pointerdown", noteIntent, true);
+        doc.addEventListener("touchstart", noteIntent, true);
+        doc.addEventListener("wheel", noteIntent, true);
+        doc.addEventListener("keydown", noteIntent, true);
+        doc.addEventListener("scroll", onScroll, true);
+        return true;
+      }
+
+      function dispose() {
+        if (!installed) return;
+        installed = false;
+        doc.removeEventListener("pointerdown", noteIntent, true);
+        doc.removeEventListener("touchstart", noteIntent, true);
+        doc.removeEventListener("wheel", noteIntent, true);
+        doc.removeEventListener("keydown", noteIntent, true);
+        doc.removeEventListener("scroll", onScroll, true);
+        resetState();
+      }
+
+      return { install, dispose, scrollerOf, controlFor, state: () => ({ installed, armed, loading }) };
+    }
+
+    // ---------------------------------------------------------------------
     // rdsh-mobile-ux — mobile-device UX: drawer, settings, composer, in-app banners.
     // ---------------------------------------------------------------------
     function mobilePart() {
@@ -2962,6 +3176,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // The file-tree tools own document-level pointer/scroll listeners. This
       // teardown must retire them too, or a mobile boot leaves them behind.
       disposeWorkspaceTools();
+      // #71 owns its own document listeners, timer and observer.
+      disposeOlderLoader();
       clearComposerHooks();
       clearTypingAnimations();
       removeRouteBack();
@@ -11687,6 +11903,19 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
     // Wiring
     // ---------------------------------------------------------------------
     let booted = false;
+    let olderLoader = null;
+
+    /** #71: create the phone loader once, install it with the other phone hooks. */
+    function installOlderLoader() {
+      if (olderLoader === null) {
+        olderLoader = createOlderMessageLoader({ doc: document, win: window, isPhone: phone });
+      }
+      olderLoader.install();
+    }
+
+    function disposeOlderLoader() {
+      olderLoader?.dispose();
+    }
 
     function boot(ctx) {
       if (booted) return;
@@ -11740,8 +11969,12 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         document.addEventListener("mousedown", onMouseDownCapture, true);
         document.addEventListener("click", onClickCapture, true);
         // Phone-only tree long-press and search listeners; installed here so
-        // the teardown below can remove exactly one set.
-        if (phone()) installWorkspaceTools();
+        // the teardown below can remove exactly one set. #71 loads older
+        // messages with the same lifetime.
+        if (phone()) {
+          installWorkspaceTools();
+          installOlderLoader();
+        }
         // Window capture runs before the app's document-level key adapter. That
         // adapter treats a keyCode 229 Return as IME input and consumes it, so a
         // listener on document never gets the chance to insert a newline.

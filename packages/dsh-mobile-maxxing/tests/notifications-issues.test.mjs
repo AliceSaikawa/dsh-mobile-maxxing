@@ -1079,10 +1079,10 @@ test("an offline launch falls back to the cached shell, not the network error", 
 	assert.notEqual(response?.error, true, "the offline launch fell through to Response.error() despite a cached shell");
 });
 // ---------------------------------------------------------------------------
-// #25: a visible app owns the notification
+// #25: every received push is user-visible
 // ---------------------------------------------------------------------------
 
-test("a received push always shows a system notification, even with a visible window", async () => {
+test("#25 every received push shows a system notification, even with a visible window", async () => {
 	const origin = "https://app.test";
 	const storage = new FakeCacheStorage(origin);
 	const payload = { title: "Session A", body: "Turn finished", sessionId: "s1", kind: "turn-end" };
@@ -1096,10 +1096,18 @@ test("a received push always shows a system notification, even with a visible wi
 		timers: { setTimeout: (...args) => { timers.push(args); return setTimeout(...args); } },
 	});
 	await fire(listeners, "push", payload);
-	assert.equal(posted.length, 0, "a received push was silently handed to the page");
-	assert.deepEqual(timers, [], "the worker waited for an unnecessary ack timer");
-	assert.equal(shown.length, 1, "WebKit requires a visible notification for every received push");
-	assert.equal(shown[0][0], payload.title);
+	// WebKit revokes a subscription after three pushes that show no
+	// notification, and Chromium/Edge substitute a generic banner, so the
+	// worker has no "silent because the app is visible" branch. Foreground
+	// in-app delivery is the page's own local notice.
+	assert.equal(posted.length, 0, "the worker handed the notice to the page instead of showing it");
+	assert.deepEqual(timers, [], "the worker waited for an acknowledgment timer");
+	assert.equal(shown.length, 1, "a received push must be user-visible");
+	const [title, options] = shown[0];
+	assert.equal(title, payload.title, "the system banner lost the title");
+	assert.equal(options.body, payload.body, "the system banner lost the body");
+	assert.equal(options.data.sessionId, payload.sessionId, "the system banner lost the session");
+	assert.equal(options.tag, `dsh-mobile-maxxing:${payload.sessionId}`, "the system banner lost its per-session tag");
 });
 
 test("#25 with no visible window the push falls back to the system notification", async () => {

@@ -292,7 +292,7 @@ window.__ModuleLoader__.load({
      * whenever the worker's push handling changes.
      */
     // The worker always renders received pushes; host-side event ACKs gate delivery.
-    const SW_REVISION = "20261026d";
+    const SW_REVISION = "20261026e";
     const SW_URL = new URL(`sw.js?v=${SW_REVISION}`, SCOPE).href;
     /** Script URL of the notification plugin's worker (see unifyWorker below). */
     const PUSH_WORKER_PATH = "/push/sw.js";

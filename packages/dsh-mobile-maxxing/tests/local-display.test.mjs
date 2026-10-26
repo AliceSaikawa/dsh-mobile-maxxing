@@ -81,6 +81,8 @@ test("font sizes use the published theme variables and exact roles", () => {
 	assert.match(body, /locale\.getSnapshot\(\)|localeService\?\.getSnapshot\(\)/);
 	assert.match(body, /themeService\.snapshot = hostTheme/, "the Host theme is not restored");
 	assert.match(body, /localeService\.snapshot = hostLocale/, "the Host locale is not restored");
+	assert.doesNotMatch(body, /revision\s*\+\s*1000/, "a projection fabricated a revision upstream row stores would adopt");
+	assert.doesNotMatch(body, /themeEpoch|localeEpoch/, "an unused projection epoch survived");
 	assert.doesNotMatch(body, /\.setFontSize\(|\.setLocale\(/, "a shared writer is called");
 });
 

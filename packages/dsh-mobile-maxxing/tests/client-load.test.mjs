@@ -1915,6 +1915,153 @@ test("device-local display projects font/locale and restores the Host snapshots"
 	assert.deepEqual(writes, [], "dispose wrote a shared setting");
 });
 
+test("device-local projections keep Host revisions so rows keep updating (#73/#64)", async () => {
+	const writes = [];
+	const hostTheme = {
+		preference: "system",
+		revision: 4,
+		fontSizes: { text: 14, code: 11, terminal: 13 },
+		fontFamilies: { text: "", code: "", terminal: "" },
+		active: { id: "light", colorScheme: "light", tokens: {} },
+		themes: [],
+	};
+	const theme = {
+		snapshot: hostTheme,
+		getTheme() { return this.snapshot; },
+		setTheme(id) { writes.push(["theme", id]); },
+		setFontSize(role, px) { writes.push(["font", role, px]); },
+	};
+	const listeners = new Set();
+	const hostLocale = {
+		active: "zh",
+		revision: 2,
+		locales: [
+			{ id: "zh", label: "中文", fallback: "en" },
+			{ id: "en", label: "English" },
+		],
+	};
+	const locale = {
+		snapshot: hostLocale,
+		listeners,
+		getSnapshot() { return this.snapshot; },
+		getLocale() { return this.snapshot; },
+		subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
+		setLocale(id) { writes.push(["locale", id]); },
+	};
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		theme,
+		locale,
+		configureDocument(doc) { doc.documentElement.lang = "zh-CN"; },
+	});
+	const api = booted.sandbox.__RDSH_MOBILE_UX__;
+	const state = api.state;
+	// Upstream Appearance/font and Language row stores mirror the Host snapshot
+	// and ignore a revision that is not newer than the one they stored.
+	const rows = {
+		themeRevision: hostTheme.revision,
+		fontSizes: hostTheme.fontSizes,
+		localeRevision: hostLocale.revision,
+		active: hostLocale.active,
+	};
+	booted.ctx.on("theme/change", (snapshot) => {
+		if (snapshot === null || snapshot === undefined || snapshot.revision <= rows.themeRevision) return;
+		rows.themeRevision = snapshot.revision;
+		rows.fontSizes = snapshot.fontSizes;
+	});
+	listeners.add(() => {
+		const snapshot = locale.getSnapshot();
+		if (snapshot === null || snapshot === undefined || snapshot.revision <= rows.localeRevision) return;
+		rows.localeRevision = snapshot.revision;
+		rows.active = snapshot.active;
+	});
+	// The mounted terminal reads theme.getTheme() through its snapshot
+	// subscription; locale consumers read LocaleFace getSnapshot().
+	const terminal = { rendered: theme.getTheme(), fonts: [] };
+	booted.ctx.on("theme/change", () => {
+		queueMicrotask(() => {
+			const snapshot = theme.getTheme();
+			if (snapshot === terminal.rendered) return;
+			terminal.rendered = snapshot;
+			terminal.fonts.push(snapshot.fontSizes.text);
+		});
+	});
+	const localeReads = [];
+	locale.subscribe(() => {
+		localeReads.push(locale.getSnapshot());
+	});
+
+	// Drive the same applyTheme/applyLocale path the local controls use.
+	state.localDisplay.fonts = { text: 19, code: 12, terminal: 16 };
+	state.localDisplay.fontsLocal = true;
+	booted.emit("theme/change", theme.getTheme());
+	state.localDisplay.language = "en";
+	booted.emit("locale/change", locale.getSnapshot());
+	await Promise.resolve();
+	await Promise.resolve();
+
+	assert.equal(theme.snapshot.fontSizes.text, 19, "the local font size was not projected");
+	assert.equal(theme.snapshot.revision, hostTheme.revision, "the font projection inflated the Host revision");
+	assert.notEqual(theme.snapshot, hostTheme, "the font projection reused the Host identity");
+	assert.equal(locale.snapshot.active, "en", "the local language was not projected");
+	assert.equal(locale.snapshot.revision, hostLocale.revision, "the locale projection inflated the Host revision");
+	assert.notEqual(locale.snapshot, hostLocale, "the locale projection reused the Host identity");
+	assert.equal(booted.sandbox.document.documentElement.lang, "en");
+	assert.deepEqual(terminal.fonts, [19], "the local font projection did not reach the mounted terminal");
+	assert.equal(localeReads.at(-1)?.active, "en", "the local language did not reach locale readers");
+	assert.equal(rows.themeRevision, hostTheme.revision, "the font projection was adopted by the row stores");
+	assert.equal(rows.localeRevision, hostLocale.revision, "the locale projection was adopted by the row store");
+	assert.equal(rows.fontSizes.text, 14, "the shared font row stopped showing the Host value");
+	assert.equal(rows.active, "zh", "the shared language row stopped showing the Host value");
+
+	// A later Host theme and locale snapshot with ordinary revisions must land,
+	// while the device-local font and language survive.
+	const nextTheme = { ...hostTheme, revision: 5, fontSizes: { text: 20, code: 12, terminal: 14 } };
+	theme.snapshot = nextTheme;
+	booted.emit("theme/change", nextTheme);
+	const nextLocale = { ...hostLocale, revision: 3, active: "zh" };
+	locale.snapshot = nextLocale;
+	booted.emit("locale/change", nextLocale);
+	for (const listener of [...listeners]) listener();
+	await Promise.resolve();
+	await Promise.resolve();
+
+	assert.equal(rows.themeRevision, 5, "the font rows froze after a device-local projection");
+	assert.equal(rows.fontSizes.text, 20, "the font rows did not take the Host snapshot");
+	assert.equal(theme.snapshot.fontSizes.text, 19, "the Host theme change reverted the device-local font");
+	assert.equal(theme.snapshot.revision, 5, "the Host revision was left inflated");
+	assert.equal(rows.localeRevision, 3, "the language row froze after a device-local projection");
+	assert.equal(rows.active, "zh", "the language row did not take the Host snapshot");
+	assert.equal(locale.snapshot.active, "en", "the Host locale change reverted the device-local language");
+	assert.equal(locale.snapshot.revision, 3, "the Host locale revision was left inflated");
+	assert.equal(localeReads.at(-1)?.active, "en", "locale readers lost the local language after a Host change");
+
+	// "System" restores the Host language.
+	state.localDisplay.language = "";
+	booted.emit("locale/change", nextLocale);
+	await Promise.resolve();
+	await Promise.resolve();
+	assert.equal(locale.snapshot, nextLocale, "resetting the local language did not restore the Host snapshot");
+	assert.equal(localeReads.at(-1)?.active, "zh", "locale readers kept the local language after reset");
+	assert.equal(booted.sandbox.document.documentElement.lang, "zh-CN");
+	assert.equal(rows.active, "zh");
+
+	// #79's terminal repaint must keep the device-local fonts and revision.
+	api.writeTerminalDark(true);
+	assert.equal(theme.snapshot.fontSizes.text, 19, "terminal dark reverted the device-local font");
+	assert.equal(theme.snapshot.revision, nextTheme.revision, "terminal dark inflated the Host revision");
+	api.writeTerminalDark(false);
+	assert.equal(theme.snapshot.fontSizes.text, 19, "terminal dark off reverted the device-local font");
+	assert.equal(theme.snapshot.revision, nextTheme.revision, "terminal dark off inflated the Host revision");
+
+	assert.deepEqual(writes, [], "a shared Host writer was called");
+	booted.disposeAll();
+	assert.equal(theme.snapshot, nextTheme, "dispose did not restore the latest Host theme");
+	assert.equal(locale.snapshot, nextLocale, "dispose did not restore the latest Host locale");
+	assert.deepEqual(writes, [], "dispose wrote a shared setting");
+});
+
 test("every accepted terminal size reaches theme/change (#66)", () => {
 	for (const terminal of [10, 13, 20]) {
 		const hostTheme = {

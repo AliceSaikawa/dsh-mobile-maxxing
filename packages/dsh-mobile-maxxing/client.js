@@ -2576,6 +2576,14 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * page and restored by the effect cleanup. Locale listeners are notified
      * directly (not through `locale/change`) so the native shell bridge never
      * observes the device-local choice.
+     *
+     * The projected snapshots keep the Host revision and differ only by object
+     * identity. Upstream Appearance, font and Language row stores ignore a
+     * snapshot whose revision is not newer than the one they stored, so a
+     * synthetic revision here would become their high-water mark and freeze
+     * the shared rows. The new identity is what makes local readers (the
+     * mounted terminal's theme subscription, locale subscribers) reread the
+     * device-local values.
      */
     function attachLocalDisplay(ctx) {
       let theme;
@@ -2651,8 +2659,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         applyLocale: () => {},
       };
 
-      const themeEpoch = { value: 0 };
-      const localeEpoch = { value: 0 };
       let projectingTheme = false;
       let disposed = false;
       const baseDocumentLang = document.documentElement.lang;
@@ -2684,12 +2690,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           if (themeService.snapshot !== hostTheme) themeService.snapshot = hostTheme;
           return;
         }
-        themeEpoch.value += 1;
-        const revision = hostTheme.revision + 1000 + themeEpoch.value;
+        // Keep the Host revision: see the note on attachLocalDisplay. The new
+        // object identity is what carries the local sizes to the terminal.
         const projected = {
           ...hostTheme,
           fontSizes: Object.freeze({ ...state.localDisplay.fonts }),
-          revision,
         };
         // #79's terminal-only repaint listener must not adopt this local font
         // projection as a Host baseline.
@@ -2707,12 +2712,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           notifyLocale();
           return;
         }
-        localeEpoch.value += 1;
-        const revision = hostLocale.revision + 1000 + localeEpoch.value;
+        // Same Host revision as the theme projection, for the same row-store
+        // reason; notifyLocale() carries the new identity to local readers.
         localeService.snapshot = Object.freeze({
           ...hostLocale,
           active: chosen,
-          revision,
         });
         document.documentElement.lang = chosen === "zh" ? "zh-CN" : chosen;
         notifyLocale();

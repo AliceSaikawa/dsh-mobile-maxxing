@@ -2,9 +2,11 @@
  * Distribution and install smoke tests for the optional Japanese locale pack.
  *
  * These run without a DSH process and without a browser. They pack the real
- * package with npm, inspect the tarball, import the installed copies of the
- * public exports, and prove that the package is a standalone, private,
- * optional ja owner rather than something the mobile tarball installs.
+ * package with npm, inspect the tarball, import the installed host half, and
+ * materialize the installed browser half through the same
+ * window.__ModuleLoader__.load({ id, factory }) registration DSH uses. They
+ * prove that the package is a standalone, private, optional ja owner rather
+ * than something the mobile tarball installs.
  */
 
 import assert from 'node:assert/strict';
@@ -16,6 +18,7 @@ import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 
 import { LOCALE_REQUIREMENTS, localePublishDecision, tarballName } from '../../../scripts/pack-all.mjs';
+import { loadClientModule } from './client-loader.mjs';
 
 const packageDir = path.resolve(import.meta.dirname, '..');
 const repo = path.resolve(packageDir, '..', '..');
@@ -105,7 +108,14 @@ test('npm pack is a standalone install: no work directory and every export resol
 
 	const host = await import(pathToFileURL(path.join(extracted, 'index.js')).href);
 	assert.equal(typeof host.apply, 'function');
-	const client = await import(pathToFileURL(path.join(extracted, 'client.js')).href);
+
+	// The public ./client export is browser-only: the installed bytes must
+	// register through the DSH loader, so evaluate them the way the Host does
+	// instead of importing them as an ES module in bare Node.
+	const client = loadClientModule(fs.readFileSync(path.join(extracted, 'client.js'), 'utf8'));
+	assert.equal(client.registration.id, 'rdsh-locale-ja');
+	assert.deepEqual(Object.keys(client.registration).sort(), ['factory', 'id']);
+	assert.equal(typeof client.registration.factory, 'function');
 	assert.deepEqual(client.language, { id: 'ja', label: '日本語', fallback: 'en' });
 	assert.deepEqual(client.inject, ['locale']);
 	assert.equal(Object.keys(client.dictionaries).length, upstream.totals.namespaces);
@@ -116,8 +126,8 @@ test('the installed client is the single ja owner and coexists/disposes cleanly'
 	const { file } = pack(t);
 	const extracted = temporaryDirectory(t);
 	execFileSync('tar', ['-xzf', file, '-C', extracted, '--strip-components=1'], { stdio: 'pipe' });
-	const client = await import(pathToFileURL(path.join(extracted, 'client.js')).href);
 	const source = fs.readFileSync(path.join(extracted, 'client.js'), 'utf8');
+	const client = loadClientModule(source);
 	assert.equal((source.match(/\.addLanguage\(/gu) ?? []).length, 1, 'exactly one owner must addLanguage(ja)');
 	assert.doesNotMatch(source, /\.setLocale\(/, 'the locale pack must not set the shared language');
 	assert.doesNotMatch(source, /dsh-mobile-maxxing/, 'the locale pack must not reach into the mobile package');

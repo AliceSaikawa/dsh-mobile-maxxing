@@ -471,27 +471,49 @@ export function renderClient(dictionaries, status) {
 		lines.push(' * ' + total.namespaces + ' namespaces can register a complete dictionary. They are not translations.');
 	}
 	lines.push(' * See locale/translation-status.json for the per-namespace split.');
+	lines.push(' *');
+	lines.push(' * Browser bundle, not an ES module: DSH concatenates plugin client files');
+	lines.push(' * verbatim into a classic <script> batch, so this file only registers a lazy');
+	lines.push(' * factory with window.__ModuleLoader__.load({ id, factory }). The loader');
+	lines.push(' * materializes the factory once on first import and uses the returned');
+	lines.push(' * { inject, apply }; language and dictionaries ride along as metadata.');
 	lines.push(' */');
 	lines.push('');
-	lines.push('export const language = Object.freeze(' + JSON.stringify(LANGUAGE) + ');');
+	lines.push('window.__ModuleLoader__.load({');
+	lines.push('\tid: "rdsh-locale-ja",');
+	lines.push('\tfactory(require) {');
+	lines.push('\t\tvar module = { exports: {} };');
+	lines.push('\t\tvar exports = module.exports;');
+	lines.push('\t\tObject.defineProperty(exports, Symbol.toStringTag, { value: "Module" });');
 	lines.push('');
-	lines.push('export const dictionaries = Object.freeze({');
+	lines.push('\t\tconst language = Object.freeze(' + JSON.stringify(LANGUAGE) + ');');
+	lines.push('');
+	lines.push('\t\tconst dictionaries = Object.freeze({');
 	for (const [namespace, dictionary] of Object.entries(dictionaries)) {
-		lines.push('\t' + JSON.stringify(namespace) + ': Object.freeze(' + renderDictionary(dictionary, 1) + '),');
+		lines.push('\t\t\t' + JSON.stringify(namespace) + ': Object.freeze(' + renderDictionary(dictionary, 3) + '),');
 	}
-	lines.push('});');
+	lines.push('\t\t});');
 	lines.push('');
-	lines.push('export const inject = ["locale"];');
+	lines.push('\t\tconst inject = ["locale"];');
 	lines.push('');
-	lines.push('export function apply(ctx) {');
-	lines.push('\tctx.effect(() => ctx.locale.addLanguage(language), "rdsh-locale-ja: addLanguage(ja)");');
+	lines.push('\t\tfunction apply(ctx) {');
+	lines.push('\t\t\tctx.effect(() => ctx.locale.addLanguage(language), "rdsh-locale-ja: addLanguage(ja)");');
 	for (const namespace of Object.keys(dictionaries)) {
 		const entry = status.namespaces[namespace];
 		lines.push('');
-		lines.push('\t// ' + namespace + ': ' + entry.translated + '/' + entry.keys + ' translated, ' + entry.fallback + ' development-only English fallback' + (entry.fallback === 1 ? '' : 's') + '.');
-		lines.push('\tctx.effect(() => ctx.locale.register(' + JSON.stringify(namespace) + ', "ja", dictionaries[' + JSON.stringify(namespace) + ']), "rdsh-locale-ja: ' + namespace + '");');
+		lines.push('\t\t\t// ' + namespace + ': ' + entry.translated + '/' + entry.keys + ' translated, ' + entry.fallback + ' development-only English fallback' + (entry.fallback === 1 ? '' : 's') + '.');
+		lines.push('\t\t\tctx.effect(() => ctx.locale.register(' + JSON.stringify(namespace) + ', "ja", dictionaries[' + JSON.stringify(namespace) + ']), "rdsh-locale-ja: ' + namespace + '");');
 	}
-	lines.push('}');
+	lines.push('\t\t}');
+	lines.push('');
+	lines.push('\t\texports.language = language;');
+	lines.push('\t\texports.dictionaries = dictionaries;');
+	lines.push('\t\texports.inject = inject;');
+	lines.push('\t\texports.apply = apply;');
+	lines.push('');
+	lines.push('\t\treturn module.exports;');
+	lines.push('\t},');
+	lines.push('});');
 	return lines.join('\n') + '\n';
 }
 

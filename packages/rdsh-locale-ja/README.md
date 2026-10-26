@@ -78,7 +78,7 @@ release exists; use the local tarball path shown above.
 ```
 package.json                 generated from locale/package-meta.json
 index.js                     generated host half (intentionally empty)
-client.js                    generated browser half (one addLanguage, 64 registers)
+client.js                    generated browser half (loader registration; one addLanguage, 64 registers)
 locale/
   upstream.json              stage-1 ownership, sources, hashes, key counts
   package-meta.json          source data for the generated manifest
@@ -90,6 +90,7 @@ test/
   extract-upstream.test.mjs  stage-1 extraction/reproducibility tests
   stage2.test.mjs            generation, ownership, parity, complete/incomplete and merge tests
   distribution.test.mjs      npm pack / install smoke, exports, no work/, dispose tests
+  client-loader.mjs          browser-loader harness (window.__ModuleLoader__ capture)
   fixtures/seed-ja-83.json   immutable 83-value migration evidence and SHA-256
 work/                        local batch inputs/outputs, gitignored and not shipped
 ```
@@ -117,7 +118,12 @@ keys, blank values (allowed only where the English source is blank) and
 placeholder sets, then writes only those five paths. It never writes an
 English file.
 
-The generated client exports:
+`client.js` is a browser bundle, not an ES module. DSH concatenates each
+plugin's client file verbatim into a classic `<script>` batch, so the file only
+calls `window.__ModuleLoader__.load({ id: "rdsh-locale-ja", factory })`; the
+loader queues that registration and materializes the factory once on first
+import. Raw `export` statements would fail to parse in that position and
+register nothing. The factory returns:
 
 - `language`: `{ id: "ja", label: "日本語", fallback: "en" }`;
 - `dictionaries`: all 64 complete `ja` dictionaries;

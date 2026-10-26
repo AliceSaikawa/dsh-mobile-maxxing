@@ -29,9 +29,18 @@ import {
 	writeArtifacts,
 } from '../../../tools/locale-data.mjs';
 import { mergeReviewedBatches } from '../../../tools/merge-batches.mjs';
-import { apply, dictionaries, inject, language } from '../client.js';
+import { loadClientModule } from './client-loader.mjs';
 
 const packageDir = path.resolve(import.meta.dirname, '..');
+
+/**
+ * The generated client is a browser bundle, not an ES module: load it through
+ * the same window.__ModuleLoader__.load({ id, factory }) registration the DSH
+ * Host queues in a classic <script> batch, then materialize the factory.
+ */
+const clientSource = fs.readFileSync(path.join(packageDir, 'client.js'), 'utf8');
+const browserClient = loadClientModule(clientSource);
+const { apply, dictionaries, inject, language } = browserClient;
 
 /**
  * Immutable evidence of the 83 values migrated from the old mobile pack.
@@ -156,6 +165,26 @@ test('generated files are fresh and keep the stage-1 64/2906 snapshot', () => {
 	assert.equal(status.totals.fallback, fallback);
 	assert.equal(status.status, fallback === 0 ? 'complete' : 'incomplete');
 	assert.equal(status.developmentOnlyEnglishFallback, fallback > 0);
+});
+
+test('the client registers through the DSH browser module loader, not an ES module', () => {
+	// The Host serves every plugin client file verbatim inside a classic
+	// <script> batch (dsh-client-modules concatenates the bytes), so the only
+	// accepted shape is window.__ModuleLoader__.load({ id, factory }). Raw ESM
+	// exports fail to parse there ("Unexpected token 'export'") and register
+	// nothing, which the loader reports as "loaded without registering".
+	assert.deepEqual(browserClient.registration.id, 'rdsh-locale-ja');
+	assert.deepEqual(Object.keys(browserClient.registration).sort(), ['factory', 'id']);
+	assert.equal(typeof browserClient.registration.factory, 'function');
+	assert.equal(typeof browserClient.exports.apply, 'function');
+	assert.equal(typeof browserClient.apply, 'function');
+	assert.deepEqual(browserClient.language, { id: 'ja', label: '日本語', fallback: 'en' });
+	assert.deepEqual(browserClient.inject, ['locale']);
+	assert.equal(Object.keys(browserClient.dictionaries).length, EXPECTED_NAMESPACES);
+	assert.equal((clientSource.match(/^window\.__ModuleLoader__\.load\(/gmu) ?? []).length, 1,
+		'one script must register exactly one browser module');
+	assert.doesNotMatch(clientSource, /^export\s/mu, 'the client bundle must not use ES module exports');
+	assert.doesNotMatch(clientSource, /^import\s/mu, 'the client bundle must not use ES module imports');
 });
 
 test('single ownership: rdsh-locale-ja is the only ja owner', () => {

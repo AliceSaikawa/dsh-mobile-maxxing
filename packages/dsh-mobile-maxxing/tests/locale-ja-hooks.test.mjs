@@ -305,7 +305,6 @@ test("#97 追加した PROBES は en/zh/ja の語彙を持つ", () => {
 		modelTrigger: ["Select model", "选择模型", "モデルを選択"],
 		sessionHierarchy: ["Session hierarchy", "会话层级", "セッション階層"],
 		sessionActions: ["Session actions", "的操作", "のセッション操作"],
-		sessionIdCopy: ["Copy Session ID", "复制 Session ID", "セッション ID をコピー"],
 		editedFiles: ["Edited {count} files", "已编辑 {count} 个文件", "{count} ファイルを編集しました"],
 		sidebarOpen: ["Open sidebar", "打开侧边栏", "サイドバーを開く"],
 		sidebarCollapse: ["Collapse sidebar", "收起侧边栏", "サイドバーを折りたたむ"],

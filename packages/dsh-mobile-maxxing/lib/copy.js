@@ -267,9 +267,6 @@ export const COPY = {
 		// --- composer / session menu ----------------------------------------
 		"add.label": "Add image or file",
 		"add.stock": "Add files or run commands",
-		"sessionId.label": "Copy Session ID to clipboard",
-		"sessionId.copied": "Session ID copied",
-		"sessionId.manualPrompt": "Session ID (copy it manually)",
 
 		// --- workspace picker / right-panel files ---------------------------
 		"workspace.search.placeholder": "Search workspaces",
@@ -547,9 +544,6 @@ export const COPY = {
 		// --- composer / session menu ----------------------------------------
 		"add.label": "画像やファイルを追加",
 		"add.stock": "ファイルを追加またはコマンドを実行",
-		"sessionId.label": "セッションIDをコピー",
-		"sessionId.copied": "セッションIDをコピーしました",
-		"sessionId.manualPrompt": "セッションID（手動でコピーしてください）",
 
 		// --- workspace picker / right-panel files ---------------------------
 		"workspace.search.placeholder": "ワークスペースを検索",
@@ -651,9 +645,6 @@ export const PROBES = {
 	/** A session row's "..." trigger: en puts it first, zh/ja attach it to the
 	 *  session name ("{name} のセッション操作"). */
 	sessionActions: ["Session actions", "的操作", "のセッション操作"],
-	/** The stock "copy this session's ID" menu row. This plugin adds its own
-	 *  localised row, and both must be recognised to keep only one. */
-	sessionIdCopy: ["Copy Session ID", "复制 Session ID", "セッション ID をコピー"],
 	/** The edit summary card's headline, with {count} as the file count. */
 	editedFiles: ["Edited {count} files", "已编辑 {count} 个文件", "{count} ファイルを編集しました"],
 	/** The left drawer's toggle, in both states. */

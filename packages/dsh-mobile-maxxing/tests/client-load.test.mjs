@@ -150,6 +150,7 @@ function bootClient({
 	windowRemove = null,
 	lang = undefined,
 	copy = null,
+	config = null,
 	fetchImpl = null,
 	navigator = null,
 	computedStyle = () => stub(),
@@ -266,6 +267,7 @@ function bootClient({
 	sandbox.window.innerHeight = 844;
 	if (lang !== undefined) sandbox.__RDSH_PWA_LANG__ = lang;
 	if (copy !== null) sandbox.__RDSH_PWA_COPY__ = copy;
+	if (config !== null) sandbox.__RDSH_MOBILE_UX_CONFIG__ = config;
 	// The canonical host bootstrap value. Null means "let the harness derive
 	// the legacy default"; contract tests pass it explicitly. `injectMode:
 	// false` models an old/absent bootstrap and must fail closed to desktop.
@@ -596,6 +598,109 @@ test("the legacy hide list applies at phone width even with a fine pointer", () 
 	});
 	assert.equal(wideButton.hasAttribute("data-rdsh-hidden"), false, "a desktop hides nothing");
 	wide.disposeAll();
+});
+
+/** One committed ja namespace, as the full translation ships it. */
+function jaNamespace(name) {
+	return JSON.parse(readFileSync(new URL(`../../rdsh-locale-ja/locale/namespaces/ja/${name}.json`, import.meta.url), "utf8"));
+}
+
+test("#80 the default hide list matches the committed ja labels", () => {
+	// The visible ja renderings of HIDE_DEFAULT, read from the reviewed
+	// catalogue rather than written out here.
+	const settings = jaNamespace("settings");
+	const shortcuts = jaNamespace("shortcuts");
+	const account = jaNamespace("settings.account");
+	const plugins = jaNamespace("settings.plugins");
+	const command = jaNamespace("command");
+	const sessionLog = jaNamespace("session-log-download");
+	const labels = [
+		settings.openDocument,
+		sessionLog["header.more"],
+		command["label.feedback"],
+		account.signIn,
+		shortcuts.settings,
+		settings["developerTools.title"],
+		plugins.title,
+	];
+	const controls = labels.map((label) => {
+		const button = element();
+		button.setAttribute("aria-label", label);
+		return button;
+	});
+	const frames = [];
+	const config = {};
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		lang: "ja",
+		frames,
+		config,
+		configureDocument(doc) {
+			doc.querySelectorAll = (selector) => (selector === "button[aria-label], [role='menuitem']" ? controls : []);
+			doc.querySelector = () => null;
+		},
+	});
+	const flush = () => {
+		for (let index = 0; index < 10 && frames.length > 0; index += 1) frames.shift()();
+	};
+	flush();
+	for (const [index, control] of controls.entries()) {
+		assert.equal(control.hasAttribute("data-rdsh-hidden"), true, `${labels[index]} stayed visible on a phone`);
+	}
+	assert.equal(booted.sandbox.document.documentElement.hasAttribute("data-rdsh-hide-settings"), true);
+
+	// The console switch turns hiding off, and the same pass cleans every hook.
+	config.showHiddenControls = true;
+	booted.sandbox.__RDSH_MOBILE_UX__.decorate();
+	flush();
+	for (const control of controls) assert.equal(control.hasAttribute("data-rdsh-hidden"), false, "turning hiding off left a tag behind");
+	assert.equal(booted.sandbox.document.documentElement.hasAttribute("data-rdsh-hide-settings"), false);
+
+	// ...and back on: the ja entries are still in the default list.
+	config.showHiddenControls = false;
+	booted.sandbox.__RDSH_MOBILE_UX__.decorate();
+	flush();
+	for (const control of controls) assert.equal(control.hasAttribute("data-rdsh-hidden"), true, "the ja entries left the default list");
+	booted.disposeAll();
+
+	// A profile's own custom entries keep their exact/prefix semantics along
+	// with the localized defaults.
+	const custom = element();
+	custom.setAttribute("aria-label", "Custom control: keep out");
+	const customFrames = [];
+	const customBoot = bootClient({
+		mode: "mobile",
+		narrow: true,
+		frames: customFrames,
+		config: { hideLabels: ["Custom control"] },
+		configureDocument(doc) {
+			doc.querySelectorAll = (selector) => (selector === "button[aria-label], [role='menuitem']" ? [custom] : []);
+			doc.querySelector = () => null;
+		},
+	});
+	for (let index = 0; index < 10 && customFrames.length > 0; index += 1) customFrames.shift()();
+	assert.equal(custom.hasAttribute("data-rdsh-hidden"), true, "the profile hide entry stopped matching");
+	customBoot.disposeAll();
+
+	// A desktop with the same ja labels is a hard no-op.
+	const desktopControls = labels.map((label) => {
+		const button = element();
+		button.setAttribute("aria-label", label);
+		return button;
+	});
+	const desktop = bootClient({
+		mode: "desktop",
+		narrow: false,
+		lang: "ja",
+		frames: [],
+		configureDocument(doc) {
+			doc.querySelectorAll = () => desktopControls;
+			doc.querySelector = () => null;
+		},
+	});
+	for (const control of desktopControls) assert.equal(control.hasAttribute("data-rdsh-hidden"), false, "a desktop hid a ja control");
+	desktop.disposeAll();
 });
 
 /* ------------------------------------------------------------------ */

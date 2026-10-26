@@ -604,6 +604,17 @@ function chip(label, { expanded = null, children = [] } = {}) {
 	return button;
 }
 
+/** One count label from a committed namespace, rendered like the shell does. */
+const NAMESPACES = new Map();
+function countLabel(lang, name, key, count = 3) {
+	const id = `${lang}/${name}`;
+	if (!NAMESPACES.has(id)) {
+		const file = new URL(`../../rdsh-locale-ja/locale/namespaces/${id}.json`, import.meta.url);
+		NAMESPACES.set(id, JSON.parse(readFileSync(file, "utf8")));
+	}
+	return NAMESPACES.get(id)[key].replace("{count}", String(count));
+}
+
 function ringOf(button) {
 	return button.querySelector("[data-rdsh-activity-spinner]");
 }
@@ -887,8 +898,9 @@ test("#40 a projection frame refreshes the chip and teardown releases every subs
 });
 
 test("#40 count chips are detected in every upstream locale (en, zh)", () => {
-	// Installed DSH 0.2.1-rc.2 ships en and zh only (locale/ dirs). A future ja
-	// shell adds its count nouns to PROBES.activityChip, not to client.js.
+	// Installed DSH 0.2.1-rc.2 ships en and zh only (locale/ dirs). The ja
+	// vocabulary lives in PROBES too (#80); the committed labels are pinned
+	// below against the full translation package.
 	const en = chip("2 subagents");
 	const zh = chip("2 个子智能体");
 	const zhJobs = chip("1 个后台任务运行中");
@@ -905,6 +917,82 @@ test("#40 count chips are detected in every upstream locale (en, zh)", () => {
 	assert.equal(zhJobs.getAttribute("data-rdsh-activity-chip"), "shell");
 	assert.equal(zhJobs.getAttribute("data-rdsh-activity-state"), "running", "the zh running word is probed");
 	assert.equal(zh.getAttribute("data-rdsh-activity-state"), "idle");
+});
+
+test("#80 the committed ja count chips are all decorated, idle included", () => {
+	// The full ja catalogue renders the subagent total noun-first
+	// ("サブエージェント 3 件"); the old leading-number regex left that chip
+	// bare, so no ring, icon or second-tap close was installed.
+	const idleSubagents = chip(countLabel("ja", "subagent", "count.total.other"), { expanded: true });
+	const runningSubagents = chip(countLabel("ja", "subagent", "count.running.other"));
+	const idleJobs = chip(countLabel("ja", "job", "count.idle.other"));
+	const runningJobs = chip(countLabel("ja", "job", "count.live.other"));
+	const escapes = [];
+	idleSubagents.dispatchEvent = (event) => {
+		escapes.push(event);
+		return true;
+	};
+	const booted = boot({
+		services: {},
+		configureDocument(doc) {
+			doc.headerButtons = [idleSubagents, runningSubagents, idleJobs, runningJobs];
+		},
+	});
+	booted.api.decorate();
+	booted.runFrames();
+
+	assert.equal(idleSubagents.getAttribute("data-rdsh-activity-chip"), "subagent");
+	assert.equal(idleSubagents.getAttribute("data-rdsh-activity-state"), "idle");
+	assert.ok(ringOf(idleSubagents) !== null, "the idle ja subagent chip has no ring");
+	assert.ok(idleSubagents.querySelector("[data-rdsh-activity-icon]") !== null, "the idle ja subagent chip has no icon");
+	assert.equal(runningSubagents.getAttribute("data-rdsh-activity-chip"), "subagent");
+	assert.equal(runningSubagents.getAttribute("data-rdsh-activity-state"), "running");
+	assert.equal(idleJobs.getAttribute("data-rdsh-activity-chip"), "shell");
+	assert.equal(idleJobs.getAttribute("data-rdsh-activity-state"), "idle");
+	assert.ok(ringOf(idleJobs) !== null, "the idle ja jobs chip has no ring");
+	assert.equal(runningJobs.getAttribute("data-rdsh-activity-chip"), "shell");
+	assert.equal(runningJobs.getAttribute("data-rdsh-activity-state"), "running");
+
+	// The second tap closes the open panel through the root's Escape path.
+	const event = documentClick(booted, ringOf(idleSubagents));
+	assert.equal(event.prevented, true, "the ja idle chip never reaches the upstream opener");
+	assert.equal(event.stopped, true);
+	assert.equal(escapes.length, 1, "the ja idle chip has no second-tap close");
+	assert.equal(escapes[0].key, "Escape");
+});
+
+test("#80 the noun-first ja match is anchored to a real count label", () => {
+	// Negative controls built from the committed label: a bare noun, a verb
+	// phrase, a number without its counter, and the label with a suffix must
+	// all stay ordinary buttons.
+	const idle = countLabel("ja", "subagent", "count.total.other");
+	const noun = PROBES.activityChipCountLast.find((value) => idle.startsWith(`${value} `));
+	assert.ok(noun !== undefined, "the committed noun-first label has no noun probe");
+	const controls = [chip(noun), chip(`${noun}を開く`), chip(`${noun} 3`), chip(`${idle}の履歴`)];
+	const booted = boot({ services: {} });
+	decorateChips(booted, controls);
+	for (const control of controls) {
+		assert.equal(control.hasAttribute("data-rdsh-activity-chip"), false, `${control.getAttribute("aria-label")} was mistaken for a count chip`);
+		assert.equal(ringOf(control), null, `${control.getAttribute("aria-label")} got a ring`);
+		assert.equal(control.querySelector("[data-rdsh-activity-icon]"), null, `${control.getAttribute("aria-label")} got an icon`);
+	}
+});
+
+test("#80 the committed en count labels keep their classification", () => {
+	const idleSubagents = chip(countLabel("en", "subagent", "count.total.other"));
+	const runningSubagents = chip(countLabel("en", "subagent", "count.running.other"));
+	const idleJobs = chip(countLabel("en", "job", "count.idle.other"));
+	const runningJobs = chip(countLabel("en", "job", "count.live.other"));
+	const booted = boot({ services: {} });
+	decorateChips(booted, [idleSubagents, runningSubagents, idleJobs, runningJobs]);
+	assert.equal(idleSubagents.getAttribute("data-rdsh-activity-chip"), "subagent");
+	assert.equal(idleSubagents.getAttribute("data-rdsh-activity-state"), "idle");
+	assert.equal(runningSubagents.getAttribute("data-rdsh-activity-state"), "running");
+	assert.equal(idleJobs.getAttribute("data-rdsh-activity-chip"), "shell");
+	assert.equal(runningJobs.getAttribute("data-rdsh-activity-state"), "running");
+	for (const control of [idleSubagents, runningSubagents, idleJobs, runningJobs]) {
+		assert.ok(ringOf(control) !== null, "an en count chip lost its ring");
+	}
 });
 
 test("#40 a width change keeps the mobile sources and nodes; desktop mode never subscribes", () => {

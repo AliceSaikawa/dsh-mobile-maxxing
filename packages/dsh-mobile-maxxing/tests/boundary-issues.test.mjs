@@ -28,12 +28,18 @@ function cssTemplate(name) {
 	const tick = String.fromCharCode(96);
 	const match = CLIENT.match(new RegExp(`const ${name} = ${tick}([\\s\\S]*?)${tick};\\n`));
 	assert.ok(match, `${name} exists`);
-	// The exit-control selector is assembled from PROBES at runtime; render the
-	// same text here so the rule assertions still read ordinary CSS.
+	// The exit/split selectors are assembled from PROBES at runtime; render the
+	// same text here so the rule assertions still read ordinary CSS. The split
+	// selector is built from the live probe table, so a missing ja label fails
+	// the stylesheet assertion below.
 	const rightPanelExit = '[data-rdsh-rightpanel] [aria-label="Exit fullscreen"], [data-rdsh-rightpanel] [aria-label="全画面表示を終了"]';
+	const rightPanelSplit = PROBES.split
+		.map((label) => `[data-rdsh-rightpanel] [aria-label="${label}"]`)
+		.join(", ");
 	return match[1]
 		.replace(/\$\{NARROW_QUERY\}/g, "(max-width: 767px)")
-		.replace(/\$\{RIGHT_PANEL_EXIT\}/g, rightPanelExit);
+		.replace(/\$\{RIGHT_PANEL_EXIT\}/g, rightPanelExit)
+		.replace(/\$\{RIGHT_PANEL_SPLIT\}/g, rightPanelSplit);
 }
 
 function cssBlocks() {
@@ -782,6 +788,11 @@ test("#72 the tablet tier reserves the measured dock and keeps safe-area padding
 		"the tablet cannot leave fullscreen in en or ja",
 	);
 	assert.match(phone, /\[data-rdsh-rightpanel\] \[aria-label="全画面表示を終了"\]/, "the ja phone still shows the duplicate exit control");
+	assert.match(
+		phone,
+		/\[data-rdsh-rightpanel\] \[aria-label="Split"\], \[data-rdsh-rightpanel\] \[aria-label="分割"\] \{ display: none !important; \}/,
+		"the ja phone still shows the dock split control",
+	);
 	assert.doesNotMatch(tablet, /\[aria-label="Split"\].*display: (?:inline-flex|block)/, "dockkit's pane split was restored");
 	assert.doesNotMatch(tablet, /padding-(?:top|right|bottom|left)/, "the tablet tier reset the panel's safe-area padding");
 

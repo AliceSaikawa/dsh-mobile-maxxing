@@ -719,7 +719,7 @@ test("the retired diagnostics and custom hide are gone", () => {
 	// The standard hide list and the console option survive; the browser-side
 	// overrides do not.
 	assert.match(CLIENT, /const HIDE_DEFAULT = \[/, "the standard hide list is gone");
-	assert.match(CLIENT, /function hideLabels\(\) \{\s*\n\s*return \[\.\.\.HIDE_DEFAULT, \.\.\.\(Array\.isArray\(CONFIG\.hideLabels\)/, "the profile hide list is gone");
+	assert.match(CLIENT, /function hideLabels\(\) \{[\s\S]*?\.\.\.HIDE_DEFAULT,[\s\S]*?\.\.\.probeValues\("hideControls"\),[\s\S]*?Array\.isArray\(CONFIG\.hideLabels\)/, "the localized defaults or the profile hide list are gone");
 	assert.match(CLIENT, /function hideDisabled\(\) \{\s*\n\s*return CONFIG\.showHiddenControls === true;/, "the console option is gone");
 });
 

@@ -588,6 +588,18 @@ export const PROBES = {
 	accountMenu: ["Account menu", "アカウントメニュー"],
 	/** The Settings row inside that menu. */
 	settingsMenu: ["Settings", "設定"],
+	/** Localized leaves of the phone's default hide list. The English names
+	 *  stay in client.js; these are the committed ja renderings of the same
+	 *  controls ("Open configuration file", "More actions", …). */
+	hideControls: [
+		"設定ファイルを開く",
+		"その他の操作",
+		"フィードバック",
+		"サインイン",
+		"キーボードショートカット",
+		"コーディングビューを表示",
+		"組み込みプラグイン",
+	],
 	/** Sidebar rows folded into the landscape More menu. */
 	navPlugins: ["Plugins", "插件", "プラグイン"],
 	navAutomation: ["Automation tasks", "自动化任务", "自動化タスク"],
@@ -607,9 +619,14 @@ export const PROBES = {
 	/** A running activity chip: "3 background jobs running" / "3 subagents running".
 	 *  The ja wording puts the counter before the noun ("3 件の…が実行中"). */
 	activityRunning: ["running", "运行中", "正在运行", "実行中"],
-	/** Count-chip nouns; the ja catalogue counts with 件の, so the counter is
-	 *  part of the matched phrase ("3件のバックグラウンドジョブ"). */
+	/** Count-first count chips: en, zh and the ja running/job forms attach the
+	 *  counter to the number ("3件のバックグラウンドジョブ"). */
 	activityChip: ["subagent", "subagents", "background job", "background jobs", "shell command", "shell commands", "个子智能体", "个后台任务", "件のサブエージェント", "件のバックグラウンドジョブ"],
+	/** Count-last nouns: the committed ja subagent total is noun-first
+	 *  ("サブエージェント 3 件"), so the number is not at the start. */
+	activityChipCountLast: ["サブエージェント", "バックグラウンドジョブ"],
+	/** The trailing counter that closes a noun-first ja count chip. */
+	activityChipCounter: ["件"],
 	/** The subagent noun inside a count chip, for choosing its glyph. */
 	activitySubagentChip: ["subagents", "subagent", "子智能体", "サブエージェント"],
 	/** Any aria-label that identifies the stats dock. */
@@ -622,6 +639,8 @@ export const PROBES = {
 	fullscreen: ["Enter fullscreen", "Fullscreen", "全屏", "全画面表示"],
 	/** The same panel's "leave fullscreen" control, which a phone hides. */
 	fullscreenExit: ["Exit fullscreen", "全画面表示を終了"],
+	/** The dock's pane-split control, which a phone hides at every width. */
+	split: ["Split", "分割"],
 	/** The Conversation view tab that opens the Trajectory view (#75). */
 	trajectoryTab: ["Trajectory", "軌跡", "轨迹", "トラジェクトリ"],
 };

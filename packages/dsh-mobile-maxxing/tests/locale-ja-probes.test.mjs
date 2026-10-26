@@ -10,8 +10,19 @@
  */
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { PROBES } from "../lib/copy.js";
+
+/** One committed ja namespace, as the full translation ships it. */
+function ja(name) {
+	return JSON.parse(readFileSync(new URL(`../../rdsh-locale-ja/locale/namespaces/ja/${name}.json`, import.meta.url), "utf8"));
+}
+
+/** One count template from the committed catalogue, rendered. */
+function countLabel(template, count = 3) {
+	return template.replace("{count}", String(count));
+}
 
 /**
  * label source: the reviewed ja output and the en snapshot key it translates.
@@ -81,6 +92,12 @@ const CASES = [
     source: "subagent:count.running.other",
   },
   {
+    probe: "split",
+    en: "Split",
+    ja: "分割",
+    source: "sidebarRight:dock.splitPane",
+  },
+  {
     probe: "accountMenu",
     en: "Account menu",
     ja: "アカウントメニュー",
@@ -104,9 +121,59 @@ test("#80 every affected probe keeps en and zh and gains the reviewed ja label",
   }
 });
 
-test("#80 the activity catalogue includes both reviewed ja count phrases", () => {
-  assert.ok(PROBES.activityChip.includes("件のサブエージェント"));
-  assert.ok(PROBES.activityChip.includes("件のバックグラウンドジョブ"));
+test("#80 the activity catalogue covers the committed ja count shapes", () => {
+  // Read the reviewed catalogue itself, not a hand-written approximation:
+  // the subagent total is noun-first, while its running form and both job
+  // forms put the number (and 件) first.
+  const subagent = ja("subagent");
+  const job = ja("job");
+  const idleSubagents = countLabel(subagent["count.total.other"]);
+  const runningSubagents = countLabel(subagent["count.running.other"]);
+  const idleJobs = countLabel(job["count.idle.other"]);
+  const runningJobs = countLabel(job["count.live.other"]);
+
+  for (const [label, phrase] of [
+    [runningSubagents, "件のサブエージェント"],
+    [idleJobs, "件のバックグラウンドジョブ"],
+    [runningJobs, "件のバックグラウンドジョブ"],
+  ]) {
+    assert.ok(label.startsWith("3"), `${label} is not a count-first label`);
+    assert.ok(PROBES.activityChip.includes(phrase), `activityChip lost ${phrase}`);
+    assert.ok(label.includes(`3${phrase}`) || label.includes(`3 ${phrase}`), `${label} does not render ${phrase} after its count`);
+  }
+
+  // The noun-first idle label is matched by its own probes, and the trailing
+  // counter closes it.
+  assert.ok(PROBES.activityChipCountLast.some((noun) => idleSubagents.startsWith(`${noun} 3 `)), `${idleSubagents} has no count-last noun probe`);
+  assert.ok(PROBES.activityChipCounter.some((counter) => idleSubagents.endsWith(` 3 ${counter}`)), `${idleSubagents} has no trailing counter probe`);
+  assert.equal(PROBES.activityChip.includes("サブエージェント"), false, "a bare noun would match sentences, not count chips");
+});
+
+test("#80 the phone hide list carries the committed ja leaves", () => {
+  // The English names stay in client.js as HIDE_DEFAULT; these are the ja
+  // renderings of the same controls, read from the reviewed catalogue.
+  const settings = ja("settings");
+  const shortcuts = ja("shortcuts");
+  const account = ja("settings.account");
+  const plugins = ja("settings.plugins");
+  const command = ja("command");
+  const sessionLog = ja("session-log-download");
+  const expected = [
+    settings.openDocument,
+    sessionLog["header.more"],
+    command["label.feedback"],
+    account.signIn,
+    shortcuts.settings,
+    settings["developerTools.title"],
+    plugins.title,
+  ];
+  assert.deepEqual([...PROBES.hideControls].sort(), [...expected].sort());
+  // Every entry is the whole control label; no bare fragment can hide a
+  // settings page or a chat action that merely mentions the word.
+  for (const label of PROBES.hideControls) {
+    assert.ok(label.length >= 4, `${label} is too broad for a hide entry`);
+    assert.equal(label, label.trim());
+  }
 });
 
 test("#80 no probe value is empty or duplicated, and no broad ja fragment sneaks in", () => {

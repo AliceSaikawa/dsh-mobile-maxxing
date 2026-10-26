@@ -2890,7 +2890,14 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     function hideLabels() {
-      return [...HIDE_DEFAULT, ...(Array.isArray(CONFIG.hideLabels) ? CONFIG.hideLabels : [])];
+      // The default list is English; the probes carry the same controls as the
+      // shell renders them in every locale it ships (ja included). A profile's
+      // own entries stay last and keep their exact/prefix semantics.
+      return [
+        ...HIDE_DEFAULT,
+        ...probeValues("hideControls"),
+        ...(Array.isArray(CONFIG.hideLabels) ? CONFIG.hideLabels : []),
+      ];
     }
 
     function shouldHide(label, labels) {
@@ -5602,9 +5609,15 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     /**
-     * Upstream count chips start with their number ("3 subagents running",
-     * "3 个子智能体"). The label vocabulary is a probe table because the shell
-     * translates it; the running word inside it is probed separately.
+     * Upstream count chips usually start with their number ("3 subagents
+     * running", "3 个子智能体"). The label vocabulary is a probe table because
+     * the shell translates it; the running word inside it is probed separately.
+     *
+     * The committed ja subagent total is noun-first ("サブエージェント 3 件"),
+     * so a second, fully anchored shape accepts a probed noun followed by the
+     * number and its counter. Keeping it anchored to the whole label is what
+     * stops a bare noun (or a sentence that merely mentions one) becoming a
+     * chip.
      */
     const ACTIVITY_CHIP_LABEL = (() => {
       const labels = probeValues("activityChip", [
@@ -5615,7 +5628,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (labels.length === 0) return null;
       // The ja count puts its counter straight after the number ("3件の…"),
       // so the separator is optional; en and zh still need their space.
-      return new RegExp(`^\\d[\\d,.]*\\s*(?:${labels.join("|")})`, "i");
+      const countFirst = `\\d[\\d,.]*\\s*(?:${labels.join("|")})`;
+      const nouns = probeValues("activityChipCountLast");
+      const counters = probeValues("activityChipCounter");
+      if (nouns.length === 0 || counters.length === 0) return new RegExp(`^${countFirst}`, "i");
+      const countLast = `(?:${nouns.join("|")})\\s*\\d[\\d,.]*\\s*(?:${counters.join("|")})$`;
+      return new RegExp(`^(?:${countFirst}|${countLast})`, "i");
     })();
 
     /** The subagent nouns, so a non-English label still picks the right glyph. */
@@ -11339,6 +11357,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       .map((label) => `[data-rdsh-rightpanel] [aria-label="${cssValue(label)}"]`)
       .join(", ");
 
+    /** The dock's pane-split control in every locale, scoped to the panel. */
+    const RIGHT_PANEL_SPLIT = probeValues("split", ["Split"])
+      .map((label) => `[data-rdsh-rightpanel] [aria-label="${cssValue(label)}"]`)
+      .join(", ");
+
     const CSS_PHONE = `
 /* Controls the hide list matched. The attribute these selectors key off is
    written only while phone() holds (see applyHideList), and the rules sit in
@@ -12756,7 +12779,7 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
      cannot do: "Exit fullscreen" closes the panel exactly like the ✕ next to
      it, and "Split" needs width the phone does not have. Keep only the ✕. */
   ${RIGHT_PANEL_EXIT},
-  [data-rdsh-rightpanel] [aria-label="Split"] { display: none !important; }
+  ${RIGHT_PANEL_SPLIT} { display: none !important; }
 
   /* The native strip already contains the home indicator. */
   html[data-rdsh-native-gap] [data-rdsh-sidebar],

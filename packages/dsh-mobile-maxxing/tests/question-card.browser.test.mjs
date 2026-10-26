@@ -50,6 +50,10 @@ function shippedStylesheet(source) {
 		.replace(
 			/\$\{RIGHT_PANEL_EXIT\}/g,
 			'[data-rdsh-rightpanel] [aria-label="Exit fullscreen"], [data-rdsh-rightpanel] [aria-label="全画面表示を終了"]',
+		)
+		.replace(
+			/\$\{RIGHT_PANEL_SPLIT\}/g,
+			'[data-rdsh-rightpanel] [aria-label="Split"], [data-rdsh-rightpanel] [aria-label="分割"]',
 		);
 
 	const blocks = [];

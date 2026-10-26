@@ -32,11 +32,13 @@ export const COPY = {
 
 		// --- local display -------------------------------------------------
 		"localDisplay.title": "Display",
-		"localDisplay.desc": "Text, code and terminal sizes for this device. These choices stay in this browser.",
+		"localDisplay.desc": "Text, code and terminal sizes, plus a terminal-only dark palette, for this device. These choices stay in this browser.",
 		"localDisplay.text": "Body text",
 		"localDisplay.code": "Code",
 		"localDisplay.terminal": "Terminal",
 		"localDisplay.subagent": "Subagent",
+		"localDisplay.terminalDark": "Dark terminal only",
+		"localDisplay.terminalDark.note": "Keeps the terminal dark while the surrounding UI and the shared theme stay unchanged. Saved in this browser only.",
 		"localDisplay.language": "Display language",
 		"localDisplay.language.system": "System",
 		"localDisplay.language.note": "Changes the DSH UI language on this device only. It does not change the shared Host setting.",
@@ -292,11 +294,13 @@ export const COPY = {
 
 		// --- local display -------------------------------------------------
 		"localDisplay.title": "表示",
-		"localDisplay.desc": "この端末の本文・コード・ターミナルの文字サイズです。設定はこのブラウザだけに保存されます。",
+		"localDisplay.desc": "この端末の本文・コード・ターミナルの文字サイズと、ターミナルだけのダーク配色です。設定はこのブラウザだけに保存されます。",
 		"localDisplay.text": "本文",
 		"localDisplay.code": "コード",
 		"localDisplay.terminal": "ターミナル",
 		"localDisplay.subagent": "サブエージェント",
+		"localDisplay.terminalDark": "ターミナルだけダーク",
+		"localDisplay.terminalDark.note": "周囲の画面と共有テーマは変えず、ターミナルだけを暗い配色にします。このブラウザにだけ保存されます。",
 		"localDisplay.language": "表示言語",
 		"localDisplay.language.system": "システム",
 		"localDisplay.language.note": "この端末の DSH UI の表示言語だけを変更します。共有のホスト設定は変更しません。",

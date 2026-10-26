@@ -1951,6 +1951,191 @@ test("every accepted terminal size reaches theme/change (#66)", () => {
 	}
 });
 
+test("terminal-only dark is off by default, device-local and asks for a terminal repaint (#79)", () => {
+	const writes = [];
+	const hostTheme = {
+		preference: "system",
+		revision: 4,
+		fontSizes: { text: 14, code: 11, terminal: 13 },
+		fontFamilies: { text: "", code: "", terminal: "" },
+		active: { id: "light", colorScheme: "light", tokens: {} },
+		themes: [],
+	};
+	const theme = {
+		snapshot: hostTheme,
+		getTheme() { return this.snapshot; },
+		setTheme(id) { writes.push(["theme", id]); },
+		setFontSize(role, px) { writes.push(["font", role, px]); },
+	};
+	const booted = bootClient({ mode: "mobile", narrow: true, theme, storage: {} });
+	const api = booted.sandbox.__RDSH_MOBILE_UX__;
+	const docEl = booted.sandbox.document.documentElement;
+	const key = "rdsh-mobile-ux:terminal-dark";
+	assert.equal(api.state.terminalDark, false, "the preference defaults to off");
+	assert.equal(docEl.hasAttribute("data-rdsh-terminal-dark"), false, "the scoped palette was painted by default");
+	assert.equal(booted.sandbox.localStorage.getItem(key), null, "a default boot wrote storage");
+
+	const observed = [];
+	booted.ctx.on("theme/change", (snapshot) => observed.push(snapshot));
+	api.writeTerminalDark(true);
+	assert.equal(api.state.terminalDark, true);
+	assert.equal(docEl.hasAttribute("data-rdsh-terminal-dark"), true, "the scoped palette was not painted");
+	assert.equal(booted.sandbox.localStorage.getItem(key), "1", "the choice was not stored locally");
+	assert.ok(observed.length > 0, "no theme/change was sent for the terminal to reread");
+	const repaint = observed[observed.length - 1];
+	assert.equal(repaint.active, hostTheme.active, "the repaint changed the shared tokens");
+	assert.equal(repaint.preference, hostTheme.preference, "the repaint changed the shared preference");
+	assert.deepEqual(repaint.fontSizes, hostTheme.fontSizes, "the repaint changed the shared fonts");
+	assert.ok(repaint.revision > hostTheme.revision, "the repaint was not distinct from the Host snapshot");
+	assert.deepEqual(writes, [], "a shared theme writer was called");
+
+	api.writeTerminalDark(false);
+	assert.equal(api.state.terminalDark, false);
+	assert.equal(docEl.hasAttribute("data-rdsh-terminal-dark"), false, "turning off left the scoped palette");
+	assert.equal(booted.sandbox.localStorage.getItem(key), null, "turning off left the stored choice");
+	assert.equal(observed.length, 2, "turning off did not ask the terminal to reread");
+	assert.deepEqual(writes, [], "turning off called a shared theme writer");
+	booted.disposeAll();
+});
+
+test("a terminal-dark repaint keeps the device-local font projection (#79)", () => {
+	const hostTheme = {
+		preference: "light",
+		revision: 3,
+		fontSizes: { text: 14, code: 11, terminal: 13 },
+		fontFamilies: { text: "", code: "", terminal: "" },
+		active: { id: "light", colorScheme: "light", tokens: {} },
+		themes: [],
+	};
+	const theme = {
+		snapshot: hostTheme,
+		getTheme() { return this.snapshot; },
+		setFontSize() { throw new Error("the shared font writer was called"); },
+	};
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		theme,
+		storage: {
+			"rdsh-mobile-ux:local-display": JSON.stringify({
+				fonts: { text: 17, code: 13, terminal: 16 },
+				language: "",
+			}),
+		},
+	});
+	assert.equal(theme.snapshot.fontSizes.text, 17);
+	assert.equal(theme.snapshot.fontSizes.code, 13);
+	assert.equal(theme.snapshot.fontSizes.terminal, 16);
+	booted.sandbox.__RDSH_MOBILE_UX__.writeTerminalDark(true);
+	assert.equal(theme.snapshot.fontSizes.text, 17, "the terminal repaint dropped the device-local font sizes");
+	assert.equal(theme.snapshot.fontSizes.code, 13, "the terminal repaint dropped the device-local font sizes");
+	assert.equal(theme.snapshot.fontSizes.terminal, 16, "the terminal repaint dropped the device-local font sizes");
+	booted.disposeAll();
+	assert.equal(theme.snapshot.fontSizes.text, 14, "dispose did not restore the Host font sizes");
+	assert.equal(theme.snapshot.fontSizes.code, 11, "dispose did not restore the Host font sizes");
+	assert.equal(theme.snapshot.fontSizes.terminal, 13, "dispose did not restore the Host font sizes");
+});
+
+test("a saved terminal-dark choice survives reload and a Host theme change (#79)", async () => {
+	const hostTheme = {
+		preference: "light",
+		revision: 2,
+		fontSizes: { text: 14, code: 11, terminal: 13 },
+		fontFamilies: { text: "", code: "", terminal: "" },
+		active: { id: "light", colorScheme: "light", tokens: {} },
+		themes: [],
+	};
+	const theme = {
+		snapshot: hostTheme,
+		getTheme() { return this.snapshot; },
+		setTheme(id) { throw new Error(`shared theme writer called: ${id}`); },
+	};
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		theme,
+		storage: { "rdsh-mobile-ux:terminal-dark": "1" },
+	});
+	const api = booted.sandbox.__RDSH_MOBILE_UX__;
+	const docEl = booted.sandbox.document.documentElement;
+	assert.equal(api.state.terminalDark, true, "the stored choice was not read");
+	assert.equal(docEl.hasAttribute("data-rdsh-terminal-dark"), true, "the stored choice was not painted");
+	assert.notEqual(theme.snapshot, hostTheme, "the stored choice sent no repaint at boot");
+	assert.equal(theme.snapshot.active, hostTheme.active, "the boot repaint changed the shared tokens");
+
+	const nextHost = {
+		...hostTheme,
+		revision: 20,
+		fontSizes: { text: 16, code: 12, terminal: 14 },
+		active: { id: "dark", colorScheme: "dark", tokens: {} },
+	};
+	booted.emit("theme/change", nextHost);
+	await Promise.resolve();
+	await Promise.resolve();
+	assert.equal(api.state.terminalDark, true, "a Host theme change dropped the local choice");
+	assert.equal(docEl.hasAttribute("data-rdsh-terminal-dark"), true, "a Host theme change removed the scoped palette");
+	assert.equal(theme.snapshot, nextHost, "the Host snapshot was not adopted after a shared theme change");
+	booted.disposeAll();
+});
+
+test("disposing terminal dark restores the Host snapshot and stops reapplying it (#79)", () => {
+	const hostTheme = {
+		preference: "light",
+		revision: 1,
+		fontSizes: { text: 14, code: 11, terminal: 13 },
+		fontFamilies: { text: "", code: "", terminal: "" },
+		active: { id: "light", colorScheme: "light", tokens: {} },
+		themes: [],
+	};
+	const theme = {
+		snapshot: hostTheme,
+		getTheme() { return this.snapshot; },
+	};
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		theme,
+		storage: { "rdsh-mobile-ux:terminal-dark": "1" },
+	});
+	const docEl = booted.sandbox.document.documentElement;
+	assert.equal(docEl.hasAttribute("data-rdsh-terminal-dark"), true);
+	assert.notEqual(theme.snapshot, hostTheme, "the test did not start from a projected snapshot");
+	booted.disposeAll();
+	assert.equal(docEl.hasAttribute("data-rdsh-terminal-dark"), false, "dispose left the scoped palette");
+	assert.equal(theme.snapshot, hostTheme, "dispose did not restore the Host snapshot");
+	booted.emit("theme/change", { ...hostTheme, revision: 99 });
+	assert.equal(docEl.hasAttribute("data-rdsh-terminal-dark"), false, "a later theme change repainted after dispose");
+});
+
+test("without a usable theme pathway the terminal is not half-painted (#79)", () => {
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		storage: { "rdsh-mobile-ux:terminal-dark": "1" },
+	});
+	const api = booted.sandbox.__RDSH_MOBILE_UX__;
+	const docEl = booted.sandbox.document.documentElement;
+	assert.equal(api.state.terminalDark, true, "the saved choice was not read");
+	assert.equal(docEl.hasAttribute("data-rdsh-terminal-dark"), false,
+		"the scoped background was painted without the theme repaint path");
+	api.writeTerminalDark(true);
+	assert.equal(docEl.hasAttribute("data-rdsh-terminal-dark"), false,
+		"turning on painted a terminal that cannot reread its palette");
+	booted.disposeAll();
+});
+
+test("a saved terminal-dark choice never wakes the desktop half (#79)", () => {
+	const booted = bootClient({
+		mode: "desktop",
+		storage: { "rdsh-mobile-ux:terminal-dark": "1" },
+	});
+	assert.equal(booted.sandbox.__RDSH_MOBILE_UX__, undefined, "the desktop built the mobile half");
+	assert.equal(booted.sandbox.document.documentElement.hasAttribute("data-rdsh-terminal-dark"), false,
+		"the desktop painted the mobile terminal palette");
+	assert.equal(booted.sandbox.localStorage.getItem("rdsh-mobile-ux:terminal-dark"), "1",
+		"the desktop rewrote the saved choice");
+});
+
 /** A locale service with the public language-pack API, recording registrations. */
 function japaneseLocale() {
 	const registered = [];

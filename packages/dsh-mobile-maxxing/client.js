@@ -1697,6 +1697,14 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     const DEVICE_THEME_KEY = "dsh-mobile-maxxing:device-theme";
     /** Browser-local display choices. Never a Host setting and never synced. */
     const LOCAL_DISPLAY_KEY = "rdsh-mobile-ux:local-display";
+    /** Browser-local terminal-only dark choice (#79); off by default. */
+    const TERMINAL_DARK_KEY = "rdsh-mobile-ux:terminal-dark";
+    /** Root marker the scoped mobile stylesheet keys the terminal palette off. */
+    const TERMINAL_DARK_ATTR = "data-rdsh-terminal-dark";
+    /** Marks a theme snapshot this module emitted just to ask the terminal to repaint. */
+    const TERMINAL_DARK_PROJECTION = Symbol.for("rdsh-mobile-ux:terminal-dark-projection");
+    /** Marks the device-local font/locale projection so it is not a Host baseline. */
+    const LOCAL_DISPLAY_PROJECTION = Symbol.for("rdsh-mobile-ux:local-display-projection");
     /** The three published theme font roles and their accepted integer ranges. */
     const LOCAL_FONT_SPECS = {
       text: { min: 10, max: 22, default: 14, variable: "--dsh-content-font-size" },
@@ -1731,6 +1739,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       notifyDeviceTurns: readNotifyDeviceTurns(),
       deviceTheme: readDeviceTheme(),
       deviceThemeNote: "",
+      terminalDark: readTerminalDark(),
       localPermission: readLocalPermission(),
       permissionOptions: [],
       permissionSharedDefault: "",
@@ -2254,6 +2263,147 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     // ---------------------------------------------------------------------
+    // Terminal-only dark surface (#79)
+    //
+    // The terminal is the one surface whose ANSI palette reads badly on a
+    // light page. This preference is browser-local and deliberately narrow:
+    // it paints only the terminal body and asks upstream to reread that
+    // computed style through its normal `theme/change` subscription (the
+    // sidebar terminal reads the screen wrapper's background/foreground and
+    // keeps xterm's own ANSI palette, with upstream's minimumContrastRatio).
+    // The surrounding UI, the shared theme and the Host settings stay as they
+    // are; nothing is written through `theme.setTheme`.
+    // ---------------------------------------------------------------------
+    let terminalDarkRuntime = null;
+
+    function readTerminalDark() {
+      try {
+        return localStorage.getItem(TERMINAL_DARK_KEY) === "1";
+      } catch (error) {
+        return false;
+      }
+    }
+
+    function applyTerminalDark() {
+      // No usable theme service means no repaint path: painting the scoped
+      // background alone would leave xterm's light-theme default foreground
+      // and ANSI palette on a dark surface. Wait for attach() instead.
+      if (terminalDarkRuntime === null) return;
+      if (typeof document === "undefined") return;
+      const root = document.documentElement;
+      if (root === null || root === undefined) return;
+      if (!phone()) return;
+      root.toggleAttribute(TERMINAL_DARK_ATTR, state.terminalDark === true);
+    }
+
+    /** Store the choice, paint the scoped rule and ask the terminal to repaint. */
+    function writeTerminalDark(value) {
+      const next = value === true;
+      try {
+        if (next) localStorage.setItem(TERMINAL_DARK_KEY, "1");
+        else localStorage.removeItem(TERMINAL_DARK_KEY);
+      } catch (error) {
+        /* private mode: the choice lasts for this page */
+      }
+      emit({ terminalDark: next });
+      applyTerminalDark();
+      terminalDarkRuntime?.repaint();
+    }
+
+    /**
+     * Wire the scoped palette to the theme service.
+     *
+     * The CSS alone does not repaint xterm: the terminal keeps the
+     * background/foreground it last read from the screen wrapper. Emitting a
+     * fresh (semantically identical) `theme/change` snapshot makes the
+     * existing terminal effect run its `getComputedStyle` pass again. The
+     * snapshot is marked so this module does not mistake its own echo for a
+     * Host theme change, and the latest Host snapshot is restored on dispose.
+     */
+    function attachTerminalDark(ctx) {
+      let service;
+      try {
+        service = typeof ctx.get === "function" ? ctx.get("theme") : undefined;
+      } catch (error) {
+        service = undefined;
+      }
+      if (service === undefined || service === null || typeof service.getTheme !== "function") return;
+      // A read-only service cannot make the terminal reread the scoped CSS.
+      if (!("snapshot" in service)) return;
+      ctx.effect(() => {
+        let active = true;
+        let host = null;
+        let projected = false;
+        let projecting = false;
+        let epoch = 0;
+        try {
+          host = service.getTheme() ?? null;
+        } catch (error) {
+          host = null;
+        }
+        const repaint = (restoreHost = false) => {
+          if (!active || !phone() || host === null) return;
+          let current = host;
+          try {
+            current = service.getTheme() ?? host;
+          } catch (error) {
+            current = host;
+          }
+          if (current === null || current === undefined) return;
+          epoch += 1;
+          const revision = Number.isFinite(current.revision) ? current.revision : 0;
+          const next = { ...current, revision: revision + 1000 + epoch };
+          Object.defineProperty(next, TERMINAL_DARK_PROJECTION, { value: true });
+          Object.freeze(next);
+          projected = true;
+          projecting = true;
+          try {
+            service.snapshot = next;
+            if (typeof ctx.emit === "function") ctx.emit("theme/change", next);
+          } catch (error) {
+            /* the theme fiber may already be gone */
+          } finally {
+            projecting = false;
+            // A teardown repaint only has to make the terminal run its
+            // getComputedStyle pass once; the shared snapshot goes back to the
+            // Host immediately so a dispose leaves no projected revision.
+            if (restoreHost) {
+              try {
+                service.snapshot = host;
+              } catch (error) {
+                /* the theme fiber may already be gone */
+              }
+            }
+          }
+        };
+        const runtime = { apply: applyTerminalDark, repaint };
+        terminalDarkRuntime = runtime;
+        applyTerminalDark();
+        // A stored ON is applied before the terminal mounts; this also covers
+        // a hot reload where the terminal is already mounted.
+        if (state.terminalDark === true) repaint();
+        const off = typeof ctx.on === "function" ? ctx.on("theme/change", (snapshot) => {
+          if (!active || projecting) return;
+          if (snapshot === null || snapshot === undefined) return;
+          if (snapshot[TERMINAL_DARK_PROJECTION] === true) return;
+          if (snapshot[LOCAL_DISPLAY_PROJECTION] === true) return;
+          host = snapshot;
+        }) : undefined;
+        return () => {
+          if (terminalDarkRuntime === runtime) terminalDarkRuntime = null;
+          document.documentElement.removeAttribute(TERMINAL_DARK_ATTR);
+          // Repaint after the marker is gone so the terminal reads the shared
+          // light palette again. The repaint restores the Host snapshot in its
+          // finally block; the display projection's own teardown will then
+          // put back the true Host object.
+          if (projected && host !== null) repaint(true);
+          active = false;
+          if (typeof off === "function") off();
+        };
+      }, "rdsh-mobile-ux: terminal dark");
+    }
+
+    // ---------------------------------------------------------------------
     // Device-local display: font sizes and UI language.
     //
     // Both controls are deliberately browser-local. The theme and locale
@@ -2526,11 +2676,15 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         }
         themeEpoch.value += 1;
         const revision = hostTheme.revision + 1000 + themeEpoch.value;
-        themeService.snapshot = Object.freeze({
+        const projected = {
           ...hostTheme,
           fontSizes: Object.freeze({ ...state.localDisplay.fonts }),
           revision,
-        });
+        };
+        // #79's terminal-only repaint listener must not adopt this local font
+        // projection as a Host baseline.
+        Object.defineProperty(projected, LOCAL_DISPLAY_PROJECTION, { value: true });
+        themeService.snapshot = Object.freeze(projected);
         emitTheme(themeService.snapshot);
       };
 
@@ -2560,6 +2714,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       ctx.effect(() => {
         const offTheme = ctx.on("theme/change", (snapshot) => {
           if (projectingTheme || disposed || snapshot === null || snapshot === undefined) return;
+          // #79's terminal-only repaint clone is not a Host theme change; it
+          // carries the same tokens/fonts. Keep the real Host baseline so that
+          // teardown restores the actual shared snapshot.
+          if (snapshot[TERMINAL_DARK_PROJECTION] === true) return;
           if (state.localDisplay.available.fonts !== true) return;
           hostTheme = snapshot;
           if (!state.localDisplay.fontsLocal) {
@@ -3189,6 +3347,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       "data-rdsh-crop-overlay",
       "data-rdsh-swipe",
       "data-rdsh-auto-fired",
+      "data-rdsh-terminal-dark",
     ];
 
     function clearOwnedAttribute(name) {
@@ -10478,6 +10637,17 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
             : null,
           h(
             "label",
+            { className: "rdsh-mux-check" },
+            h("input", {
+              type: "checkbox",
+              checked: s.terminalDark === true,
+              onChange: (event) => writeTerminalDark(event.target.checked),
+            }),
+            t("localDisplay.terminalDark"),
+          ),
+          h("p", { className: "rdsh-mux-note" }, t("localDisplay.terminalDark.note")),
+          h(
+            "label",
             { className: "rdsh-mux-slider" },
             h("span", null, t("localDisplay.language")),
             h(
@@ -11849,6 +12019,22 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
      make the terminal scroll: there is no scrollable node behind it.) */
   .xterm, .xterm .xterm-screen, .xterm .xterm-scrollable-element { touch-action: none; }
 
+  /* #79: a terminal-only dark surface. The first selector is the screen
+     wrapper upstream reads with getComputedStyle for xterm's default
+     background/foreground; the second paints the xterm mount itself. Neither
+     reaches the panel status/error rows, the rest of the app or the Host
+     palette. ANSI colors stay xterm's own palette, and upstream's
+     minimumContrastRatio (4.5) keeps each indexed color readable here. */
+  html[data-rdsh-terminal-dark] [data-sidebar-terminal] > div:has(> .xterm),
+  html[data-rdsh-terminal-dark] [data-sidebar-terminal] .xterm {
+    background-color: var(--dsw-static-neutral-bluish-950, #151517) !important;
+    color: var(--dsw-static-neutral-bluish-50, #f9fafb) !important;
+  }
+  html[data-rdsh-terminal-dark] [data-sidebar-terminal] .xterm .xterm-viewport,
+  html[data-rdsh-terminal-dark] [data-sidebar-terminal] .xterm .xterm-scrollable-element {
+    background-color: var(--dsw-static-neutral-bluish-950, #151517) !important;
+  }
+
   /* Edit summary: tighter rows. */
   [data-rdsh-edit-header] { height: 44px !important; min-height: 44px !important; padding: 4px 10px !important; }
   [data-rdsh-edit-row] { height: 26px !important; padding-top: 2px !important; padding-bottom: 2px !important; }
@@ -12350,6 +12536,9 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           readDeviceTheme,
           writeDeviceTheme,
           applyDeviceTheme,
+          readTerminalDark,
+          writeTerminalDark,
+          applyTerminalDark,
           build: BUILD,
           lang: currentLang(),
           autoSettings: true,
@@ -12523,6 +12712,16 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             attachLocalDisplay(scope);
           } catch (error) {
             console.error("[rdsh-mobile-ux] local display failed", error);
+          }
+        });
+        // After the display projection, so this teardown runs first on
+        // dispose and the display projection then restores the true Host
+        // snapshot (this module only put back its own projected view).
+        ctx.inject(["theme"], (scope) => {
+          try {
+            attachTerminalDark(scope);
+          } catch (error) {
+            console.error("[rdsh-mobile-ux] terminal dark failed", error);
           }
         });
         try {

@@ -571,7 +571,9 @@ function acknowledgementHarness(endpoints) {
 		on(event, handler) { listeners.set(event, handler); return () => {}; },
 		effect(fn) { return scope.effect(fn); },
 	};
-	applyNotify(ctx, { onlyMobileTurns: false });
+	// The host half already returns its seams; keep them so a test can drive one
+	// event and read its own result instead of counting pushes.
+	const api = applyNotify(ctx, { onlyMobileTurns: false });
 	const post = async (path, body) => {
 		const text = body === undefined ? "" : JSON.stringify(body);
 		const req = Readable.from(text === "" ? [] : [Buffer.from(text)]);
@@ -593,6 +595,7 @@ function acknowledgementHarness(endpoints) {
 		listeners,
 		calls,
 		post,
+		fanOut: api.fanOut,
 		turnEnded() {
 			listeners.get("session/event")(agent, { type: "turn/end", data: { reason: { kind: "completed" } } });
 		},
@@ -654,22 +657,26 @@ test("lost, mismatched, or stale acknowledgements never suppress push", async ()
 	}
 });
 
-test("a late ACK consumes the newest pending event, not an older one", async () => {
+test("a late ACK consumes the oldest unacknowledged event, not a newer one", async () => {
 	const endpoint = "https://web.push.apple.com/stacked";
 	const harness = acknowledgementHarness([endpoint]);
+	const payload = (title, body) => ({ title, body, sessionId: "s1", kind: "turn-end", url: "/?session=s1" });
 	try {
-		harness.turnEnded();
-		await new Promise((resolve) => setTimeout(resolve, 600));
-		harness.turnEnded();
-		// One ACK arrives while two events of this session are pending. It
-		// belongs to the newest one (the banner the page just rendered), so the
-		// older event's push must still leave at its own 1.5s deadline.
+		// Two events of the same session and kind are in flight. There is no
+		// event id in the payload or the status hook, so an ACK cannot name its
+		// event: the host consumes the oldest unacknowledged one and leaves the
+		// newer event its push.
+		const older = harness.fanOut(payload("Older", "first"), { origin: TEST_ORIGIN, awaitAck: true });
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		const newer = harness.fanOut(payload("Newer", "second"), { origin: TEST_ORIGIN, awaitAck: true });
+		await new Promise((resolve) => setTimeout(resolve, 50));
 		const acked = await harness.post(ACK, { endpoint, sessionId: "s1", kind: "turn-end", origin: TEST_ORIGIN });
 		assert.equal(acked.body.acknowledged, true);
-		await new Promise((resolve) => setTimeout(resolve, 1100));
-		assert.equal(harness.calls.length, 1, "a late ACK suppressed the older event instead of the newest");
-		await new Promise((resolve) => setTimeout(resolve, 900));
-		assert.equal(harness.calls.length, 1, "the acknowledged newest event pushed as well");
+		const olderResult = await older;
+		const newerResult = await newer;
+		assert.equal(olderResult.results[0]?.skipped, "acknowledged", "the delayed ACK did not consume the oldest unacknowledged event");
+		assert.equal(newerResult.results[0]?.skipped, undefined, "the newer event was suppressed by an ACK for the older one");
+		assert.equal(newerResult.results[0]?.status, 201, "the newer event never reached the push service");
 	} finally {
 		harness.restore();
 	}

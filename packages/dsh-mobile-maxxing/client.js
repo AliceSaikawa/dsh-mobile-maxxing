@@ -6734,8 +6734,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * started in a session this phone merely watches must stay silent. The
      * memory mirrors the host's own mobile-send window (10 minutes), so a
      * session reused from a desktop later is not notified either. A reload
-     * forgets it while the host still remembers: the cost is an extra in-app
-     * banner for a turn that also pushes, never a lost notice.
+     * forgets it while the host still remembers the send, so that turn falls
+     * back to the host's OS notification instead of the in-app banner: the
+     * local side can lose the banner, never the notice.
      */
     const MARKED_SEND_WINDOW_MS = 10 * 60 * 1000;
     /** A hard cap: a long-lived page cannot grow this without bound. */

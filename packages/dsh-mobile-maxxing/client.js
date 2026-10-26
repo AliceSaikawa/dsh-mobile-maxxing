@@ -4849,15 +4849,41 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     /**
-     * Tag the drawer's own header toggle for the mobile stylesheet.
+     * Locate the drawer's own header toggle for the mobile stylesheet and the
+     * drawer actions.
      *
-     * The reference styled that button through an upstream hash class. This
-     * package never names a hash: the sidebar slot bounds the search and the
-     * action label identifies the button, with the drag-header structure as
-     * the fallback for a localised label. Scoping to the sidebar keeps close,
-     * right-panel and composer buttons on their stock paint. Desktop drops
-     * the tag, so the stock control and its tooltip come back.
+     * The sidebar slot bounds every lookup: without it there is no control, so
+     * a decoration pass can never tag a same-labelled button elsewhere. Inside
+     * the slot the button is re-derived from the action label or the drag-header
+     * structure; the tag is only the last resort, for a localised label those
+     * two cannot see. Re-deriving before the tag keeps a stale tag from sticking
+     * to the wrong control. Scoping to the sidebar keeps close, right-panel and
+     * composer buttons on their stock paint.
      */
+    function sidebarToggle(collapseOnly = false) {
+      const sidebar = document.querySelector('[data-slot="sidebar"]');
+      if (sidebar === null) return null;
+      // Upstream's sidebar ships en and zh only. Both "Open" labels would open
+      // the drawer again, so closeDrawer never clicks one, however it was found.
+      // The zh label is escaped: it is a match target here, not UI copy.
+      const openLabels = ["Open sidebar", "\u6253\u5f00\u4fa7\u8fb9\u680f"];
+      const canCollapse = (button) => button !== null
+        && (!collapseOnly || !openLabels.includes(button.getAttribute("aria-label")));
+      const labelled = sidebar.querySelector(collapseOnly
+        ? 'button[aria-label="Collapse sidebar"]'
+        : 'button[aria-label="Open sidebar"], button[aria-label="Collapse sidebar"]');
+      if (canCollapse(labelled)) return labelled;
+      // Localised label: the toggle is the only labelled button with a direct
+      // SVG icon in the sidebar's drag header (the brand logo is wrapped).
+      for (const header of sidebar.querySelectorAll("[data-window-drag]")) {
+        const structural = [...header.querySelectorAll("button[aria-label]")]
+          .find((button) => canCollapse(button) && button.querySelector(":scope > svg") !== null) ?? null;
+        if (structural !== null) return structural;
+      }
+      const tagged = sidebar.querySelector("[data-rdsh-sidebar-toggle]");
+      return canCollapse(tagged) ? tagged : null;
+    }
+
     function decorateSidebarToggle() {
       if (!phone()) {
         for (const element of document.querySelectorAll("[data-rdsh-sidebar-toggle]")) {
@@ -4865,23 +4891,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         }
         return;
       }
-      const sidebar = document.querySelector('[data-slot="sidebar"]');
-      if (sidebar === null) return;
-      let toggle = sidebar.querySelector('button[aria-label="Open sidebar"], button[aria-label="Collapse sidebar"]');
-      if (toggle === null) {
-        // Localised label: the toggle is the only labelled button with a
-        // direct SVG icon in the sidebar's drag header (the brand button wraps
-        // its logo in a span).
-        for (const header of sidebar.querySelectorAll("[data-window-drag]")) {
-          toggle = [...header.querySelectorAll("button[aria-label]")]
-            .find((button) => button.querySelector(":scope > svg") !== null) ?? null;
-          if (toggle !== null) break;
-        }
-      }
-      if (toggle === null) return;
+      const toggle = sidebarToggle();
       for (const element of document.querySelectorAll("[data-rdsh-sidebar-toggle]")) {
         if (element !== toggle) element.removeAttribute("data-rdsh-sidebar-toggle");
       }
+      if (toggle === null) return;
       toggle.setAttribute("data-rdsh-sidebar-toggle", "");
     }
 
@@ -5163,7 +5177,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     let backdrop = null;
 
     function toggleDrawer() {
-      const button = document.querySelector('[aria-label="Open sidebar"], [aria-label="Collapse sidebar"]');
+      // Share the decorator's locator so a localised label still opens the
+      // drawer; the stock global label is only the fallback for a route with
+      // no sidebar slot.
+      const button = sidebarToggle()
+        ?? document.querySelector('[aria-label="Open sidebar"], [aria-label="Collapse sidebar"]');
       if (button !== null) button.click();
     }
 
@@ -5179,7 +5197,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         return;
       }
       if (!frameElement.hasAttribute("data-sidebar-collapsed")) {
-        const collapse = document.querySelector('[aria-label="Collapse sidebar"]');
+        // Collapse-only fallback for a route whose frame has no sidebar slot;
+        // the selector can never match a control that says "Open".
+        const collapse = sidebarToggle(true)
+          ?? document.querySelector('[aria-label="Collapse sidebar"]');
         if (collapse !== null) {
           collapse.click();
         } else {

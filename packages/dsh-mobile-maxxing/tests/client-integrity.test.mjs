@@ -387,8 +387,25 @@ test("dispose removes the mobile hooks, including the colour frame", () => {
 	assert.match(CLIENT, /"data-rdsh-sidebar-toggle"/, "the sidebar toggle tag is not cleaned up");
 	const toggle = functionHead("decorateSidebarToggle", 1700);
 	assert.match(toggle, /if \(!phone\(\)\)/, "the sidebar toggle is tagged on a desktop");
-	assert.match(toggle, /\[data-slot="sidebar"\]/, "the sidebar toggle search is not bounded by its slot");
-	assert.match(toggle, /button\[aria-label="Open sidebar"\], button\[aria-label="Collapse sidebar"\]/, "the toggle action label is not used");
+	assert.match(toggle, /sidebarToggle\(\)/, "the decorator does not share the action locator");
+	const toggleAt = CLIENT.indexOf("function decorateSidebarToggle(");
+	const toggleBody = CLIENT.slice(toggleAt, CLIENT.indexOf("\n    }\n", toggleAt));
+	assert.doesNotMatch(toggleBody, /document\.querySelector\(/, "the decorator bypasses the bounded locator");
+	assert.match(toggleBody, /if \(toggle === null\) return;/, "the decorator leaves a stale tag when the toggle is missing");
+	const locator = functionHead("sidebarToggle", 1700);
+	assert.match(locator, /\[data-slot="sidebar"\]/, "the sidebar toggle search is not bounded by its slot");
+	assert.match(locator, /if \(sidebar === null\) return null;/, "a missing sidebar falls back to a global control");
+	assert.match(locator, /button\[aria-label="Open sidebar"\], button\[aria-label="Collapse sidebar"\]/, "the toggle action label is not used");
+	assert.match(locator, /\[data-window-drag\]/, "the localized structural fallback is missing");
+	assert.match(locator, /const openLabels = \["Open sidebar", /, "closing does not check the known open labels");
+	assert.match(locator, /!openLabels\.includes\(button\.getAttribute\("aria-label"\)\)/, "closing can click a control known to open the sidebar");
+	const action = functionHead("toggleDrawer", 500);
+	assert.match(action, /sidebarToggle\(\)/, "the drawer action bypasses the decorator locator");
+	assert.match(action, /document\.querySelector\('\[aria-label="Open sidebar"\], \[aria-label="Collapse sidebar"\]'\)/, "the stock action fallback is gone");
+	const close = functionHead("closeDrawer", 1400);
+	assert.match(close, /const collapse = sidebarToggle\(true\)/, "the close path does not use the collapse-only locator");
+	assert.match(close, /document\.querySelector\('\[aria-label="Collapse sidebar"\]'\)/, "the close path lost its collapse-only stock fallback");
+	assert.doesNotMatch(close, /Open sidebar/, "the close path can click a control known to open the sidebar");
 	// Session rows are still visited on every pass, but the function only
 	// writes the mobile hooks (frame included) in mobile mode.
 	assert.match(CLIENT, /^\s+decorateSessionRows\(\);\s*$/m, "session rows are no longer visited on desktop");

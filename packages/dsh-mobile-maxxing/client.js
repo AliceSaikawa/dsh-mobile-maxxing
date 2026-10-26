@@ -2882,6 +2882,66 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       }
     }
 
+    /**
+     * Labels the Trajectory Conversation view prints in the tab strip (#75).
+     *
+     * The strip is structurally stable (`[data-conversation-tabs]` with
+     * `<button role="tab">` children), but upstream projects neither the view
+     * id nor a per-view attribute onto the buttons: only the localized label
+     * is available. The slot id `trajectory` is the stable identifier, so
+     * `readTrajectoryLabel` supplies the active locale from its registration;
+     * the injected probe vocabulary covers en/ja/zh when that table is absent.
+     */
+    const TRAJECTORY_TAB_LABELS = probeValues("trajectoryTab", ["Trajectory"]);
+    let readTrajectoryLabel = () => null;
+
+    function sameTabLabel(left, right) {
+      const normalize = (value) => String(value ?? "").trim().replace(/\s+/g, " ");
+      const target = normalize(right);
+      return target !== "" && normalize(left).toLowerCase() === target.toLowerCase();
+    }
+
+    function isTrajectoryTab(tab, localized = readTrajectoryLabel()) {
+      const label = labelOf(tab);
+      if (label === "") return false;
+      if (sameTabLabel(label, localized)) return true;
+      return TRAJECTORY_TAB_LABELS.some((candidate) => sameTabLabel(label, candidate));
+    }
+
+    /**
+     * Hide the Trajectory view tab on a phone (#75).
+     *
+     * Chat is the primary view and stays visible; every other view tab keeps
+     * its own selection. A selected Trajectory tab would be a dead end once
+     * hidden, so another tab is selected first. If there is no other tab, the
+     * tab is left visible rather than hiding the only reachable view.
+     */
+    function decorateConversationTabs(disabled) {
+      const hideOnThisDevice = !disabled && phone();
+      const localized = readTrajectoryLabel();
+      for (const strip of document.querySelectorAll("[data-conversation-tabs]")) {
+        const tabs = [...strip.querySelectorAll('[role="tab"]')];
+        const trajectory = tabs.find((tab) => isTrajectoryTab(tab, localized)) ?? null;
+        for (const tab of tabs) {
+          if (tab !== trajectory) tab.removeAttribute("data-rdsh-trajectory-tab-hidden");
+        }
+        if (!hideOnThisDevice || trajectory === null) {
+          trajectory?.removeAttribute("data-rdsh-trajectory-tab-hidden");
+          continue;
+        }
+        if (trajectory.getAttribute("aria-selected") === "true") {
+          const chat = tabs.find((tab) => tab !== trajectory) ?? null;
+          if (chat === null) {
+            trajectory.removeAttribute("data-rdsh-trajectory-tab-hidden");
+            continue;
+          }
+          chat.click();
+          if (typeof chat.focus === "function") chat.focus();
+        }
+        trajectory.setAttribute("data-rdsh-trajectory-tab-hidden", "");
+      }
+    }
+
     function unringSessionTitle(title) {
       // The animated ring used to wrap the label in its own element; it no
       // longer does, so only the attribute it added is left to clear.
@@ -3051,6 +3111,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       "data-rdsh-header",
       "data-rdsh-crumbs",
       "data-rdsh-conversation",
+      "data-rdsh-trajectory-tab-hidden",
       "data-rdsh-rightpanel",
       "data-rdsh-rightpanel-open",
       "data-rdsh-rtab",
@@ -5885,6 +5946,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (onPhone !== state.phone) emit({ phone: onPhone });
       document.documentElement.toggleAttribute("data-rdsh-hide-settings", onPhone && !hideListDisabled);
       applyHideList(hideListDisabled);
+      decorateConversationTabs(hideListDisabled);
       maybeOpenSettings();
     }
 
@@ -10591,6 +10653,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
    the mobile sheet as well: a desktop keeps every control. */
 html[data-rdsh-hide-settings] [data-rdsh-hidden],
 html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !important; }
+/* #75: the Trajectory Conversation view tab is secondary on a phone. Its
+   attribute is written only while hiding is active on a phone, and the rule
+   lives in the mobile sheet, so a desktop never sees it. */
+html[data-rdsh-hide-settings] [data-conversation-tabs] [data-rdsh-trajectory-tab-hidden] { display: none !important; }
 
 /* Session colour frames and their menu/palette. The frame is a phone
    affordance in the #44 contract: a desktop sidebar is upstream's, unchanged. */
@@ -12418,6 +12484,19 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         readGeneralSettingsLabel = () => {
           const label = ctx.slots.entries?.("settings.section")?.find((entry) => entry.options.id === "general")?.options.label;
           return (typeof label === "function" ? label() : label) ?? "General";
+        };
+        // #75: the slot id is stable; its label is the only key the rendered
+        // tab exposes in every locale. A missing slot table leaves the
+        // injected probe vocabulary (en/ja/zh) in charge.
+        readTrajectoryLabel = () => {
+          try {
+            const entries = ctx.slots.entries?.("conversation.view");
+            if (!Array.isArray(entries)) return null;
+            const label = entries.find((entry) => entry.options?.id === "trajectory")?.options?.label;
+            return (typeof label === "function" ? label() : label) ?? null;
+          } catch {
+            return null;
+          }
         };
         // Session selection needs the workspace service, which arrives on its
         // own schedule; without it a notification tap can only raise a banner.

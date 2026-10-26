@@ -576,6 +576,8 @@ export const PROBES = {
 	untitled: ["new session", "new chat", "untitled", "新しいセッション", "新しいチャット", "無題", "未命名", "新会话"],
 	/** The right panel's "make this pane fullscreen" control. */
 	fullscreen: ["Enter fullscreen", "Fullscreen", "全屏"],
+	/** The Conversation view tab that opens the Trajectory view (#75). */
+	trajectoryTab: ["Trajectory", "軌跡", "轨迹", "トラジェクトリ"],
 };
 
 /** Keys the service worker needs, picked out of {@link COPY}. */

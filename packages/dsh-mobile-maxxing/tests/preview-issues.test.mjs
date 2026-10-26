@@ -1378,6 +1378,22 @@ test("#82 a desktop never gets the heading", () => {
 	desktop.dispose();
 });
 
+test("#82 a localised collapse control still tags the panel and names its kind", () => {
+	const env = boot();
+	const fixture = makeSidebarPanel(env);
+	// Upstream localises the aria-label and marks the toggle structurally; the
+	// English string lookup alone dropped every right-panel hook here.
+	fixture.collapse.setAttribute("aria-label", "右サイドバーを折りたたむ");
+	fixture.collapse.setAttribute("data-sidebar-right-toggle", "true");
+	env.api.decorateNow();
+	assert.equal(fixture.pane.hasAttribute("data-rdsh-rightpanel"), true, "the localised panel went untagged");
+	const heading = panelHeading(env);
+	assert.notEqual(heading, null, "the localised panel got no heading");
+	assert.equal(heading.textContent, "Terminal");
+	assert.equal(heading.parentElement, fixture.pane);
+	env.dispose();
+});
+
 test("#82 the heading rule stays in the safe-area-padded panel and cannot take gestures", () => {
 	const start = CLIENT.indexOf("[data-rdsh-rightpanel] [data-rdsh-panel-heading]");
 	assert.notEqual(start, -1, "the mobile heading rule is missing");

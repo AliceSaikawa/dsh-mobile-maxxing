@@ -3661,9 +3661,21 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       "data-sidebar-chat": "localDisplay.subagent",
     };
 
-    /** The collapse button of a panel that is actually laid out. */
+    /**
+     * The collapse button of a panel that is actually laid out.
+     *
+     * The aria-label is localised (ja: 右サイドバーを折りたたむ), so the phone
+     * lookup cannot key off the English string alone: without a match every
+     * downstream hook is dropped, and the panel lost its heading, its open
+     * marker and the hidden split/exit controls. Prefer upstream's stable
+     * toggle attribute and keep the English label for builds without it.
+     */
     function visibleCollapseButton() {
-      for (const button of document.querySelectorAll('[aria-label="Collapse right sidebar"]')) {
+      // Two lookups, not one comma selector: the exact English label stays
+      // the first path for builds that expose only that string.
+      const english = document.querySelectorAll('[aria-label="Collapse right sidebar"]');
+      const structural = document.querySelectorAll("button[data-sidebar-right-toggle]");
+      for (const button of [...english, ...structural]) {
         // Visibility is deliberately not part of this: the real panel keeps
         // its chrome mounted while closed (clipped to a zero-width column and
         // parked off-screen), and its rect stays non-zero. Only a panel that

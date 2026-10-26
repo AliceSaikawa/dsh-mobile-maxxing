@@ -33,7 +33,7 @@ import { createHash } from "node:crypto";
 import { applyNotify, normalizeNotifyConfig } from "./notify/host.js";
 import { apply as applyMobileUx } from "./lib/mobile-ux.js";
 import { apply as applySessionIdCopy } from "./lib/session-id-copy.js";
-import { COPY, LOCALE_PACKS, PROBES, copyFor, serviceWorkerCopy } from "./lib/copy.js";
+import { COPY, PROBES, copyFor, serviceWorkerCopy } from "./lib/copy.js";
 import { copyTable } from "./lib/copy-source.js";
 import { MANIFEST_FILE, MODE_GLOBAL, earlyModeScript } from "./lib/device-mode.js";
 import { readFile } from "node:fs/promises";
@@ -57,7 +57,6 @@ const INDEX_MARKER = "<!--dsh-mobile-maxxing-->";
 const COPY_ASSIGNMENT = /(?:globalThis|self|window)\.__RDSH_PWA_COPY__\s*=/;
 const PROBES_ASSIGNMENT = /(?:globalThis|self|window)\.__RDSH_PWA_PROBES__\s*=/;
 const LANG_ASSIGNMENT = /(?:globalThis|self|window)\.__RDSH_PWA_LANG__\s*=/;
-const LOCALES_ASSIGNMENT = /(?:globalThis|self|window)\.__RDSH_PWA_LOCALES__\s*=/;
 /**
  * The early device-mode script, recognised so a re-tap never adds a second one.
  *
@@ -219,16 +218,14 @@ function scriptJson(value) {
  * @param {object} parts - which globals are missing.
  * @param {boolean} parts.copy - include `__RDSH_PWA_COPY__`.
  * @param {boolean} parts.probes - include `__RDSH_PWA_PROBES__`.
- * @param {boolean} parts.locales - include `__RDSH_PWA_LOCALES__`.
  * @param {string} [parts.lang] - include `__RDSH_PWA_LANG__` with this value.
  * @param {object} table - the dictionary snapshot for this document.
  * @returns {string} a script tag, or "" when nothing is missing.
  */
-function payloadScript({ copy, probes, locales, lang }, table) {
+function payloadScript({ copy, probes, lang }, table) {
 	const assignments = [];
 	if (copy) assignments.push(`globalThis.__RDSH_PWA_COPY__=${scriptJson(table.COPY)}`);
 	if (probes) assignments.push(`globalThis.__RDSH_PWA_PROBES__=${scriptJson(table.PROBES)}`);
-	if (locales) assignments.push(`globalThis.__RDSH_PWA_LOCALES__=${scriptJson(LOCALE_PACKS)}`);
 	if (typeof lang === "string" && lang !== "") assignments.push(`globalThis.__RDSH_PWA_LANG__=${scriptJson(lang)}`);
 	return assignments.length === 0 ? "" : `<script>${assignments.join(";")}<\/script>`;
 }
@@ -278,7 +275,6 @@ export function decorateIndex(html, config) {
 	const payload = payloadScript({
 		copy: !COPY_ASSIGNMENT.test(html),
 		probes: !PROBES_ASSIGNMENT.test(html),
-		locales: !LOCALES_ASSIGNMENT.test(html),
 		lang: LANG_ASSIGNMENT.test(html) ? undefined : cfg.lang,
 	}, strings);
 	const mode = MODE_ASSIGNMENT.test(html) ? "" : earlyModeScript(cfg.appleStatusBarStyle);

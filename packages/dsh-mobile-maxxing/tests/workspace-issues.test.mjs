@@ -20,7 +20,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import vm from "node:vm";
-import { COPY, LOCALE_PACKS, copyFor } from "../lib/copy.js";
+import { COPY, copyFor } from "../lib/copy.js";
 
 const CLIENT = readFileSync(new URL("../client.js", import.meta.url), "utf8");
 const NARROW = "(max-width: 767px)";
@@ -435,7 +435,6 @@ function boot({ mode = "mobile", width = 390 } = {}) {
 		performance: { now: () => 0 },
 		__RDSH_DEVICE_MODE__: mode,
 		__RDSH_PWA_COPY__: COPY,
-		__RDSH_PWA_LOCALES__: LOCALE_PACKS,
 		__RDSH_PWA_LANG__: "en",
 		__RDSH_WORKSPACE_TEST__: {},
 	};

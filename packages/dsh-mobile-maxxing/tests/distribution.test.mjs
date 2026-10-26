@@ -8,6 +8,7 @@
  */
 
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { readFile, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -48,6 +49,16 @@ test("the inventory can read a title, a description and an icon", async () => {
 	assert.ok(file.isFile(), "the exported icon has to exist");
 	assert.ok(file.size <= 256 * 1024, "DSH refuses an icon above 256 KiB");
 	assert.ok(manifest.files.some((entry) => entry.endsWith("assets/*.png")), "the icon has to ship");
+});
+
+test("the root tarball stays free of the optional locale whole-pack", async () => {
+	const output = execFileSync("npm", ["pack", "--dry-run", "--json"], { cwd: repo, encoding: "utf8" });
+	const entries = JSON.parse(output)[0].files.map((entry) => entry.path);
+	assert.equal(entries.some((entry) => entry.includes("rdsh-locale-ja")), false,
+		"the mobile tarball contains the separate locale package");
+	assert.equal(entries.some((entry) => entry === "packages/rdsh-locale-ja/client.js"), false);
+	assert.ok(entries.includes("packages/dsh-mobile-maxxing/locale/ja.json"),
+		"the mobile package keeps its own UI locale metadata");
 });
 
 test("the docs use the plugin command DSH takes", async () => {

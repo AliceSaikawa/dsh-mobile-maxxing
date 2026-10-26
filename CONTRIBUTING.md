@@ -61,6 +61,9 @@ gh release create vX.Y.Z dist/*.tgz
 ```
 
 ファイル名は `<name>-<version>.tgz` で固定です（README のインストール手順がこの名前を指しています）。
+任意の `rdsh-locale-ja` は `translation-status.json` が 64/2906・翻訳 2906・fallback 0 のときだけ
+別 tarball として `dist/` に出ます。不完全な間は `REFUSED` と表示して作らないので、英語
+フォールバックの pack を配布しないでください。
 
 ## 元になったリポジトリ
 

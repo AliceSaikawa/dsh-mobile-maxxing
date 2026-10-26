@@ -2426,60 +2426,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     // ---------------------------------------------------------------------
     let localDisplayRuntime = null;
 
-    /**
-     * Japanese language pack for the shared locale service (#64).
-     *
-     * Upstream ships zh and en only, so the display-language picker cannot
-     * offer Japanese by itself. The dictionaries live in lib/copy.js (the one
-     * module allowed to carry UI copy) and the host injects them as
-     * `__RDSH_PWA_LOCALES__`; this page adds the language through the public
-     * `addLanguage`/`register` API. A namespace without a ja dictionary falls
-     * through the declared ja -> en chain to its English copy, which is the
-     * locale service's documented behaviour. The pack is installed only on a
-     * phone, so a desktop catalog stays exactly upstream's (#44).
-     */
-    const JA_LOCALE_PACK = globalThis.__RDSH_PWA_LOCALES__?.ja ?? null;
-
-    /**
-     * Register the Japanese pack when the public locale API is present.
-     *
-     * Returns a disposer that removes the definition and every dictionary. A
-     * missing `addLanguage`/`register` (an older shell, the unit-test stub) or a
-     * catalog where another pack already owns ja leaves the picker untouched.
-     */
-    function installJapaneseLocale(localeService) {
-      if (!phone() || localeService === null || localeService === undefined) return null;
-      if (typeof localeService.addLanguage !== "function" || typeof localeService.register !== "function") return null;
-      const pack = JA_LOCALE_PACK;
-      if (pack === null || typeof pack !== "object" || pack.language === null || typeof pack.language !== "object"
-        || pack.dictionaries === null || typeof pack.dictionaries !== "object") return null;
-      let removeLanguage;
-      try {
-        removeLanguage = localeService.addLanguage(pack.language);
-      } catch (error) {
-        // Another pack already defines ja: its catalog and dictionaries stand.
-        return null;
-      }
-      const disposers = typeof removeLanguage === "function" ? [removeLanguage] : [];
-      for (const [namespace, dictionary] of Object.entries(pack.dictionaries)) {
-        try {
-          const removeDictionary = localeService.register(namespace, "ja", dictionary);
-          if (typeof removeDictionary === "function") disposers.push(removeDictionary);
-        } catch (error) {
-          console.warn("[rdsh-mobile-ux] ja dictionary failed", namespace, error);
-        }
-      }
-      return () => {
-        for (const dispose of disposers.reverse()) {
-          try {
-            dispose();
-          } catch (error) {
-            /* the locale fiber may already be gone */
-          }
-        }
-      };
-    }
-
     /** Read only this browser's display choices; malformed data means "follow Host". */
     function readLocalDisplaySettings() {
       const empty = {
@@ -2600,9 +2546,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       }
       const themeService = theme !== null && theme !== undefined && typeof theme.getTheme === "function" ? theme : null;
       const localeService = locale !== null && locale !== undefined && typeof locale.getSnapshot === "function" ? locale : null;
-      // Register before the first snapshot read so a stored "ja" is a valid
-      // choice on this page load, and before the picker copies the catalog.
-      let jaLocaleDispose = installJapaneseLocale(localeService);
       let hostTheme = null;
       let hostLocale = null;
       try {
@@ -2792,10 +2735,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
             if (document.documentElement.lang !== baseDocumentLang) document.documentElement.lang = baseDocumentLang;
           } catch (error) {
             /* the locale fiber may already be gone */
-          }
-          if (typeof jaLocaleDispose === "function") {
-            jaLocaleDispose();
-            jaLocaleDispose = null;
           }
           localDisplayLanguage = "";
           localDisplayHostLanguage = "";

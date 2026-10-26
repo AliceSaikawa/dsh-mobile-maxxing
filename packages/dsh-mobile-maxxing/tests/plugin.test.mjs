@@ -11,7 +11,7 @@ import { test } from "node:test";
 import { runInNewContext } from "node:vm";
 import { apply, buildManifest, decorateIndex, normalizeConfig } from "../index.js";
 import { buildTurnEndPayload } from "../notify/host.js";
-import { COPY, LOCALE_PACKS, PROBES, copyFor } from "../lib/copy.js";
+import { COPY, PROBES, copyFor } from "../lib/copy.js";
 import { MANIFEST_FILE, MODE_ATTRIBUTE, MODE_GLOBAL, earlyModeScript } from "../lib/device-mode.js";
 
 /**
@@ -257,14 +257,14 @@ test("index decoration injects the dictionary, the probes and the normalized lan
 	const html = decorateIndex(INDEX, {});
 	assert.ok(html.includes("__RDSH_PWA_COPY__="), "the browser half needs the copy table");
 	assert.ok(html.includes("__RDSH_PWA_PROBES__="), "label matching needs every known locale");
-	assert.ok(html.includes("__RDSH_PWA_LOCALES__="), "the mobile display-language picker needs the ja pack");
+	assert.ok(!html.includes("__RDSH_PWA_LOCALES__"), "the mobile half no longer injects a ja pack (#80)");
 	assert.equal((html.match(/globalThis\.__RDSH_PWA_LANG__\s*=/g) ?? []).length, 1,
 		"the host language is exposed once");
 	const payload = injectedPayload(html);
 	assert.equal(payload.__RDSH_PWA_COPY__.en["tab.mobile"], "Mobile");
 	assert.deepEqual(payload.__RDSH_PWA_COPY__.ja, COPY.ja, "the ja pack travels even while it is being filled");
 	assert.deepEqual(payload.__RDSH_PWA_PROBES__, PROBES, "the full probe dictionary travels");
-	assert.deepEqual(payload.__RDSH_PWA_LOCALES__, LOCALE_PACKS, "the ja pack travels to the browser half");
+	assert.equal(payload.__RDSH_PWA_LOCALES__, undefined, "a ja pack still travels to the browser half");
 	assert.ok(payload.__RDSH_PWA_PROBES__.actions.includes("操作"), "probes stay bilingual");
 	assert.equal(payload.__RDSH_PWA_LANG__, "ja", "the default host language reaches the browser half");
 	const payloadScript = /<script>(globalThis\.__RDSH_PWA_COPY__[\s\S]*?)<\/script>/.exec(html);

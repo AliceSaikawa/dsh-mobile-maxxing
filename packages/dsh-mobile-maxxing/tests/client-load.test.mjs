@@ -18,7 +18,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import vm from "node:vm";
-import { COPY, LOCALE_PACKS, PROBES } from "../lib/copy.js";
+import { COPY, PROBES } from "../lib/copy.js";
 
 const CLIENT = readFileSync(new URL("../client.js", import.meta.url), "utf8");
 
@@ -159,7 +159,6 @@ function bootClient({
 	services = {},
 	slotsEntries = null,
 	log = console,
-	localePacks = LOCALE_PACKS,
 } = {}) {
 	let definition;
 	const disposers = [];
@@ -267,7 +266,6 @@ function bootClient({
 	sandbox.window.innerHeight = 844;
 	if (lang !== undefined) sandbox.__RDSH_PWA_LANG__ = lang;
 	if (copy !== null) sandbox.__RDSH_PWA_COPY__ = copy;
-	if (localePacks !== null) sandbox.__RDSH_PWA_LOCALES__ = localePacks;
 	// The canonical host bootstrap value. Null means "let the harness derive
 	// the legacy default"; contract tests pass it explicitly. `injectMode:
 	// false` models an old/absent bootstrap and must fail closed to desktop.
@@ -2387,17 +2385,16 @@ test("a saved terminal-dark choice never wakes the desktop half (#79)", () => {
 		"the desktop rewrote the saved choice");
 });
 
-/** A locale service with the public language-pack API, recording registrations. */
-function japaneseLocale() {
+/** A locale service with the public language-pack API and a recording catalog. */
+function localeService({ locales = [
+	{ id: "zh", label: "中文", fallback: "en" },
+	{ id: "en", label: "English" },
+], active = "zh" } = {}) {
 	const registered = [];
 	const removed = [];
 	const listeners = new Set();
 	const service = {
-		snapshot: {
-			active: "zh",
-			revision: 2,
-			locales: [{ id: "zh", label: "中文", fallback: "en" }, { id: "en", label: "English" }],
-		},
+		snapshot: { active, revision: 2, locales },
 		listeners,
 		getSnapshot() { return this.snapshot; },
 		addLanguage(input) {
@@ -2418,39 +2415,64 @@ function japaneseLocale() {
 	return { service, registered, removed };
 }
 
-test("a phone gains ja in the display-language picker from the injected pack (#64)", () => {
-	const { service, registered, removed } = japaneseLocale();
-	const booted = bootClient({ mode: "mobile", narrow: true, locale: service });
+test("a phone lists only the shared catalog and never adds ja itself (#64/#80)", () => {
+	const { service, registered, removed } = localeService();
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		locale: service,
+		storage: { "rdsh-mobile-ux:local-display": JSON.stringify({ language: "ja" }) },
+	});
 	const state = booted.sandbox.__RDSH_MOBILE_UX__.state;
 	assert.equal(state.localDisplay.available.language, true);
-	assert.deepEqual(state.localDisplay.languages.map((entry) => entry.id), ["zh", "en", "ja"],
-		"ja did not join the registered catalog");
-	const language = registered.find((entry) => entry.kind === "language");
-	assert.ok(language, "addLanguage was not called");
-	assert.deepEqual(language.input, { id: "ja", label: "日本語", fallback: "en" });
-	assert.deepEqual(
-		registered.filter((entry) => entry.kind === "dictionary").map((entry) => entry.namespace),
-		["common", "settings", "settings.locale"],
-		"the pack translated the wrong namespaces",
-	);
-	assert.ok(registered.find((entry) => entry.namespace === "common").keys >= 40, "common is incomplete");
+	assert.deepEqual(state.localDisplay.languages.map((entry) => entry.id), ["zh", "en"],
+		"the picker invented a language the catalog does not have");
+	assert.equal(state.localDisplay.language, "", "a stored ja was accepted without an owner");
+	assert.deepEqual(registered, [], "the mobile package registered a locale definition");
 	booted.disposeAll();
-	assert.ok(removed.includes("language"), "the language definition was not released");
-	assert.ok(removed.includes("common:ja"), "a dictionary was not released");
+	assert.deepEqual(removed, [], "the mobile package removed a locale definition it never owned");
+	assert.deepEqual(service.snapshot.locales.map((entry) => entry.id), ["zh", "en"]);
 });
 
-test("a desktop never registers the ja pack (#44)", () => {
-	const { service, registered } = japaneseLocale();
-	bootClient({ mode: "desktop", locale: service });
+test("a separately installed ja owner appears in the picker and survives mobile dispose (#80)", () => {
+	const ja = { id: "ja", label: "日本語", fallback: "en" };
+	const { service, registered, removed } = localeService({
+		locales: [
+			{ id: "zh", label: "中文", fallback: "en" },
+			{ id: "en", label: "English" },
+			ja,
+		],
+	});
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		locale: service,
+		storage: { "rdsh-mobile-ux:local-display": JSON.stringify({ language: "ja" }) },
+	});
+	const state = booted.sandbox.__RDSH_MOBILE_UX__.state;
+	assert.deepEqual(state.localDisplay.languages.map((entry) => entry.id), ["zh", "en", "ja"],
+		"an owner-registered ja is missing from the picker");
+	assert.equal(state.localDisplay.language, "ja", "the stored choice was not accepted from the catalog");
+	assert.deepEqual(registered, [], "mobile must not duplicate the separate owner's registration");
+	assert.equal(service.snapshot.active, "ja", "the device-local projection was not applied");
+	const hostLocales = service.snapshot.locales;
+	booted.disposeAll();
+	assert.equal(service.snapshot.active, "zh", "dispose did not restore the Host language");
+	assert.deepEqual(service.snapshot.locales, hostLocales, "mobile dispose removed the separate owner's ja");
+	assert.deepEqual(removed, [], "mobile disposed a definition owned by the separate package");
+});
+
+test("a desktop never touches the locale catalog (#44/#80)", () => {
+	const { service, registered, removed } = localeService();
+	const booted = bootClient({ mode: "desktop", locale: service });
+	assert.equal(booted.sandbox.__RDSH_MOBILE_UX__, undefined, "the desktop built the mobile half");
 	assert.deepEqual(registered, [], "a desktop changed its locale catalog");
+	booted.disposeAll();
+	assert.deepEqual(removed, []);
+	assert.deepEqual(service.snapshot.locales.map((entry) => entry.id), ["zh", "en"]);
 });
 
-test("a shell without the injected pack or addLanguage offers no ja (#64)", () => {
-	const missingPack = japaneseLocale();
-	const withoutPack = bootClient({ mode: "mobile", narrow: true, locale: missingPack.service, localePacks: null });
-	assert.deepEqual(withoutPack.sandbox.__RDSH_MOBILE_UX__.state.localDisplay.languages.map((entry) => entry.id), ["zh", "en"]);
-	assert.deepEqual(missingPack.registered, [], "registrations ran without a pack");
-
+test("without a language-pack API the picker reads the catalog without inventing ja (#80)", () => {
 	const listeners = new Set();
 	const noApi = {
 		snapshot: {
@@ -2461,8 +2483,9 @@ test("a shell without the injected pack or addLanguage offers no ja (#64)", () =
 		listeners,
 		getSnapshot() { return this.snapshot; },
 	};
-	const withoutApi = bootClient({ mode: "mobile", narrow: true, locale: noApi });
-	assert.deepEqual(withoutApi.sandbox.__RDSH_MOBILE_UX__.state.localDisplay.languages.map((entry) => entry.id), ["en", "zh"]);
+	const booted = bootClient({ mode: "mobile", narrow: true, locale: noApi });
+	assert.deepEqual(booted.sandbox.__RDSH_MOBILE_UX__.state.localDisplay.languages.map((entry) => entry.id), ["en", "zh"]);
+	booted.disposeAll();
 });
 
 test("font and language availability are independent and fail soft", () => {

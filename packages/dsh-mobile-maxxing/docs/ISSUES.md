@@ -22,9 +22,11 @@
 - [WebKit 192564](https://bugs.webkit.org/show_bug.cgi?id=192564) と [WebKit 254861](https://bugs.webkit.org/show_bug.cgi?id=254861) は症状が似た参考資料であり、この端末の同一原因を証明するものではない。iOS 26 の下端のラバーバンド（[WebKit 301994](https://bugs.webkit.org/show_bug.cgi?id=301994)）も同様に参考情報で、原因の同一性は未確認である。
 - モバイル用の DOM フックは DSH `0.2.1-rc.2` で検証している。上流が変わるとフックが付かず、該当する機能が効かなくなる可能性がある（影響は機能ごとに異なる）。
 
-## #80 翻訳パイプラインは未完成
+## #80 翻訳パイプライン（所有権の移行は完了、翻訳は継続中）
 
 - 2026-10-26
-- `rdsh-locale-ja` の stage 2 は 64 namespaces / 2906 keys のうち 83 keys（`common` 41、`settings` 41、`settings.locale` 1）だけを翻訳し、残り 2823 keys は英語をそのまま返す開発用フォールバックである。`ja` を選んでもこの3名前空間以外は英語のままである。
-- 翻訳バッチ（97 バッチ）のレビューとマージは今後の作業である。
-- モバイルパッケージの #64 日本語パックから `rdsh-locale-ja` への移行は未実施である。両方を同時に有効にすると `addLanguage({ id: "ja" })` が二重登録になり2つ目が例外になるため、併用できない。
+- モバイルパッケージは `ja` の `addLanguage` / `register` と `__RDSH_PWA_LOCALES__` の注入を持たない。`COPY.ja` はこのパッケージ自身の UI 文言（manifest・SW・通知など）専用で、共有ロケールの辞書ではない。端末の「表示言語」は共有ロケールサービスに登録済みの言語だけを出し、PC は何も変えない。
+- `rdsh-locale-ja` が `ja` の言語・名前空間の唯一の所有者である。モバイルの tarball には含まれず、依存にも bundle にも入らず、自動で有効化されない。別途ローカルの tarball から入れた場合だけ `ja` が増える。両方を入れても二重登録は起きない。共有の表示言語は書き換えず、この端末だけの投影に留める。
+- 現在の翻訳は 64 namespaces / 2906 keys のうち 83 keys（`common` 41、`settings` 41、`settings.locale` 1）で、残りは開発用の英語フォールバックである。`ja` を選んでもこの3名前空間以外は英語のままである。数値の正は `packages/rdsh-locale-ja/locale/translation-status.json` で、この文面はその状態を条件付きで説明する。
+- `scripts/pack-all.mjs` は `translation-status.json` が 64/2906・翻訳 2906・fallback 0・`complete` のときだけ別の locale tarball を作る。不完全な間は `REFUSED` を表示して tarball を作らず、英語フォールバックの pack を黙って配布しない。`--require-locale` を付けたときだけその拒否を失敗にする。
+- 翻訳バッチ（97 バッチ）のレビューとマージは今後の作業である。実機・ブラウザ・プロファイルへのインストール成功はまだ確認していない（このリポジトリのテストと生成だけを根拠にする）。

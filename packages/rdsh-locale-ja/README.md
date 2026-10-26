@@ -1,20 +1,31 @@
 # rdsh-locale-ja
 
-Separate Japanese locale package for DSH, implementing stage 2 of
+Separate, optional Japanese locale package for DSH. It implements the final
+ownership and packaging migration of
 [#80](https://github.com/kuraneko1/dsh-mobile-maxxing/issues/80).
 
-**Stage 2 is not a complete translation.** It ships a safe package skeleton,
-the 83 existing Japanese values, and development-only English fallbacks for
-every other key. Selecting `ja` currently shows Japanese only in `common`,
-`settings` and `settings.locale`; the rest of the UI stays English.
+**This package is the only owner of `ja`.** The mobile package no longer
+registers a language or injects a locale pack; its `COPY.ja` is only its own
+UI copy. This package is not installed or enabled by the mobile tarball, is
+not added to a profile automatically, and never writes the shared display
+language: the phone picker only projects the catalog for this device.
 
-## What stage 2 contains
+**It is not a complete translation yet.** The `ja` catalog currently has
+**83 reviewed values** and development-only English fallbacks for the other
+2823 keys; selecting `ja` shows Japanese only in `common`, `settings` and
+`settings.locale`. A release tarball is produced only when the generated
+`locale/translation-status.json` reports **64 namespaces / 2906 keys, all
+translated, zero English fallback** (see [Install](#install-optional-local-tarball)).
+The package stays `private` until that actual release.
+
+## What the package contains
 
 - the stage-1 English snapshot: **64 namespaces / 2906 keys** from DSH
   `0.2.1-rc.2`, unchanged;
-- **83 Japanese values** moved byte-for-byte from
-  `packages/dsh-mobile-maxxing/lib/copy.js` (`LOCALE_PACKS.ja.dictionaries`):
-  `common` 41, `settings` 41, `settings.locale` 1;
+- **83 Japanese values** migrated byte-for-byte from the removed mobile pack
+  (`common` 41, `settings` 41, `settings.locale` 1). They are pinned by
+  `test/fixtures/seed-ja-83.json` and its SHA-256, so a later edit cannot
+  silently change a migrated value;
 - **2823 development-only English fallbacks** for the remaining keys. They
   repeat the English snapshot verbatim so every namespace can register a
   complete `ja` dictionary; they are not translations and are marked in
@@ -24,10 +35,43 @@ every other key. Selecting `ja` currently shows Japanese only in `common`,
   namespaces and final remainders may be shorter);
 - `tools/build-client.mjs` and `tools/merge-batches.mjs`.
 
-The mobile package still owns its #64 Japanese pack. Stage 2 does not change
-mobile code, and the two packs must not be enabled at the same time: both call
-`addLanguage({ id: "ja" })` and the second registration throws. Removing the
-mobile pack is a later stage.
+## Migration from the mobile pack (#80)
+
+Before this migration, `dsh-mobile-maxxing` registered three `ja`
+namespaces itself and injected them as `__RDSH_PWA_LOCALES__`. That code is
+gone: there is no `addLanguage`, no `register(..., "ja", ...)`, no
+`LOCALE_PACKS` and no injected locale payload in the mobile package.
+Consequences:
+
+- a phone without this package offers only the host's registered locales
+  (`en`/`zh`); a stored `ja` choice is ignored instead of being guessed;
+- installing this package is the only way to add `ja`. It registers the
+  language and all 64 namespaces through the public locale API, and disposable
+  effects restore the catalog on unload;
+- having both packages installed is safe now: the mobile half never calls
+  `addLanguage`, so there is no second registration, and it does not own or
+  dispose this package's dictionaries;
+- the desktop stays a hard no-op: neither package sets the shared language or
+  changes a desktop catalog.
+
+## Install (optional, local tarball)
+
+This package is not part of the mobile tarball and is not published yet. Install
+it separately, only from a tarball produced by a complete translation:
+
+```sh
+node scripts/pack-all.mjs            # dist/rdsh-locale-ja-<version>.tgz only when complete
+dsh plugin --profile web add ./dist/rdsh-locale-ja-0.1.0.tgz
+# restart DSH to load the client half
+```
+
+`scripts/pack-all.mjs` refuses to create the locale tarball while
+`locale/translation-status.json` is incomplete (nonzero translated count with
+English fallback). It prints `REFUSED` with the current counts and produces no
+locale tarball, so an English fallback pack can never be released as Japanese.
+Use `node scripts/pack-all.mjs --require-locale` to make that refusal fail the
+command. There are no release-download URLs for this package until an actual
+release exists; use the local tarball path shown above.
 
 ## Layout
 
@@ -44,7 +88,9 @@ locale/
   namespaces/ja/*.json       reviewed Japanese values only (currently 3 files)
 test/
   extract-upstream.test.mjs  stage-1 extraction/reproducibility tests
-  stage2.test.mjs            generation, registration, parity and merge tests
+  stage2.test.mjs            generation, ownership, parity, complete/incomplete and merge tests
+  distribution.test.mjs      npm pack / install smoke, exports, no work/, dispose tests
+  fixtures/seed-ja-83.json   immutable 83-value migration evidence and SHA-256
 work/                        local batch inputs/outputs, gitignored and not shipped
 ```
 
@@ -146,23 +192,55 @@ JSON keys are hard errors.
 
 ## Status and limits
 
-- **Incomplete by design:** 83 of 2906 values are Japanese; 3 namespaces are
-  translated, 61 are English fallback, and 0 are partial. Do not describe this
-  package as a completed Japanese localization.
-- **Fallback is not translation:** the 2823 English values under `ja` are a
+- **Release condition, not a current claim:** a locale tarball may exist only
+  when `locale/translation-status.json` reports the complete 64 namespaces /
+  2906 keys with zero English fallback. The status in this checkout is the
+  source of truth; while it says `incomplete`, the numbers below apply.
+- **Current incomplete state:** 83 of 2906 values are Japanese; 3 namespaces
+  are translated, 61 are English fallback, and 0 are partial. Do not describe
+  this package as a completed Japanese localization before the status says
+  `complete`.
+- **Fallback is not translation:** the English values under `ja` are a
   development aid so the locale can be selected and the namespace registration
   can be exercised. They may be replaced batch by batch.
-- **Transitional ownership:** the mobile pack still registers `ja` for #64.
-  Enable either the mobile pack or this package, not both. Stage 2 deliberately
-  leaves mobile code, issues, releases, profiles and the server untouched.
-- **Not yet installed:** stage 2 verifies the package by tests and generation;
-  it does not install the package into a live DSH profile or run a browser
-  acceptance test.
+- **Sole ownership:** this package is the only `ja` language and namespace
+  owner. The mobile package no longer registers `ja`, so both may be enabled
+  together; only this package's effects add or remove the catalog entries. It
+  never sets the shared display language (the phone picker projects the catalog
+  for that device only).
+- **Optional and not auto-installed:** the mobile tarball does not contain this
+  package, does not depend on it and does not enable it. Nothing is installed
+  into a DSH profile until the operator runs the separate local-tarball command
+  above.
+- **Not yet verified live:** the repository tests and generation verify the
+  package; they do not install it into a live DSH profile or run a browser
+  acceptance test. Do not claim device or live success from them.
 - **Batch sizing:** namespaces with at least 40 keys use 40-50 key chunks except
   the final remainder; namespaces below 40 keys stay in one short batch so a
   worker always owns one namespace per output file.
 - `work/` is for local translation/review only. Keep it out of commits and
   releases; the generated manifest ships only runtime files.
+
+## Intentionally untranslated values (allowlist)
+
+A complete catalog has a reviewed `ja` entry for every key; a few entries are
+deliberately identical to English. They are not missing translations:
+
+- `command.token.{compact,export,feedback,goal,permission,plan}`: upstream's
+  `TOKEN_ALIASES` only has en/zh execution spellings, so the English token is
+  the correct value.
+- `settings.account.onboardingArtworkLocale`: the artwork assets only exist
+  for en/zh, so it stays `en`.
+- `chat.message.stepProcess.sharedPrefix`,
+  `pluginManager.sentenceSeparator`, `schedule.catalog.cron.part.join` and
+  `schedule.manager.cron.part.join`: intentionally blank, exactly like their
+  English source (a zero-width or other dummy character is forbidden).
+- `schedule.catalog.time.locale` / `schedule.manager.time.locale`: Intl
+  locale ids. They may become `ja`/`ja-JP` when complete but must never be
+  blank; the acceptance test distinguishes those values from `en`.
+
+Proper identifiers and execution tokens such as these are intentional keeps,
+not untranslated keys.
 
 ## Stage 1: English snapshot and extractor
 
@@ -212,9 +290,17 @@ node --test packages/rdsh-locale-ja/test/*.test.mjs
 pnpm test:locale
 ```
 
-`stage2.test.mjs` covers single ownership, 64 registrations with disposers,
-byte-for-byte migration of the 83 values, en/ja parity with the incomplete
-status explicit, intentional-blank acceptance and ordinary-blank rejection,
+`stage2.test.mjs` covers single ownership (including the removed mobile ja
+pack), 64 registrations with disposers, the immutable 83-value seed fixture and
+its hash, en/ja parity and status counts for both the explicit incomplete
+fixture and a complete 2906-key catalog with zero fallback, intentional-blank
+acceptance and ordinary-blank rejection, intentional English/Intl keeps,
 placeholder preservation, duplicate-key/value checks, batch coverage/hashes,
 reviewed merge, stale hashes, all-or-nothing validation, generated `--check`
 drift, and that `work/` is gitignored and absent from the package files.
+
+`distribution.test.mjs` packs the real package with `npm pack` and checks the
+standalone install: both exports resolve, no `work/` directory ships or is
+created, the installed client is the single `ja` owner with side-effect-free
+dispose, and `scripts/pack-all.mjs` refuses an incomplete locale while
+accepting only the complete 64/2906 zero-fallback status.

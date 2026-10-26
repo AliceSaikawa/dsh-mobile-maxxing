@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -28,10 +29,26 @@ import {
 	writeArtifacts,
 } from '../../../tools/locale-data.mjs';
 import { mergeReviewedBatches } from '../../../tools/merge-batches.mjs';
-import { LOCALE_PACKS } from '../../dsh-mobile-maxxing/lib/copy.js';
 import { apply, dictionaries, inject, language } from '../client.js';
 
 const packageDir = path.resolve(import.meta.dirname, '..');
+
+/**
+ * Immutable evidence of the 83 values migrated from the old mobile pack.
+ *
+ * The fixture is never regenerated from a moving source: it pins the exact
+ * reviewed strings and their hash, so a later dictionary edit cannot quietly
+ * change a migrated value. New translations arrive through reviewed batches.
+ */
+const seedFixture = readJsonFile(path.join(packageDir, 'test', 'fixtures', 'seed-ja-83.json'));
+
+function seedDictionaries() {
+	return seedFixture.dictionaries;
+}
+
+function seedHash(dictionarySet) {
+	return 'sha256:' + createHash('sha256').update(JSON.stringify(dictionarySet)).digest('hex');
+}
 
 function temporaryDirectory(t) {
 	const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'rdsh-locale-ja-stage2-'));
@@ -39,9 +56,28 @@ function temporaryDirectory(t) {
 	return directory;
 }
 
+/**
+ * A temporary package with the English snapshot and only the explicit 83-key
+ * seed fixture as Japanese. Mutation tests start from this fixed incomplete
+ * state, so they behave the same before and after the remaining batches land.
+ */
 function copyPackageLocale(t) {
 	const directory = temporaryDirectory(t);
 	fs.cpSync(path.join(packageDir, 'locale'), path.join(directory, 'locale'), { recursive: true });
+	const jaDirectory = path.join(directory, 'locale', 'namespaces', 'ja');
+	fs.rmSync(jaDirectory, { recursive: true, force: true });
+	fs.mkdirSync(jaDirectory, { recursive: true });
+	const upstream = readJsonFile(path.join(directory, 'locale', 'upstream.json'));
+	for (const [namespace, dictionary] of Object.entries(seedDictionaries())) {
+		writeJson(path.join(jaDirectory, upstream.namespaces[namespace].fileName), dictionary);
+	}
+	return directory;
+}
+
+/** A temporary package with no Japanese dictionary at all. */
+function copyPackageWithoutJapanese(t) {
+	const directory = copyPackageLocale(t);
+	fs.rmSync(path.join(directory, 'locale', 'namespaces', 'ja'), { recursive: true, force: true });
 	return directory;
 }
 
@@ -99,16 +135,30 @@ test('generated files are fresh and keep the stage-1 64/2906 snapshot', () => {
 	assert.equal(Object.keys(upstream.namespaces).length, EXPECTED_NAMESPACES);
 	assert.equal(Object.values(english).reduce((sum, dictionary) => sum + Object.keys(dictionary).length, 0), EXPECTED_KEYS);
 	assert.equal(upstream.totals.keys, EXPECTED_KEYS);
+
 	const status = readJsonFile(path.join(packageDir, 'locale', 'translation-status.json'));
-	assert.equal(status.status, 'incomplete');
-	assert.equal(status.developmentOnlyEnglishFallback, true);
+	assert.equal(status.locale, 'ja');
 	assert.equal(status.fallbackPolicy, 'development-only-english');
-	assert.equal(status.totals.translated, 83);
-	assert.equal(status.totals.fallback, 2823);
-	assert.equal(status.totals.translatedNamespaces, 3);
+	assert.equal(status.totals.namespaces, EXPECTED_NAMESPACES);
+	assert.equal(status.totals.keys, EXPECTED_KEYS);
+	let translated = 0;
+	let fallback = 0;
+	for (const [namespace, entry] of Object.entries(upstream.namespaces)) {
+		const counts = status.namespaces[namespace];
+		assert.equal(counts.sourceHash, entry.sourceHash, namespace + ' status names the wrong source');
+		assert.equal(counts.keys, Object.keys(english[namespace]).length, namespace + ' key count drifted');
+		assert.equal(counts.translated + counts.fallback, counts.keys, namespace + ' does not account for every key');
+		assert.equal(counts.status, counts.translated === 0 ? 'fallback' : counts.fallback === 0 ? 'translated' : 'partial');
+		translated += counts.translated;
+		fallback += counts.fallback;
+	}
+	assert.equal(status.totals.translated, translated);
+	assert.equal(status.totals.fallback, fallback);
+	assert.equal(status.status, fallback === 0 ? 'complete' : 'incomplete');
+	assert.equal(status.developmentOnlyEnglishFallback, fallback > 0);
 });
 
-test('single ownership: one addLanguage(ja) and 64 explicit register calls', () => {
+test('single ownership: rdsh-locale-ja is the only ja owner', () => {
 	const source = fs.readFileSync(path.join(packageDir, 'client.js'), 'utf8');
 	assert.equal((source.match(/\.addLanguage\(/gu) ?? []).length, 1, 'client.js must own exactly one addLanguage call');
 	assert.equal((source.match(/\.register\(/gu) ?? []).length, EXPECTED_NAMESPACES, 'client.js must register every namespace');
@@ -128,7 +178,24 @@ test('single ownership: one addLanguage(ja) and 64 explicit register calls', () 
 	walk(packageDir);
 	const owners = javascriptFiles.filter((file) => fs.readFileSync(file, 'utf8').includes('addLanguage('));
 	assert.deepEqual(owners.map((file) => path.relative(packageDir, file)), ['client.js']);
-	assert.equal(Object.keys(LOCALE_PACKS.ja.dictionaries).length, 3, 'the existing mobile pack must remain untouched while it is still present');
+
+	// The mobile package used to own a three-namespace ja pack (#64). It must
+	// now ship neither the registration nor the injected pack (#80).
+	const mobileDir = path.resolve(packageDir, '..', 'dsh-mobile-maxxing');
+	const mobileFiles = [
+		'index.js',
+		'client.js',
+		'sw.js',
+		...(fs.readdirSync(path.join(mobileDir, 'lib')).filter((file) => file.endsWith('.js')).map((file) => path.join('lib', file))),
+		...(fs.readdirSync(path.join(mobileDir, 'notify')).filter((file) => file.endsWith('.js')).map((file) => path.join('notify', file))),
+	];
+	for (const file of mobileFiles) {
+		const text = fs.readFileSync(path.join(mobileDir, file), 'utf8');
+		assert.equal(text.includes('addLanguage('), false, 'mobile still registers a ja language: ' + file);
+		assert.equal(text.includes('LOCALE_PACKS'), false, 'mobile still owns a locale pack: ' + file);
+		assert.equal(text.includes('__RDSH_PWA_LOCALES__'), false, 'mobile still injects a locale pack: ' + file);
+	}
+	assert.equal(Object.keys(seedDictionaries()).length, 3, 'the immutable seed fixture must cover the three migrated namespaces');
 });
 
 test('apply registers all 64 dictionaries and every effect can dispose its registration', () => {
@@ -172,48 +239,155 @@ test('apply registers all 64 dictionaries and every effect can dispose its regis
 	assert.equal(registered.size, 0);
 });
 
-test('the 83 migrated values are byte-for-byte the mobile COPY.ja values', () => {
+test('the 83 migrated values stay byte-for-byte equal to the immutable seed fixture', () => {
+	assert.equal(seedFixture.schemaVersion, 1);
+	assert.equal(seedFixture.namespaces, 3);
+	assert.equal(seedFixture.keys, 83);
+	assert.equal(seedHash(seedDictionaries()), seedFixture.sha256, 'the seed fixture changed after migration');
+
+	const upstream = readJsonFile(path.join(packageDir, 'locale', 'upstream.json'));
 	let total = 0;
-	for (const [namespace, source] of Object.entries(LOCALE_PACKS.ja.dictionaries)) {
-		const destination = readJsonFile(path.join(packageDir, 'locale', 'namespaces', 'ja', namespace + '.json'));
-		assert.deepEqual(Object.keys(destination), Object.keys(source), namespace + ' key order changed');
+	for (const [namespace, source] of Object.entries(seedDictionaries())) {
+		const fileName = upstream.namespaces[namespace].fileName;
+		const destination = readJsonFile(path.join(packageDir, 'locale', 'namespaces', 'ja', fileName));
+		const destinationKeys = Object.keys(destination);
+		const sourceKeys = Object.keys(source);
+		assert.deepEqual(destinationKeys.filter((key) => Object.hasOwn(source, key)), sourceKeys, namespace + ' seed key order changed');
 		for (const [key, value] of Object.entries(source)) {
 			assert.equal(destination[key], value, namespace + '.' + key + ' changed');
+			assert.equal(dictionaries[namespace][key], value, 'the generated client lost ' + namespace + '.' + key);
 			total += 1;
 		}
 	}
 	assert.equal(total, 83);
+	// The old mobile pack is gone; this fixture, not a live import, is the evidence.
 });
 
-test('generated Japanese has en/ja key parity with the incomplete status explicit', () => {
-	const { dictionaries: english } = loadEnglish(packageDir);
+test('generated Japanese has en/ja key parity and status counts match the ja source files', () => {
+	const { upstream, dictionaries: english } = loadEnglish(packageDir);
 	const status = readJsonFile(path.join(packageDir, 'locale', 'translation-status.json'));
 	let translated = 0;
 	for (const [namespace, englishDictionary] of Object.entries(english)) {
 		assert.deepEqual(Object.keys(dictionaries[namespace]), Object.keys(englishDictionary), namespace + ' is not in parity with English');
-		assert.equal(status.namespaces[namespace].keys, Object.keys(englishDictionary).length);
-		let namespaceTranslated = 0;
-		for (const [key, englishValue] of Object.entries(englishDictionary)) {
-			if (Object.hasOwn(LOCALE_PACKS.ja.dictionaries[namespace] ?? {}, key)) {
-				assert.equal(dictionaries[namespace][key], LOCALE_PACKS.ja.dictionaries[namespace][key], namespace + '.' + key + ' lost its reviewed value');
-				namespaceTranslated += 1;
-			} else {
-				assert.equal(dictionaries[namespace][key], englishValue, namespace + '.' + key + ' is neither reviewed nor an English fallback');
-			}
+		const counts = status.namespaces[namespace];
+		assert.equal(counts.keys, Object.keys(englishDictionary).length);
+		const fileName = upstream.namespaces[namespace].fileName;
+		const japaneseFile = path.join(packageDir, 'locale', 'namespaces', 'ja', fileName);
+		const japanese = fs.existsSync(japaneseFile) ? readJsonFile(japaneseFile) : {};
+		const sourceKeys = Object.keys(japanese);
+		assert.equal(counts.translated, sourceKeys.length, namespace + ' translated count is wrong');
+		assert.equal(counts.fallback, Object.keys(englishDictionary).length - sourceKeys.length, namespace + ' fallback count is wrong');
+		for (const key of sourceKeys) {
+			assert.equal(dictionaries[namespace][key], japanese[key], namespace + '.' + key + ' lost its reviewed value');
 		}
-		assert.equal(status.namespaces[namespace].translated, namespaceTranslated, namespace + ' translated count is wrong');
-		assert.equal(status.namespaces[namespace].fallback, Object.keys(englishDictionary).length - namespaceTranslated, namespace + ' fallback count is wrong');
-		translated += namespaceTranslated;
+		translated += counts.translated;
 	}
-	assert.equal(translated, 83);
 	assert.equal(status.totals.translated, translated);
 	assert.equal(status.totals.fallback, EXPECTED_KEYS - translated);
+	assert.equal(status.status, status.totals.fallback === 0 ? 'complete' : 'incomplete');
+	assert.equal(status.developmentOnlyEnglishFallback, status.totals.fallback > 0);
+
+	const seedKeys = Object.values(seedDictionaries()).reduce((sum, dictionary) => sum + Object.keys(dictionary).length, 0);
+	assert.ok(status.totals.translated >= seedKeys, 'the migrated seed values are not counted as translated');
+});
+
+test('an explicit incomplete fixture generates fallback keys and an incomplete status', (t) => {
+	const directory = copyPackageLocale(t);
+	const artifacts = buildArtifacts({ packageDir: directory });
+	const status = artifacts.status;
 	assert.equal(status.status, 'incomplete');
 	assert.equal(status.developmentOnlyEnglishFallback, true);
-	assert.deepEqual(
-		Object.entries(status.namespaces).filter(([, entry]) => entry.translated > 0).map(([namespace]) => namespace).sort(),
-		['common', 'settings', 'settings.locale'],
-	);
+	assert.equal(status.fallbackPolicy, 'development-only-english');
+	assert.equal(status.totals.keys, EXPECTED_KEYS);
+	assert.equal(status.totals.translated, 83);
+	assert.equal(status.totals.fallback, EXPECTED_KEYS - 83);
+	assert.equal(status.totals.translatedNamespaces, 3);
+	assert.equal(status.totals.fallbackNamespaces, EXPECTED_NAMESPACES - 3);
+	assert.match(artifacts.files['client.js'], /DEVELOPMENT-ONLY ENGLISH FALLBACK: 83 of 2906/);
+	assert.doesNotMatch(artifacts.files['client.js'], /COMPLETE:/);
+});
+
+const KEEP_ENGLISH = [
+	['command', 'token.compact'],
+	['command', 'token.export'],
+	['command', 'token.feedback'],
+	['command', 'token.goal'],
+	['command', 'token.permission'],
+	['command', 'token.plan'],
+	['settings.account', 'onboardingArtworkLocale'],
+];
+
+test('a complete 64-namespace ja fixture generates a complete status with zero fallback', (t) => {
+	const directory = copyPackageWithoutJapanese(t);
+	const { upstream, dictionaries: english } = loadEnglish(directory);
+	const jaDirectory = path.join(directory, 'locale', 'namespaces', 'ja');
+	fs.mkdirSync(jaDirectory, { recursive: true });
+	for (const [namespace, dictionary] of Object.entries(english)) {
+		const translated = {};
+		for (const [key, value] of Object.entries(dictionary)) {
+			const fullKey = namespace + '.' + key;
+			if (KEEP_ENGLISH.some(([owner, name]) => owner === namespace && name === key)) {
+				// Upstream control spellings have no ja alias; keep the English
+				// execution token even in a complete catalog.
+				translated[key] = value;
+			} else if (fullKey === 'schedule.catalog.time.locale' || fullKey === 'schedule.manager.time.locale') {
+				// Intl locale ids may be localized to ja/ja-JP, never left blank.
+				translated[key] = 'ja-JP';
+			} else if (value.trim() === '') {
+				// Blank English values stay blank (intentional blank).
+				translated[key] = value;
+			} else {
+				translated[key] = '【訳】' + value;
+			}
+		}
+		writeJson(path.join(jaDirectory, upstream.namespaces[namespace].fileName), translated);
+	}
+	const artifacts = buildArtifacts({ packageDir: directory });
+	const status = artifacts.status;
+	assert.equal(status.status, 'complete');
+	assert.equal(status.developmentOnlyEnglishFallback, false);
+	assert.equal(status.totals.keys, EXPECTED_KEYS);
+	assert.equal(status.totals.translated, EXPECTED_KEYS);
+	assert.equal(status.totals.fallback, 0);
+	assert.equal(status.totals.translatedNamespaces, EXPECTED_NAMESPACES);
+	assert.equal(status.totals.fallbackNamespaces, 0);
+	assert.equal(status.totals.partialNamespaces, 0);
+	for (const counts of Object.values(status.namespaces)) {
+		assert.equal(counts.status, 'translated');
+		assert.equal(counts.fallback, 0);
+	}
+	const completeDictionaries = artifacts.dictionaries;
+	for (const [namespace, key] of KEEP_ENGLISH) {
+		assert.equal(completeDictionaries[namespace][key], english[namespace][key], namespace + '.' + key + ' lost its execution spelling');
+	}
+	assert.equal(completeDictionaries.chat['message.stepProcess.sharedPrefix'], '');
+	assert.equal(completeDictionaries['schedule.catalog']['time.locale'], 'ja-JP');
+	assert.equal(completeDictionaries['schedule.manager']['time.locale'], 'ja-JP');
+	assert.match(artifacts.files['client.js'], /COMPLETE: all 2906 keys have a reviewed Japanese entry/);
+	assert.doesNotMatch(artifacts.files['client.js'], /DEVELOPMENT-ONLY ENGLISH FALLBACK/);
+	assert.doesNotMatch(status.note, /development-only/i);
+});
+
+test('execution tokens, artwork locale and Intl locale are intentionally not translated', () => {
+	const english = loadEnglish(packageDir).dictionaries;
+	for (const [namespace, key] of KEEP_ENGLISH) {
+		assert.equal(dictionaries[namespace][key], english[namespace][key], namespace + '.' + key + ' must keep the English execution spelling');
+	}
+	assert.equal(english['settings.account'].onboardingArtworkLocale, 'en');
+	assert.equal(dictionaries['settings.account'].onboardingArtworkLocale, 'en',
+		'the artwork bundle only has en/zh assets');
+	assert.equal(english.chat['message.stepProcess.sharedPrefix'], '');
+	assert.equal(dictionaries.chat['message.stepProcess.sharedPrefix'], '',
+		'the shared prefix must stay the same empty string as English');
+	for (const namespace of ['schedule.catalog', 'schedule.manager']) {
+		const value = dictionaries[namespace]['time.locale'];
+		assert.equal(typeof value, 'string');
+		assert.notEqual(value.trim(), '', namespace + ' time.locale must not be blank');
+		assert.ok(
+			value === english[namespace]['time.locale'] || value === 'ja' || value === 'ja-JP',
+			namespace + ' time.locale must stay an Intl locale id (en in fallback, ja/ja-JP translated)',
+		);
+	}
 });
 
 test('placeholder preservation holds for every value and a broken placeholder is rejected', (t) => {
@@ -235,7 +409,7 @@ test('placeholder preservation holds for every value and a broken placeholder is
 
 test('duplicate JSON keys and duplicate translated values are checked', (t) => {
 	assert.throws(() => parseStrictJson('{"a":"one","a":"two"}', 'duplicate.json'), /duplicate key/);
-	assert.deepEqual(duplicateValueWarnings('settings', LOCALE_PACKS.ja.dictionaries.settings, loadEnglish(packageDir).dictionaries.settings), [], 'two keys with the same English value are not a duplicate-translation warning');
+	assert.deepEqual(duplicateValueWarnings('settings', seedDictionaries().settings, loadEnglish(packageDir).dictionaries.settings), [], 'two keys with the same English value are not a duplicate-translation warning');
 	assert.equal(duplicateValueWarnings('fixture', { left: '同じ', right: '同じ' }, { left: 'Left', right: 'Right' }).length, 1);
 	const directory = copyPackageLocale(t);
 	const japaneseFile = path.join(directory, 'locale', 'namespaces', 'ja', 'common.json');

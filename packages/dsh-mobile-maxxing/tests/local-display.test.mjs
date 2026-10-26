@@ -12,6 +12,7 @@ import test from "node:test";
 
 const CLIENT = readFileSync(new URL("../client.js", import.meta.url), "utf8");
 const COPY = readFileSync(new URL("../lib/copy.js", import.meta.url), "utf8");
+const HOST = readFileSync(new URL("../index.js", import.meta.url), "utf8");
 
 function block(start, end) {
 	const at = CLIENT.indexOf(start);
@@ -86,24 +87,16 @@ test("font sizes use the published theme variables and exact roles", () => {
 	assert.doesNotMatch(body, /\.setFontSize\(|\.setLocale\(/, "a shared writer is called");
 });
 
-test("the ja pack is registered through the locale API, not guessed into the list (#64)", () => {
-	assert.match(COPY, /export const LOCALE_PACKS = \{/);
-	assert.match(COPY, /language: \{ id: "ja", label: "日本語", fallback: "en" \}/,
-		"the pack must declare its own id, label and fallback");
-	for (const namespace of ["common", "settings", "settings.locale"]) {
-		const key = namespace.replace(".", "\\.");
-		assert.match(COPY, new RegExp(`\\n\\t\\t\\t"?${key}"?: \\{`),
-			`${namespace} has no ja dictionary`);
-	}
-	const installer = block(
-		"function installJapaneseLocale(localeService) {",
-		"    /** Read only this browser's display choices",
-	);
-	assert.match(installer, /addLanguage\(pack\.language\)/, "addLanguage was not used");
-	assert.match(installer, /register\(namespace, "ja", dictionary\)/, "the dictionaries were not registered");
-	assert.match(installer, /if \(!phone\(\)/, "the pack is not gated to the mobile surface");
-	assert.doesNotMatch(installer, /"zh"|"en"/, "the pack touched a shipped locale");
-	assert.match(CLIENT, /const JA_LOCALE_PACK = globalThis\.__RDSH_PWA_LOCALES__\?\.ja \?\? null;/);
+test("the mobile package no longer owns a ja language pack (#80)", () => {
+	assert.doesNotMatch(COPY, /LOCALE_PACKS/, "the mobile copy module still exports a locale pack");
+	assert.doesNotMatch(CLIENT, /addLanguage\(|JA_LOCALE_PACK|__RDSH_PWA_LOCALES__/,
+		"the mobile client still registers a ja language");
+	assert.doesNotMatch(CLIENT, /register\(namespace, "ja"/, "the mobile client still registers a ja dictionary");
+	assert.doesNotMatch(CLIENT, /installJapaneseLocale/, "the mobile ja installer is still present");
+	assert.doesNotMatch(HOST, /__RDSH_PWA_LOCALES__|LOCALE_PACKS/,
+		"the host still injects a ja pack");
+	// rdsh-locale-ja is the sole owner; the mobile picker consumes the catalog.
+	assert.match(CLIENT, /function localeOptionsFrom\(snapshot\) \{/);
 });
 
 test("language options are the locale service's registered list, never a guessed ja", () => {

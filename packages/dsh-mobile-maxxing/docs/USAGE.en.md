@@ -60,7 +60,7 @@ none writes the shared DSH profile.
 | --- | --- |
 | Font sizes (text / code / terminal) | Changes this device's rendering only |
 | Terminal-only dark | Keeps the terminal dark on a light page; the shared theme and the rest of the UI are unchanged |
-| Display language | Changes this device's UI language; only registered locales are offered (Japanese is registered on this device) |
+| Display language | Changes this device's UI language; only locales registered in the shared locale service are offered. Japanese appears only with the optional separate `rdsh-locale-ja` package |
 | Default permission | Applies to new sessions started on this device only |
 
 The permission choice is recorded as the session's own `/permission` right after it opens; the
@@ -125,11 +125,16 @@ service-worker offline page and the notification text follow the same value
 browser half, the service worker, the manifest and notifications all English;
 untranslated dictionary keys fall back to English.
 
-This device's display-language picker also carries a `ja` language pack. It translates
-the upstream shared vocabulary (`common`) and the Settings chrome (`settings` /
-`settings.locale`); other namespaces keep their English copy through the locale
-service's `ja` → `en` fallback rather than a guessed translation. The PC's language
-list is unchanged.
+This package does not add a `ja` language pack. The picker lists only the `en` /
+`zh` locales the host registers, and a stored `ja` choice is ignored while no owner
+registers it (nothing is guessed). Japanese requires the optional separate
+`rdsh-locale-ja` package, installed from its local tarball. It is not part of the
+mobile tarball and is never enabled automatically. Both packages may be enabled
+together without a duplicate registration (the mobile half never calls
+`addLanguage`), and the shared display language is never rewritten: only this
+device's view is projected. See
+[`packages/rdsh-locale-ja/README.md`](../../rdsh-locale-ja/README.md) for its
+translation status and install steps. The PC's language list is unchanged.
 
 ## Mobile layout
 

@@ -339,14 +339,19 @@ test("notification fan-out targets the app that started the turn or request, nev
 		applyNotify(ctx, { onlyMobileTurns: true });
 		return { routes, listeners };
 	};
-	const request = async (target, path, { method = "POST", body = undefined, origin = undefined } = {}) => {
+	const request = async (target, path, { method = "POST", body = undefined, origin = undefined, capture = undefined } = {}) => {
 		const text = body === undefined ? "" : JSON.stringify(body);
 		const req = Readable.from(text === "" ? [] : [Buffer.from(text)]);
 		req.method = method;
 		req.url = path;
 		req.headers = origin === undefined ? {} : { origin };
 		let status = 0;
-		await target.routes.get(path).handler(req, { writeHead(code) { status = code; }, end() {} });
+		let responseBody = "";
+		await target.routes.get(path).handler(req, {
+			writeHead(code) { status = code; },
+			end(chunk) { if (typeof chunk === "string") responseBody += chunk; },
+		});
+		if (capture !== undefined) capture.text = responseBody;
 		return status;
 	};
 	const turn = (target, id, type) => target.listeners.get("session/event")({ id }, { type, data: { reason: { kind: "completed" } } });
@@ -430,6 +435,40 @@ test("notification fan-out targets the app that started the turn or request, nev
 		question(own);
 		await wait();
 		assert.deepEqual(calls, ["https://web.push.apple.com/phone"], "the turn origin did not win over the learned origin");
+
+		// #88: /push/test reports the real status of each delivery, not just
+		// whether some listener was found.
+		const deliveredCapture = {};
+		assert.equal(await request(own, "/api/dsh-mobile-maxxing/push/test", {
+			body: {},
+			origin: "https://app.example:8446",
+			capture: deliveredCapture,
+		}), 200);
+		const delivered = JSON.parse(deliveredCapture.text);
+		assert.equal(delivered.ok, true);
+		assert.equal(delivered.results.length, 1);
+		assert.equal(delivered.results[0].ok, true);
+		assert.equal(delivered.results[0].status, 201);
+		assert.equal("error" in delivered, false, "a delivered push carries no error");
+
+		// #85: a transport failure must stay visible with its undici cause.
+		globalThis.fetch = async () => {
+			throw new TypeError("fetch failed", {
+				cause: Object.assign(new Error("invalid content-length header"), { code: "UND_ERR_INVALID_ARG" }),
+			});
+		};
+		const failedCapture = {};
+		assert.equal(await request(own, "/api/dsh-mobile-maxxing/push/test", {
+			body: {},
+			origin: "https://app.example:8446",
+			capture: failedCapture,
+		}), 200);
+		const failed = JSON.parse(failedCapture.text);
+		assert.equal(failed.ok, false);
+		assert.equal(failed.results.length, 1);
+		assert.equal(failed.results[0].status, 0);
+		assert.match(failed.results[0].error, /UND_ERR_INVALID_ARG: invalid content-length header/);
+		assert.match(failed.error, /UND_ERR_INVALID_ARG/, "the route error names the cause");
 	} finally {
 		console.warn = previousWarn;
 		globalThis.fetch = previousFetch;

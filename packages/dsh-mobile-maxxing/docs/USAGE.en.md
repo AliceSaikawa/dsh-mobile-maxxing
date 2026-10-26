@@ -170,9 +170,9 @@ close it; swipe left to open it.
 | Tap the notification | That session opens (banner "open" while in the app) |
 
 The service worker decides: `clients.matchAll()` finds a window with
-`visibilityState === "visible"` and hands the payload to the page. If the page does not
-acknowledge within 400ms, the system notification is shown instead — a visible window that
-never loaded this plugin must not swallow the message.
+`visibilityState === "visible"` and hands the payload to the page, waiting up to 1.5s for the
+banner to acknowledge it. A visible window owns the notification: if no acknowledgement
+arrives, the miss is logged and no system notification is stacked on top of the app.
 
 ### Sounds
 

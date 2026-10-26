@@ -199,6 +199,25 @@ export function encryptPushPayload(subscription, plaintext) {
 // ---------------------------------------------------------------------------
 
 /**
+ * One-line description of a failed push, including the `fetch` cause.
+ *
+ * Undici reports a rejected request as `TypeError: fetch failed` and puts the
+ * actionable part (for example `UND_ERR_INVALID_ARG`) in `cause`. The cause
+ * carries no endpoint or keys, so it is safe to log and show.
+ *
+ * @param {unknown} error - whatever the send threw.
+ * @returns {string} e.g. `fetch failed (UND_ERR_INVALID_ARG: invalid content-length header)`.
+ */
+export function describePushError(error) {
+	const message = String(error?.message ?? error);
+	const cause = error?.cause;
+	const code = typeof cause?.code === "string" ? cause.code : "";
+	const detail = typeof cause?.message === "string" ? cause.message : "";
+	const suffix = code !== "" && detail !== "" ? `${code}: ${detail}` : code || detail;
+	return suffix === "" ? message : `${message} (${suffix})`;
+}
+
+/**
  * Deliver one push message.
  *
  * @param {object} subscription - `{ endpoint, keys }`.
@@ -226,7 +245,8 @@ export async function sendWebPush(subscription, payload, { keys, subject }) {
 			authorization: vapidAuthorization({ keys, audience, subject }),
 			"content-encoding": "aes128gcm",
 			"content-type": "application/octet-stream",
-			"content-length": String(body.length),
+			// content-length is deliberately left to fetch: a manual value on a
+			// Buffer body made undici reject every send (#85).
 			ttl: String(PUSH_TTL_SECONDS),
 			urgency: "high",
 		},
@@ -839,7 +859,8 @@ export function applyNotify(ctx, config) {
 				// deleted without /unsubscribe is only discoverable this way.
 				if (result.gone) store.remove(subscription.endpoint);
 			} catch (error) {
-				results.push({ status: 0, ok: false, error: String(error?.message ?? error) });
+				// The undici cause is the only diagnostic a failed fetch leaves.
+				results.push({ status: 0, ok: false, error: describePushError(error) });
 			}
 		}
 		return { ok: results.some((item) => item.ok), subject, results, targetOrigin };
@@ -1069,13 +1090,16 @@ export function applyNotify(ctx, config) {
 					// A skipped push must not look like a delivered one: the
 					// Settings button reads `ok` to decide between "sent" and an
 					// error, and a silently empty fan-out used to report success.
+					const failure = result.results.find((item) => item.ok === false && typeof item.error === "string");
 					const error = result.ok
 						? undefined
 						: result.reason === "no-origin"
 							? "no app origin has talked to this host yet; reload the app once"
 							: result.reason === "no-subscription"
 								? `no push subscription for ${result.targetOrigin}`
-								: "no push was delivered";
+								: failure === undefined
+									? "no push was delivered"
+									: `no push was delivered: ${failure.error}`;
 					json(res, 200, { ok: result.ok, ...result, error, count: store.subscriptions().length });
 				},
 			},

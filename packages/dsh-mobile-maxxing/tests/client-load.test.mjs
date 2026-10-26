@@ -3134,6 +3134,140 @@ test("#80 mounted text and slot labels refresh on the device language without a 
 	assert.equal(rows.active, "en", "dispose wrote the device language into the shared row");
 });
 
+/**
+ * Boot under "System" with a device language list (#103).
+ *
+ * The locale catalog is the pack list a real install publishes; `packs`
+ * lets a test model a device language no pack covers. The navigator carries
+ * the fields boot() reads (service worker, UA, platform, touch count) so the
+ * only variable between cases is `languages`.
+ */
+function bootSystemLanguage({ languages, host = "en", stored = null, docLang = "en", packs = ["en", "ja"] } = {}) {
+	const labels = { en: "English", ja: "日本語" };
+	const { service } = localeService({
+		locales: packs.map((id) => ({ id, label: labels[id] ?? id })),
+		active: host,
+	});
+	const serviceWorkerPrototype = {
+		register: () => Promise.resolve(undefined),
+		getRegistration: async () => undefined,
+	};
+	const serviceWorker = Object.assign(Object.create(serviceWorkerPrototype), {
+		controller: null,
+		addEventListener() {},
+		removeEventListener() {},
+	});
+	const navigator = {
+		languages: [...languages],
+		language: languages[0],
+		userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+		platform: "iPhone",
+		maxTouchPoints: 5,
+		standalone: false,
+		onLine: true,
+		serviceWorker,
+	};
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		locale: service,
+		navigator,
+		storage: stored === null ? {} : { "rdsh-mobile-ux:local-display": JSON.stringify(stored) },
+		configureDocument(doc) { doc.documentElement.lang = docLang; },
+	});
+	return { booted, service };
+}
+
+test("a ja device under System follows the device language, not the Host en (#103)", () => {
+	const { booted, service } = bootSystemLanguage({ languages: ["ja-JP", "en-US"], host: "en" });
+	const api = booted.sandbox.__RDSH_MOBILE_UX__;
+	assert.equal(api.state.localDisplay.language, "", "System was stored as a concrete language");
+	assert.equal(api.state.localDisplay.languages.map((entry) => entry.id).join(","), "en,ja",
+		"the picker lost a language pack");
+	assert.equal(service.snapshot.active, "ja", "the device language was not projected");
+	assert.equal(booted.sandbox.document.documentElement.lang, "ja",
+		"the document language does not match the projected language");
+	assert.equal(api.lang, "ja", "the mobile copy stayed on the Host language");
+	assert.equal(booted.sandbox.localStorage.getItem("rdsh-mobile-ux:local-display"), null,
+		"System wrote a device language to storage");
+	booted.disposeAll();
+	assert.equal(service.snapshot.active, "en", "dispose did not restore the Host language");
+	assert.equal(booted.sandbox.document.documentElement.lang, "en",
+		"dispose left the document language projected");
+});
+
+test("an en device keeps en even when the shared Host preference is ja (#103)", () => {
+	const { booted, service } = bootSystemLanguage({ languages: ["en-US"], host: "ja", docLang: "ja" });
+	assert.equal(service.snapshot.active, "en", "the device en lost to the Host ja");
+	assert.equal(booted.sandbox.document.documentElement.lang, "en");
+	assert.equal(booted.sandbox.__RDSH_MOBILE_UX__.lang, "en");
+	booted.disposeAll();
+	assert.equal(service.snapshot.active, "ja", "dispose did not restore the Host ja");
+	assert.equal(booted.sandbox.document.documentElement.lang, "ja");
+});
+
+test("an unsupported device language falls back to the Host language (#103)", () => {
+	const unsupported = bootSystemLanguage({ languages: ["fr-FR", "fr"], host: "en" });
+	const hostSnapshot = unsupported.service.snapshot;
+	assert.equal(hostSnapshot.active, "en", "the Host baseline changed");
+	assert.equal(unsupported.booted.sandbox.document.documentElement.lang, "en",
+		"an unsupported device language reached the document");
+	assert.equal(unsupported.booted.sandbox.__RDSH_MOBILE_UX__.lang, "en");
+	assert.equal(unsupported.service.snapshot, hostSnapshot,
+		"an unsupported device language installed a projection");
+	unsupported.booted.disposeAll();
+
+	// ja is a device language with no pack in this catalog: same fallback.
+	const noPack = bootSystemLanguage({ languages: ["ja-JP"], host: "en", packs: ["en"] });
+	assert.equal(noPack.service.snapshot.active, "en", "a device language without a pack was projected");
+	assert.equal(noPack.booted.sandbox.document.documentElement.lang, "en");
+	noPack.booted.disposeAll();
+});
+
+test("an explicit language choice always beats the device language (#103)", () => {
+	const jaDevice = bootSystemLanguage({
+		languages: ["ja-JP", "en-US"],
+		host: "en",
+		stored: { language: "en" },
+	});
+	assert.equal(jaDevice.booted.sandbox.__RDSH_MOBILE_UX__.state.localDisplay.language, "en");
+	assert.equal(jaDevice.service.snapshot.active, "en", "the stored en lost to the device ja");
+	assert.equal(jaDevice.booted.sandbox.document.documentElement.lang, "en");
+	assert.equal(jaDevice.booted.sandbox.__RDSH_MOBILE_UX__.lang, "en");
+	jaDevice.booted.disposeAll();
+
+	const enDevice = bootSystemLanguage({
+		languages: ["en-US"],
+		host: "en",
+		stored: { language: "ja" },
+	});
+	assert.equal(enDevice.booted.sandbox.__RDSH_MOBILE_UX__.state.localDisplay.language, "ja");
+	assert.equal(enDevice.service.snapshot.active, "ja", "the stored ja lost to the device en");
+	assert.equal(enDevice.booted.sandbox.document.documentElement.lang, "ja");
+	enDevice.booted.disposeAll();
+});
+
+test("returning to System re-applies the device language (#103)", async () => {
+	const { booted, service } = bootSystemLanguage({ languages: ["ja-JP", "en-US"], host: "en" });
+	const api = booted.sandbox.__RDSH_MOBILE_UX__;
+	assert.equal(service.snapshot.active, "ja", "the device language was not projected at boot");
+
+	api.setLanguage("en");
+	await settleLocale();
+	assert.equal(service.snapshot.active, "en", "an explicit en was not projected");
+	assert.equal(booted.sandbox.document.documentElement.lang, "en");
+
+	api.setLanguage("");
+	await settleLocale();
+	assert.equal(service.snapshot.active, "ja", "System did not return to the device language");
+	assert.equal(booted.sandbox.document.documentElement.lang, "ja");
+	assert.equal(api.state.localDisplay.language, "", "System kept the explicit language in the picker");
+	assert.equal(JSON.parse(booted.sandbox.localStorage.getItem("rdsh-mobile-ux:local-display")).language, "",
+		"resetting to System wrote a concrete language");
+	booted.disposeAll();
+	assert.equal(service.snapshot.active, "en", "dispose did not restore the Host language");
+});
+
 test("#80 the local revision token stays inside the rc.2 LocaleFace compatibility boundary", async () => {
 	const MARKER = Symbol.for("rdsh-mobile-ux:local-display-revision");
 	const PROJECTION = Symbol.for("rdsh-mobile-ux:local-display-projection");

@@ -28,6 +28,9 @@
   ],
   "scripts": {
     "test": "node --test packages/dsh-mobile-maxxing/tests/*.test.mjs",
+    "test:locale": "node --test packages/rdsh-locale-ja/test/*.test.mjs",
+    "extract:locale": "node tools/extract-upstream.mjs",
+    "check:locale": "node tools/extract-upstream.mjs --check",
     "e2e": "node packages/dsh-mobile-maxxing/tests/e2e.mjs",
     "pack:all": "node scripts/pack-all.mjs"
   },

@@ -1,0 +1,22 @@
+{
+  "name": "rdsh-locale-ja",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Japanese locale foundation for DSH: upstream English snapshot and extraction tooling (stage 1 of #80).",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    "./locale/upstream.json": "./locale/upstream.json",
+    "./locale/namespaces/en/*.json": "./locale/namespaces/en/*.json"
+  },
+  "files": [
+    "locale",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

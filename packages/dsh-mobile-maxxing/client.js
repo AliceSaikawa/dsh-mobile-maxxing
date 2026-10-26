@@ -3094,11 +3094,70 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const root = document.documentElement;
       for (const name of ["top", "bottom", "left", "right"]) root.removeAttribute(`data-rdsh-safe-${name}`);
       root.removeAttribute("data-rdsh-native-gap");
+      root.removeAttribute("data-rdsh-keyboard");
+      removeHeightProbe();
+      root.style.removeProperty("--rdsh-vv-top");
+      root.style.removeProperty("--rdsh-vv-height");
       root.style.removeProperty("--rdsh-safe-top");
       root.style.removeProperty("--rdsh-safe-bottom");
       root.style.removeProperty("--rdsh-safe-left");
       root.style.removeProperty("--rdsh-safe-right");
       root.style.removeProperty("--rdsh-native-gap-px");
+    }
+
+    /**
+     * A hidden 100dvh box. Some iOS builds (standalone apps, iPadOS) shrink
+     * `window.innerHeight` with the keyboard while 100dvh keeps the full web
+     * view height, so innerHeight alone cannot tell a keyboard from a short
+     * screen.
+     */
+    let heightProbe = null;
+
+    function removeHeightProbe() {
+      if (heightProbe !== null) heightProbe.remove();
+      heightProbe = null;
+    }
+
+    /** The tallest the page gets when nothing covers it. */
+    function fullHeight() {
+      if (heightProbe === null || !heightProbe.isConnected) {
+        heightProbe = document.createElement("div");
+        heightProbe.setAttribute("aria-hidden", "true");
+        heightProbe.style.cssText = "position:fixed;left:0;top:0;width:0;height:100dvh;visibility:hidden;pointer-events:none";
+        document.body.append(heightProbe);
+      }
+      return Math.max(window.innerHeight, heightProbe.getBoundingClientRect().height);
+    }
+
+    /**
+     * True while the soft keyboard covers part of the page. iOS Safari ignores
+     * `interactive-widget=resizes-content`: the layout viewport keeps its full
+     * height and only the visual viewport shrinks. A pinch zoom shrinks it too,
+     * so a scaled viewport is not a keyboard.
+     */
+    function keyboardOpen() {
+      const viewport = window.visualViewport;
+      return viewport !== null && viewport !== undefined && viewport.scale <= 1.01 && viewport.height < fullHeight() - 100;
+    }
+
+    /**
+     * Pin the app to the visible area while the keyboard is up.
+     *
+     * With the layout viewport left at full height, Safari pans the page to
+     * keep the caret visible. The pan follows the caret, not the composer, so
+     * the header scrolls away and the send button ends up below the visible
+     * edge (under the keyboard's floating form bar). Sizing the app to the
+     * visual viewport leaves nothing to pan: the composer always sits at the
+     * bottom of what is visible and grows upward.
+     */
+    function fitVisualViewport() {
+      const root = document.documentElement;
+      const viewport = window.visualViewport;
+      const open = phone() && viewport !== null && viewport !== undefined && keyboardOpen();
+      root.toggleAttribute("data-rdsh-keyboard", open);
+      if (!open) return;
+      root.style.setProperty("--rdsh-vv-top", `${Math.max(0, Math.round(viewport.offsetTop))}px`);
+      root.style.setProperty("--rdsh-vv-height", `${Math.round(viewport.height)}px`);
     }
 
     function measureSafeArea() {
@@ -3120,10 +3179,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // than the screen (screen.height - innerHeight), so the unpainted strip is
       // below the web view. The home indicator is in that strip, not inside the
       // page; the inner bottom safe-area padding would only enlarge the blank.
-      const viewport = window.visualViewport;
-      const keyboardOpen = viewport !== null && viewport !== undefined && viewport.height < window.innerHeight - 100;
       const screenHeight = window.screen && Number.isFinite(window.screen.height) ? window.screen.height : 0;
-      const nativeGap = window.navigator.standalone === true && !keyboardOpen && screenHeight > 0 && screenHeight - window.innerHeight > 8;
+      const nativeGap = window.navigator.standalone === true && !keyboardOpen() && screenHeight > 0 && screenHeight - window.innerHeight > 8;
       root.toggleAttribute("data-rdsh-native-gap", nativeGap);
       for (const [name, value] of [["top", top], ["bottom", bottom], ["left", left], ["right", right]]) {
         if (value > 0) root.setAttribute(`data-rdsh-safe-${name}`, "");
@@ -12700,6 +12757,29 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   .rdsh-mux-fab { display: flex; }
   html[data-rdsh-drawer="open"] .rdsh-mux-fab { display: none; }
 
+  /* Keyboard up: the app is exactly the visible area (see fitVisualViewport).
+     body is also a containing block for every fixed layer below it: the
+     wallpaper, its haze, the drawer button and the toasts. Left to the layout
+     viewport, they stay put while Safari pans the visible area and slide
+     against the app on every keyboard frame. It takes the transform for that,
+     not "contain": containment stops body's background from reaching the
+     canvas, which then paints black in the strip under the app. */
+  html[data-rdsh-keyboard],
+  html[data-rdsh-keyboard] body {
+    height: var(--rdsh-vv-height) !important;
+    min-height: var(--rdsh-vv-height) !important;
+  }
+  html[data-rdsh-keyboard] body {
+    position: fixed !important; left: 0; right: 0; top: var(--rdsh-vv-top);
+    transform: translateZ(0);
+    grid-template-rows: var(--rdsh-vv-height) !important;
+  }
+  /* The visual viewport already ends above the keyboard's form bar (prev /
+     next / done), so the app needs no clearance of its own. The home indicator
+     is under the keyboard, so only the safe-area padding goes; the doubled id
+     outranks the safe-area rules, which are declared later. */
+  html[data-rdsh-keyboard] #root#root { padding-bottom: 0 !important; }
+
   /* The drawer's own header toggle is the app's icon button, not a dialog
      close. The reference paints it label-primary in every pointer state and
      drops the sticky hover tint, the Android tap flash and the delayed
@@ -13907,6 +13987,11 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         };
         window.addEventListener("resize", onResize);
         window.addEventListener("orientationchange", onOrientation);
+        // The pin has to follow every pan frame, so it is registered ahead of
+        // (and does not wait for) the coalesced layout pass below.
+        window.visualViewport?.addEventListener("resize", fitVisualViewport);
+        window.visualViewport?.addEventListener("scroll", fitVisualViewport);
+        fitVisualViewport();
         // The visual viewport reports the keyboard and the rotation's own
         // resize; without it an iPhone keyboard can leave the layout sized for
         // the covered viewport. It must not reset gestures: it fires for
@@ -14018,6 +14103,10 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             window.removeEventListener("orientationchange", onOrientation);
             window.visualViewport?.removeEventListener("resize", onLayoutResize);
             window.visualViewport?.removeEventListener("scroll", onLayoutResize);
+            window.visualViewport?.removeEventListener("resize", fitVisualViewport);
+            window.visualViewport?.removeEventListener("scroll", fitVisualViewport);
+            document.documentElement.removeAttribute("data-rdsh-keyboard");
+            removeHeightProbe();
             document.removeEventListener("focusout", onKeyboardFocusOut, true);
             document.removeEventListener("visibilitychange", onKeyboardVisibility);
             window.removeEventListener("blur", scheduleKeyboardRecovery);

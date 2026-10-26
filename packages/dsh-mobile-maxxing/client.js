@@ -3802,17 +3802,18 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     const RIGHT_PANEL_ROOT = "[data-sidebar-right-panel]";
 
     /**
-     * The panel kinds that get a heading, keyed by upstream's stable body
-     * attribute. The text stays generic: the tab chip already carries the
-     * per-tab name (the terminal number, the child session's label).
+     * The panel kinds whose body attribute names a different kind than its
+     * chip, keyed by upstream's stable body attribute. The chip names the
+     * instance (the shell "bash", the child session's label); the heading names
+     * the kind in the display language (#82).
      *
-     * #93: the terminal is deliberately absent. Its chip already names the
-     * shell ("bash"), so the heading was a duplicate that only cost the
-     * terminal ~30px of height. The child-session panel keeps one because its
-     * chip names the instance, not the kind.
+     * Every other tab (files, the start pane, a preview) falls back to the
+     * selected chip's own label, which upstream already translates and which
+     * for those kinds is the kind's name.
      */
     const RIGHT_PANEL_HEADING_KEYS = {
       "data-sidebar-chat": "localDisplay.subagent",
+      "data-sidebar-terminal": "localDisplay.terminal",
     };
 
     /**
@@ -3927,6 +3928,20 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         return button;
       }
       return null;
+    }
+
+    /**
+     * Arm the promotion again (#59).
+     *
+     * The promotion fires once per button so a failed click cannot loop, but a
+     * rotation changes what "fits" means: without re-arming, a panel that was
+     * docked in landscape stays a narrow column after the phone turns upright.
+     */
+    function resetRightPanelPromotion() {
+      rightPanelFitPending = false;
+      for (const button of document.querySelectorAll("[data-rdsh-auto-fired]")) {
+        button.removeAttribute("data-rdsh-auto-fired");
+      }
     }
 
     function ensureRightPanelFits() {
@@ -4546,44 +4561,48 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     /**
-     * Which panel-type heading the active tab needs, or "" for any other tab.
+     * The heading text the active tab needs, or "" when it cannot name itself.
      *
-     * The map is the whole list of named kinds (#93: the terminal is not in it,
-     * so a terminal tab answers "" and the heading comes down). A panel body
-     * carries the same id as its chip (data-sidebar-right-tab and
+     * A panel body carries the same id as its chip (data-sidebar-right-tab and
      * data-dockkit-tab), so the selected chip picks the active body even while
-     * dockkit keeps another tab's section mounted. The chip title is
-     * deliberately not read: it names the instance, the heading names the kind.
+     * dockkit keeps another tab's section mounted: a chat body mounted beside
+     * the terminal must not lend the terminal "Subagent". A mapped kind answers
+     * with the kind's localised name, because its chip names the instance
+     * ("bash", the child session's label); every other kind (#82: files, the
+     * start pane, a preview) uses the chip's own label, which upstream already
+     * translates and which is the kind's name there.
      */
-    function rightPanelHeadingKey(panel) {
+    function rightPanelHeadingLabel(panel) {
       const scope = activeRightPanelScope(panel);
       const selectedTab = scope.querySelector('[role="tab"][data-dockkit-tab][aria-selected="true"]')
         ?? scope.querySelector('[data-dockkit-tab][aria-selected="true"]');
+      const chip = selectedTab === null || selectedTab === undefined
+        ? ""
+        : String(selectedTab.textContent || "").trim();
       const selected = selectedTab === null || selectedTab === undefined
         ? null
         : selectedTab.getAttribute("data-dockkit-tab");
-      // The selected chip decides through its own body (#93). Without this, a
-      // chat body that dockkit keeps mounted for another tab would answer as
-      // the fallback and put "Subagent" above the terminal. A selected tab of
-      // an unnamed kind (terminal, preview, file) answers "" and gets no
-      // heading at all.
       if (selected !== null) {
-        const selectedBody = scope.querySelector(`[data-sidebar-right-tab="${selected}"]`);
+        // The chip carries the same attribute on its title span, and the strip
+        // comes first in document order: the body is the match outside it.
+        const selectedBody = [...scope.querySelectorAll(`[data-sidebar-right-tab="${selected}"]`)]
+          .find((node) => node.closest('[role="tablist"]') === null && node.closest("[data-dockkit-tab]") === null)
+          ?? null;
         if (selectedBody !== null) {
           for (const [attribute, key] of Object.entries(RIGHT_PANEL_HEADING_KEYS)) {
-            if (selectedBody.hasAttribute(attribute) || selectedBody.querySelector(`[${attribute}]`) !== null) return key;
+            if (selectedBody.hasAttribute(attribute) || selectedBody.querySelector(`[${attribute}]`) !== null) return t(key);
           }
-          return "";
+          return chip;
         }
       }
       // A build that puts no wrapper on the selected tab: name the first
-      // visible body of a named kind, as before.
+      // visible body of a named kind, else the chip.
       for (const [attribute, key] of Object.entries(RIGHT_PANEL_HEADING_KEYS)) {
         for (const body of scope.querySelectorAll(`[${attribute}]`)) {
-          if (body.closest("[hidden]") === null) return key;
+          if (body.closest("[hidden]") === null) return t(key);
         }
       }
-      return "";
+      return chip;
     }
 
     /**
@@ -4615,9 +4634,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * another node, or the module tears down. The panel itself carries the
      * safe-area padding, so the heading only supplies its own gutters.
      *
-     * #93: the terminal is not a named kind any more, so opening one (or
-     * switching to one) goes through the removal branch below; the terminal
-     * keeps the close X and the tab strip.
+     * #82: every tab kind gets one (the child session, the terminal and every
+     * kind named by its own chip such as files); only a tab that cannot name
+     * itself keeps the strip alone.
      */
     function decorateRightPanelHeading() {
       const open = document.documentElement.hasAttribute("data-rdsh-rightpanel-open");
@@ -4628,14 +4647,13 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // A split dock spans the phone as one row; the heading belongs at the
       // top of the pane that owns the focused tab, which is always a column.
       const scope = activeRightPanelScope(rightPanelNode);
-      const key = rightPanelHeadingKey(scope);
-      if (key === "") {
-        // A terminal or file/preview tab takes the strip back: refit the
-        // terminal that a previous heading shortened, if one is still mounted.
+      const label = rightPanelHeadingLabel(scope);
+      if (label === "") {
+        // An unnamed tab takes the strip back: refit the terminal that a
+        // previous heading shortened, if one is still mounted.
         if (removeRightPanelHeading()) scheduleTerminalFit();
         return;
       }
-      const label = t(key);
       let heading = rightPanelHeadingNode;
       if (heading === null || !heading.isConnected || heading.parentElement !== scope) {
         removeRightPanelHeading();
@@ -9132,6 +9150,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           if (scrolledLeftAncestor(target) !== null) return;
           if (target.closest("input, textarea, [contenteditable=true], .xterm, [class*='xterm']") !== null) return;
         }
+        // #59: a docked panel (landscape) shares the screen with the
+        // conversation. Only a swipe that starts on the panel closes it; a
+        // swipe on the chat keeps the chat's own gesture instead of reaching
+        // across the split and collapsing the column under the finger.
+        const dock = rightPanelNode === null ? null : rightPanelNode.getBoundingClientRect();
+        if (dock !== null && dock.width > 0 && dock.width < window.innerWidth * 0.85 && touch.clientX < dock.left) return;
         edgeSwipe = { x: touch.clientX, y: touch.clientY, fromRight: false, closesPanel: true };
         return;
       }
@@ -13905,12 +13929,10 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
        it to this full-width pane as well double-insets the panel (and cost 47px
        of height in portrait). */
   }
-  /* #82: name the kind of panel above dockkit's tab strip. #93: the terminal
-     gets no heading (its chip already says "bash"), so this rule only styles
-     the child-session panel now. The panel already applies the safe-area
-     insets; the heading only adds its own gutters. It is pointer-transparent
-     and sits outside the strip and the panel body, so it cannot claim a tab
-     drag or resize the xterm mount. */
+  /* #82: name the kind of panel above dockkit's tab strip, per tab kind. The
+     panel already applies the safe-area insets; the heading only adds its own
+     gutters. It is pointer-transparent and sits outside the strip and the
+     panel body, so it cannot claim a tab drag or resize the xterm mount. */
   [data-rdsh-rightpanel] [data-rdsh-panel-heading] {
     flex: 0 0 auto;
     box-sizing: border-box;
@@ -14025,11 +14047,14 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
     word-break: break-word !important;
   }
 
-  /* Two controls in the panel header duplicate what the phone already is or
-     cannot do: "Exit fullscreen" closes the panel exactly like the ✕ next to
-     it, and "Split" needs width the phone does not have. Keep only the ✕. */
-  ${RIGHT_PANEL_EXIT},
-  ${RIGHT_PANEL_SPLIT} { display: none !important; }
+  /* "Split" needs width a phone does not have, and this plugin uses the docked
+     column as its tablet layout instead of dockkit's pane split, so it stays
+     hidden everywhere on mobile (#59, #72). "Exit fullscreen" is deliberately
+     NOT hidden here any more (#72): hiding it "because the ✕ is next to it"
+     also hid the only way back from a fullscreen panel once the tablet tier's
+     show rule lost to this later hide. It closes the panel exactly like the ✕
+     on a phone, and docks the panel again on a tablet. */
+  [data-dockkit-split-button] { display: none !important; }
 
   /* The native strip already contains the home indicator. */
   html[data-rdsh-native-gap] [data-rdsh-sidebar],
@@ -14274,6 +14299,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           if (window.innerWidth !== gestureWidth) {
             gestureWidth = window.innerWidth;
             resetGestures();
+            resetRightPanelPromotion();
           }
           onLayoutResize();
         };
@@ -14281,6 +14307,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           gestureWidth = window.innerWidth;
           if (!phone()) return;
           resetGestures();
+          resetRightPanelPromotion();
           onLayoutResize();
         };
         // #76: iPadOS standalone can dismiss the soft keyboard while the

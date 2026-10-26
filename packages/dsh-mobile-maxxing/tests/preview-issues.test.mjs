@@ -1221,6 +1221,9 @@ test("#81 a desktop leaves the wrap state and the code scroller alone", () => {
 const PANEL_KINDS = {
 	terminal: { tabId: "tab-terminal", chip: "Terminal 1", tag: "section", attribute: "data-sidebar-terminal" },
 	subagent: { tabId: "tab-chat", chip: "Fix the bug", tag: "div", attribute: "data-sidebar-chat" },
+	// #82: the file tree has no stable body attribute; its chip label is the
+	// kind's name ("ファイル" / "Files") and upstream translates it.
+	files: { tabId: "tab-files", chip: "Files", tag: "div", attribute: null },
 };
 
 function sidebarHeadRect(env) {
@@ -1260,6 +1263,9 @@ function makeSidebarPanel(env, { type = "terminal" } = {}) {
 		const chip = document.createElement("div");
 		chip.setAttribute("role", "tab");
 		chip.setAttribute("data-dockkit-tab", kind.tabId);
+		// Upstream repeats the id on the chip's title span; the body is the
+		// other match and the only one that can name the kind (#82).
+		chip.setAttribute("data-sidebar-right-tab", kind.tabId);
 		chip.setAttribute("aria-selected", name === type ? "true" : "false");
 		chip.textContent = kind.chip;
 		chips.set(name, chip);
@@ -1274,7 +1280,7 @@ function makeSidebarPanel(env, { type = "terminal" } = {}) {
 	const body = document.createElement("div");
 	body.setAttribute("data-sidebar-right-tab", PANEL_KINDS[type].tabId);
 	const typeNode = document.createElement(PANEL_KINDS[type].tag);
-	typeNode.setAttribute(PANEL_KINDS[type].attribute, "");
+	if (PANEL_KINDS[type].attribute !== null) typeNode.setAttribute(PANEL_KINDS[type].attribute, "");
 	body.append(typeNode);
 	pane.append(strip, body);
 	panel.append(pane);
@@ -1292,7 +1298,7 @@ function switchSidebarPanel(env, fixture, type) {
 	fixture.body.setAttribute("data-sidebar-right-tab", kind.tabId);
 	for (const old of fixture.body.querySelectorAll("[data-sidebar-terminal], [data-sidebar-chat]")) old.remove();
 	const typeNode = env.document.createElement(kind.tag);
-	typeNode.setAttribute(kind.attribute, "");
+	if (kind.attribute !== null) typeNode.setAttribute(kind.attribute, "");
 	fixture.body.append(typeNode);
 	fixture.typeNode = typeNode;
 }
@@ -1306,14 +1312,19 @@ function collapsedRect() {
 	return { x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0 };
 }
 
-test("#82/#93 the heading names the child session and leaves the terminal alone", () => {
+test("#82 the heading names every tab kind and follows the display language", () => {
 	const env = boot();
 	const fixture = makeSidebarPanel(env);
 	env.api.decorateNow();
-	// #93: the terminal chip already names the shell ("bash"), so the panel has
-	// no heading of its own and keeps that whole band for xterm.
-	assert.equal(panelHeading(env), null, "a terminal panel got a heading");
-	assert.equal(fixture.pane.children[0], fixture.strip, "something was inserted above the terminal tab strip");
+	// #82: the terminal chip names the shell ("bash"), so the heading above the
+	// strip names the kind and xterm keeps the band below it.
+	const terminal = panelHeading(env);
+	assert.notEqual(terminal, null, "a terminal panel got no heading");
+	assert.equal(terminal.textContent, "Terminal");
+	assert.equal(terminal.parentElement, fixture.pane, "the terminal heading is not at the top of the panel");
+	assert.equal(fixture.pane.children[0], terminal, "the terminal heading does not lead the panel");
+	assert.equal(fixture.strip.contains(terminal), false, "the terminal heading sits inside the tab strip");
+	assert.notEqual(terminal.textContent, fixture.chips.get("terminal").textContent, "the terminal heading repeated the chip");
 
 	switchSidebarPanel(env, fixture, "subagent");
 	env.api.decorateNow();
@@ -1334,13 +1345,38 @@ test("#82/#93 the heading names the child session and leaves the terminal alone"
 	env.sandbox.__RDSH_PWA_LANG__ = "ja";
 	env.api.decorateNow();
 	assert.equal(heading.textContent, "サブエージェント");
-
-	// Switching back to the terminal takes the heading down again (#93).
 	switchSidebarPanel(env, fixture, "terminal");
 	env.api.decorateNow();
-	assert.equal(panelHeading(env), null, "the heading survived the switch back to the terminal");
-	assert.equal(heading.isConnected, false, "the old heading stayed in the document");
-	assert.equal(env.document.querySelectorAll("[data-rdsh-panel-heading]").length, 0);
+	assert.equal(panelHeading(env).textContent, "ターミナル", "the ja terminal heading is missing");
+	assert.equal(env.document.querySelectorAll("[data-rdsh-panel-heading]").length, 1, "the tab change added a second heading");
+	env.dispose();
+});
+
+test("#82 a tab without a named kind uses its own chip label", () => {
+	const env = boot();
+	const fixture = makeSidebarPanel(env, { type: "files" });
+	env.api.decorateNow();
+	const heading = panelHeading(env);
+	assert.notEqual(heading, null, "the file tree got no heading");
+	assert.equal(heading.textContent, "Files");
+	assert.equal(heading.parentElement, fixture.pane);
+	assert.equal(fixture.pane.children[0], heading, "the files heading does not lead the panel");
+	assert.equal(heading.closest("[data-sidebar-right-tab]"), null, "the heading is inside the file tree body");
+
+	// The chip label is upstream's, so an app-language switch relabels both.
+	fixture.chips.get("files").textContent = "ファイル";
+	env.api.decorateNow();
+	assert.equal(panelHeading(env).textContent, "ファイル", "the heading did not follow the chip's language");
+	env.dispose();
+});
+
+test("#82 a tab that cannot name itself keeps the strip alone", () => {
+	const env = boot();
+	const fixture = makeSidebarPanel(env, { type: "files" });
+	fixture.chips.get("files").textContent = "";
+	env.api.decorateNow();
+	assert.equal(panelHeading(env), null, "an unnamed tab got a heading");
+	assert.equal(fixture.pane.children[0], fixture.strip, "something was inserted above the unnamed tab strip");
 	env.dispose();
 });
 
@@ -1364,10 +1400,9 @@ test("#93 a mounted chat body does not lend the terminal its heading", () => {
 	mountSidebarBody(env, fixture, "subagent");
 
 	env.api.decorateNow();
-	assert.equal(panelHeading(env), null, "the mounted chat body gave the terminal a heading");
-	assert.equal(fixture.pane.children[0], fixture.strip, "a heading was inserted above the terminal tabs");
+	assert.equal(panelHeading(env).textContent, "Terminal", "the mounted chat body named the terminal");
 
-	// Selecting the chat chip puts the heading back while the terminal body
+	// Selecting the chat chip names the kind on screen, while the terminal body
 	// stays mounted beside it.
 	fixture.chips.get("terminal").setAttribute("aria-selected", "false");
 	fixture.chips.get("subagent").setAttribute("aria-selected", "true");
@@ -1377,11 +1412,11 @@ test("#93 a mounted chat body does not lend the terminal its heading", () => {
 	assert.equal(heading.textContent, "Subagent");
 	assert.equal(heading.parentElement, fixture.pane);
 
-	// Back to the terminal with both bodies still mounted: it goes away again.
+	// Back to the terminal with both bodies still mounted.
 	fixture.chips.get("terminal").setAttribute("aria-selected", "true");
 	fixture.chips.get("subagent").setAttribute("aria-selected", "false");
 	env.api.decorateNow();
-	assert.equal(panelHeading(env), null, "the chat heading stayed above the terminal");
+	assert.equal(panelHeading(env).textContent, "Terminal", "the chat heading stayed above the terminal");
 	env.dispose();
 });
 
@@ -1440,24 +1475,26 @@ test("#82 closing and disposing remove the heading; reopening adds it back", () 
 	assert.equal(panelHeading(env), null, "dispose left the heading in the document");
 });
 
-test("#93 a terminal stays heading-free across close, reopen and dispose", () => {
+test("#82 the terminal heading follows close, reopen and dispose", () => {
 	const env = boot();
 	const fixture = makeSidebarPanel(env, { type: "terminal" });
 	env.api.decorateNow();
-	assert.equal(panelHeading(env), null, "a terminal panel got a heading");
+	assert.equal(panelHeading(env).textContent, "Terminal", "a terminal panel got no heading");
 
-	// Closing and reopening the panel must not resurrect it either.
+	// Closing the panel takes the heading down with the surface.
 	fixture.pane.getBoundingClientRect = collapsedRect;
 	env.api.decorateNow();
-	assert.equal(panelHeading(env), null, "the closed terminal panel gained a heading");
+	assert.equal(panelHeading(env), null, "the closed terminal panel kept its heading");
 	assert.equal(fixture.pane.hasAttribute("data-rdsh-rightpanel"), false, "the closed panel kept its mobile hook");
 
+	// Reopening it names the kind again, above the strip the terminal keeps.
 	fixture.pane.getBoundingClientRect = fixture.full;
 	env.api.decorateNow();
-	assert.equal(panelHeading(env), null, "reopening the terminal panel restored the heading");
-	// The terminal keeps its chrome: the tab chip and the close control hold
-	// the strip, which is still the first child of the pane.
-	assert.equal(fixture.pane.children[0], fixture.strip, "the reopened terminal has a heading above its tabs");
+	const heading = panelHeading(env);
+	assert.notEqual(heading, null, "reopening the terminal panel restored no heading");
+	assert.equal(heading.textContent, "Terminal");
+	assert.equal(fixture.pane.children[0], heading, "the reopened terminal heading does not lead the pane");
+	assert.equal(fixture.pane.children[1], fixture.strip, "the tab strip is not below the heading");
 	assert.equal(fixture.strip.contains(fixture.chips.get("terminal")), true, "the terminal lost its tab chip");
 	assert.equal(fixture.strip.contains(fixture.collapse), true, "the terminal lost its close control");
 
@@ -1490,7 +1527,7 @@ test("#82 a localised collapse control still tags the panel and names its kind",
 	env.dispose();
 });
 
-test("#93 a heading left by an earlier client generation is swept from the terminal", () => {
+test("#93 a heading left by an earlier client generation is replaced by the live one", () => {
 	const env = boot();
 	const fixture = makeSidebarPanel(env, { type: "terminal" });
 	// A plugin update can swap the module without reloading the document: the
@@ -1500,15 +1537,18 @@ test("#93 a heading left by an earlier client generation is swept from the termi
 	stale.setAttribute("data-rdsh-panel-heading", "");
 	fixture.pane.insertBefore(stale, fixture.pane.firstElementChild);
 	env.api.decorateNow();
-	assert.equal(panelHeading(env), null, "the terminal kept a heading from the previous client");
+	const heading = panelHeading(env);
+	assert.notEqual(heading, null, "the terminal kept no live heading");
+	assert.equal(heading.textContent, "Terminal");
 	assert.equal(stale.isConnected, false, "the stale heading is still in the document");
+	assert.equal(env.document.querySelectorAll("[data-rdsh-panel-heading]").length, 1, "the stale heading was not swept");
 	env.dispose();
 });
 
 test("#93 removing the terminal heading refits the terminal", () => {
 	// The terminal grows by the heading height; this branch is the one path
 	// that refits it outside an already-open panel pass.
-	const at = CLIENT.indexOf('if (key === "") {');
+	const at = CLIENT.indexOf('if (label === "") {');
 	assert.notEqual(at, -1, "the heading removal branch is missing");
 	const branch = CLIENT.slice(at, CLIENT.indexOf("return;", at));
 	assert.match(branch, /removeRightPanelHeading\(\)/, "the branch does not drop the heading");

@@ -177,7 +177,10 @@ What changes:
 - The sidebar becomes an overlay drawer you open with the floating button
 - At 768px and wider the right panel uses the dock beside the conversation when the
   measured width allows it; otherwise it stays the full-screen sheet. Below 768px it is
-  always the sheet
+  always the sheet. The panel's fullscreen control stays visible, so a fullscreened panel
+  can always go back to the dock, and a rotation re-fits a docked panel to the new
+  orientation. While the panel is docked, a swipe on the conversation is left to the
+  conversation; only a swipe that starts on the panel closes it
 - Settings get a single column and a scrolling tab strip
 - The code viewer wraps by default; the header's wrap button turns that
   off and long lines scroll sideways again
@@ -192,8 +195,9 @@ What changes:
 - The composer stays above the keyboard
 - Session rows keep their actions hidden until the menu or a long press
 - Right-panel tabs are finger-sized, and the tab strip scrolls sideways
-- The phone sheet names the panel kind above the tab strip ("Terminal" or "Subagent"); other
-  tabs get no heading
+- The phone sheet names the tab's kind above the tab strip: "Terminal" and "Subagent" by
+  kind, and the tab's own label for every other kind ("Files", "Start", ...), in the display
+  language. The heading never takes a tap
 - Dragging inside the terminal scrolls it (the bundled xterm has no touch support)
 - The terminal gets a top key row for Esc, Tab, arrows and Ctrl; it stays above the keyboard.
   Ctrl applies to the next key only: Ctrl then C sends ETX (0x03) to the PTY, which an

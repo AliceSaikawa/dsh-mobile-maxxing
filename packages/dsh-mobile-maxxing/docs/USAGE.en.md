@@ -427,8 +427,9 @@ On an iPhone (2026-10-26, iOS 27.2):
 - Changing the setting alone does not affect an icon that is already installed; it keeps the
   style it was added with. Re-adding the icon drops that app's push subscription and its
   device-local settings (localStorage).
-- Only dark mode was checked; the status bar text was white. Light mode, and iOS 26 under
-  `"default"`, are unverified.
+- With the final, unpainted element the strip took the background colour and there was no
+  blur, in both light and dark mode. The status bar text is black in light mode and white in
+  dark mode. iOS 26 under `"default"` is unverified.
 
 Under `"default"` the page starts below the status bar, so the height it lacks is the status
 bar itself. Treating that as the unpainted bottom strip (`data-rdsh-native-gap`) would put the

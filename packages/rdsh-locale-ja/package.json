@@ -1,16 +1,27 @@
 {
   "name": "rdsh-locale-ja",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
-  "description": "Japanese locale foundation for DSH: upstream English snapshot and extraction tooling (stage 1 of #80).",
   "type": "module",
+  "description": "Japanese locale package for DSH. Stage 2 of #80: a safe skeleton, 83 migrated values, and development-only English fallbacks; not a complete translation.",
   "license": "MIT",
   "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
     "./locale/upstream.json": "./locale/upstream.json",
-    "./locale/namespaces/en/*.json": "./locale/namespaces/en/*.json"
+    "./locale/batches.json": "./locale/batches.json",
+    "./locale/translation-status.json": "./locale/translation-status.json",
+    "./locale/namespaces/en/*.json": "./locale/namespaces/en/*.json",
+    "./locale/namespaces/ja/*.json": "./locale/namespaces/ja/*.json"
   },
   "files": [
-    "locale",
+    "index.js",
+    "client.js",
+    "locale/upstream.json",
+    "locale/batches.json",
+    "locale/translation-status.json",
+    "locale/namespaces/en/*.json",
+    "locale/namespaces/ja/*.json",
     "README.md"
   ],
   "scripts": {
@@ -18,5 +29,34 @@
   },
   "engines": {
     "node": ">=22"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-locale"
+      ]
+    }
+  },
+  "author": "kuraneko1",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "locale",
+    "japanese",
+    "i18n"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kuraneko1/dsh-mobile-maxxing.git",
+    "directory": "packages/rdsh-locale-ja"
+  },
+  "homepage": "https://github.com/kuraneko1/dsh-mobile-maxxing/tree/main/packages/rdsh-locale-ja#readme",
+  "bugs": {
+    "url": "https://github.com/kuraneko1/dsh-mobile-maxxing/issues"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-client-locale": "0.2.1-rc.2"
   }
 }

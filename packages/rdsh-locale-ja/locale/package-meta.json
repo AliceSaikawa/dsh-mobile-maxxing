@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "name": "rdsh-locale-ja",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Japanese locale package for DSH. Stage 2 of #80: a safe skeleton, 83 migrated values, and development-only English fallbacks; not a complete translation.",
+  "license": "MIT",
+  "nodeEngine": ">=22",
+  "author": "kuraneko1",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "locale",
+    "japanese",
+    "i18n"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kuraneko1/dsh-mobile-maxxing.git",
+    "directory": "packages/rdsh-locale-ja"
+  },
+  "homepage": "https://github.com/kuraneko1/dsh-mobile-maxxing/tree/main/packages/rdsh-locale-ja#readme",
+  "bugs": {
+    "url": "https://github.com/kuraneko1/dsh-mobile-maxxing/issues"
+  }
+}

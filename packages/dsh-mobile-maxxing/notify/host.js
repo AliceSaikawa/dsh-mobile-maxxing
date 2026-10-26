@@ -740,6 +740,29 @@ export function applyNotify(ctx, config) {
 	/** Enough remembered origins for two apps plus a proxy and a stale tab. */
 	const MAX_OWN_ORIGINS = 8;
 
+	/**
+	 * How long one visibility report keeps a device out of the fan-out.
+	 *
+	 * The client re-reports every 20s while visible; 45s leaves room for one
+	 * dropped request (or a suspended timer) without pushing to an app that is
+	 * still on screen. A hidden page reports false immediately.
+	 */
+	const VISIBILITY_LEASE_MS = 45_000;
+
+	/** Endpoint -> the moment its visibility lease expires, in ms. */
+	const visibleUntil = new Map();
+
+	/** A hard cap: a client that invents endpoints cannot grow the map. */
+	const MAX_VISIBILITY_LEASES = 64;
+
+	/** Drop leases that have expired; called on report and on every fan-out. */
+	function pruneVisibilityLeases() {
+		const now = Date.now();
+		for (const [endpoint, until] of visibleUntil) {
+			if (!(until > now)) visibleUntil.delete(endpoint);
+		}
+	}
+
 	/** Record one origin as the most recently served. */
 	function learnOrigin(value) {
 		const text = typeof value === "string" ? value.trim() : "";
@@ -851,7 +874,15 @@ export function applyNotify(ctx, config) {
 		}
 		const subject = store.subject(copy.subject);
 		const results = [];
+		pruneVisibilityLeases();
 		for (const subscription of subscriptions) {
+			// The app on this endpoint is on screen and shows its own banner, so
+			// a push would only add an OS notification on top of it. Count the
+			// skip as success: the client asked for in-app-only delivery.
+			if ((visibleUntil.get(subscription.endpoint) ?? 0) > Date.now()) {
+				results.push({ status: 0, ok: true, skipped: "visible" });
+				continue;
+			}
 			try {
 				const result = await sendWebPush(subscription, payload, { keys: store.keys(), subject });
 				results.push({ status: result.status, ok: result.ok });
@@ -863,7 +894,11 @@ export function applyNotify(ctx, config) {
 				results.push({ status: 0, ok: false, error: describePushError(error) });
 			}
 		}
-		return { ok: results.some((item) => item.ok), subject, results, targetOrigin };
+		const everyDelivered = results.every((item) => item.ok);
+		const skipped = results.length > 0 && results.every((item) => item.skipped === "visible")
+			? "visible"
+			: undefined;
+		return { ok: results.length > 0 && everyDelivered, subject, results, targetOrigin, skipped };
 	}
 
 	ctx.inject(["agents"], (agentCtx) => {
@@ -1018,6 +1053,41 @@ export function applyNotify(ctx, config) {
 					// also holds the other installed origin's subscription.
 					const removed = typeof endpoint === "string" ? store.remove(endpoint, requestOrigin(req, body)) : false;
 					json(res, 200, { ok: true, removed, count: store.subscriptions().length });
+				},
+			},
+			{
+				kind: "exact",
+				path: "/api/dsh-mobile-maxxing/push/visibility",
+				handler: async (req, res) => {
+					if (!guard(req, res)) return;
+					if (req.method !== "POST") {
+						res.writeHead(405, { allow: "POST" });
+						res.end();
+						return;
+					}
+					const body = await readJsonBody(req);
+					noteOrigin(req, body);
+					const endpoint = body?.endpoint;
+					if (typeof endpoint !== "string" || endpoint.trim() === "") {
+						json(res, 400, { ok: false, error: "endpoint is required" });
+						return;
+					}
+					// Leases are per endpoint, so one visible device never
+					// silences another device that shares the origin.
+					pruneVisibilityLeases();
+					if (body.visible === true) {
+						// Re-insert so the newest lease is also the last evicted.
+						visibleUntil.delete(endpoint);
+						visibleUntil.set(endpoint, Date.now() + VISIBILITY_LEASE_MS);
+						while (visibleUntil.size > MAX_VISIBILITY_LEASES) {
+							const oldest = visibleUntil.keys().next().value;
+							if (oldest === undefined) break;
+							visibleUntil.delete(oldest);
+						}
+					} else {
+						visibleUntil.delete(endpoint);
+					}
+					json(res, 200, { ok: true, visible: body.visible === true, count: visibleUntil.size });
 				},
 			},
 			{

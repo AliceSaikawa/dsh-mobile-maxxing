@@ -897,7 +897,7 @@ class FakeCacheStorage {
 }
 
 /** Load sw.js into a sandbox that looks like one service-worker global. */
-function loadServiceWorker({ origin, build = "build-a", cacheStorage, network = "ok", clients = [] }) {
+function loadServiceWorker({ origin, build = "build-a", cacheStorage, network = "ok", clients = [], timers = {} }) {
 	const listeners = new Map();
 	const shown = [];
 	const self = {
@@ -925,14 +925,8 @@ function loadServiceWorker({ origin, build = "build-a", cacheStorage, network = 
 			return { ok: true, type: "basic", clone() { return this; }, url: String(url) };
 		},
 		console,
-		setTimeout,
-		clearTimeout,
-		MessageChannel: class {
-			constructor() {
-				this.port1 = { onmessage: null };
-				this.port2 = {};
-			}
-		},
+		setTimeout: timers.setTimeout ?? setTimeout,
+		clearTimeout: timers.clearTimeout ?? clearTimeout,
 	};
 	vm.createContext(context);
 	new vm.Script(SW_SOURCE, { filename: "sw.js" }).runInContext(context);
@@ -940,11 +934,11 @@ function loadServiceWorker({ origin, build = "build-a", cacheStorage, network = 
 }
 
 /** Run one lifecycle event and wait for its work. */
-async function fire(listeners, type) {
+async function fire(listeners, type, data) {
 	const work = [];
 	const listener = listeners.get(type);
 	assert.ok(listener !== undefined, `the ${type} listener is mounted`);
-	listener({ waitUntil(promise) { work.push(promise); } });
+	listener({ data: data === undefined ? null : { json: () => data }, waitUntil(promise) { work.push(promise); } });
 	await Promise.all(work);
 }
 
@@ -1091,19 +1085,35 @@ test("an offline launch falls back to the cached shell, not the network error", 
 test("#25 a visible window receives the hand-off and no system notification is shown", async () => {
 	const origin = "https://app.test";
 	const storage = new FakeCacheStorage(origin);
+	const payload = { title: "Session A", body: "Turn finished", sessionId: "s1", kind: "turn-end" };
 	const posted = [];
-	const clients = [{ visibilityState: "visible", postMessage(message) { posted.push(message); } }];
-	const { listeners, shown } = loadServiceWorker({ origin, cacheStorage: storage, clients });
-	await fire(listeners, "push");
+	const timers = [];
+	const clients = [{ visibilityState: "visible", postMessage(...args) { posted.push(args); } }];
+	const { listeners, shown } = loadServiceWorker({
+		origin,
+		cacheStorage: storage,
+		clients,
+		timers: { setTimeout: (...args) => { timers.push(args); return setTimeout(...args); } },
+	});
+	await fire(listeners, "push", payload);
 	assert.equal(posted.length, 1, "the visible window did not receive the hand-off");
-	assert.equal(posted[0].type, "dsh-mobile-maxxing:notify");
-	assert.equal(shown.length, 0, "a system notification was shown while the app was visible");
+	const [message, transfer] = posted[0];
+	assert.deepEqual({ ...message }, { type: "dsh-mobile-maxxing:notify", ...payload });
+	assert.equal(transfer, undefined, "the hand-off transferred an ack port");
+	assert.deepEqual(timers, [], "the hand-off waited for an ack timer instead of returning");
+	assert.equal(shown.length, 0, "a system notification was shown while the app is visible");
 });
 
 test("#25 with no visible window the push falls back to the system notification", async () => {
 	const origin = "https://app.test";
 	const storage = new FakeCacheStorage(origin);
+	const payload = { title: "Session A", body: "Turn finished", sessionId: "s1", kind: "turn-end" };
 	const { listeners, shown } = loadServiceWorker({ origin, cacheStorage: storage, clients: [] });
-	await fire(listeners, "push");
+	await fire(listeners, "push", payload);
 	assert.equal(shown.length, 1, "the background push did not reach the system banner");
+	const [title, options] = shown[0];
+	assert.equal(title, payload.title, "the system banner lost the title");
+	assert.equal(options.body, payload.body, "the system banner lost the body");
+	assert.equal(options.data.sessionId, payload.sessionId, "the system banner lost the session");
+	assert.equal(options.tag, `dsh-mobile-maxxing:${payload.sessionId}`, "the system banner lost its per-session tag");
 });

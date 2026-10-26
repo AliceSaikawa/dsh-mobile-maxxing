@@ -291,7 +291,8 @@ window.__ModuleLoader__.load({
      * a new worker instead of reusing the bytes it already has (#25). Bump this
      * whenever the worker's push handling changes.
      */
-    const SW_REVISION = "20261026b";
+    // Experiment: ack-less hand-off.
+    const SW_REVISION = "20261026c";
     const SW_URL = new URL(`sw.js?v=${SW_REVISION}`, SCOPE).href;
     /** Script URL of the notification plugin's worker (see unifyWorker below). */
     const PUSH_WORKER_PATH = "/push/sw.js";
@@ -5305,6 +5306,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const hasSessions = typeof useSessions === "function";
       const statuses = hasHook ? useSessionStatus((value) => value) : null;
       const sessions = hasSessions ? useSessions((value) => value) : null;
+      // The last snapshot this instance diffed. Null until the first effect
+      // run, which is the baseline and never notifies.
+      const previousStatuses = React.useRef(null);
       useEffect(() => {
         const byId = sessions !== null && sessions !== undefined ? sessions.byId : null;
         const mainIds = byId !== null && byId !== undefined && typeof byId === "object"
@@ -5331,6 +5335,19 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         document.documentElement.toggleAttribute("data-rdsh-sessions-hook", hasSessions);
         globalThis.__RDSH_MOBILE_UX_BADGE__ = { total, main, subagents: Math.max(0, total - main), runningSubagents, mainIds: mainIds === null ? null : [...mainIds] };
         scheduleDecorate();
+        // Local banners: the status store already knows a turn ended or a
+        // question arrived, so the page can say so without the worker's push.
+        // The first pass only records the baseline; emitLocalNotices owns its
+        // own try/catch and notifyUser owns the visibility gate.
+        try {
+          const previous = previousStatuses.current;
+          previousStatuses.current = statuses;
+          if (previous !== null && previous !== undefined) {
+            emitLocalNotices(previous, statuses, byId);
+          }
+        } catch (error) {
+          console.error("[rdsh-mobile-ux] local notification diff failed", error);
+        }
       }, [statuses, sessions, hasHook, hasSessions]);
       return null;
     }
@@ -8755,9 +8772,19 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     async function sendTestNotification() {
+      // The in-app banner is the path a visible app actually uses, and it
+      // needs neither a push subscription nor notification permission, so
+      // raise it first. The push below is deduplicated against this banner.
+      const sessionId = currentSessionId ?? "";
+      const local = notifyUser({
+        title: t("notify.testTitle"),
+        body: t("notify.testBody"),
+        sessionId,
+        kind: "test",
+      });
       // A local showNotification always succeeds, so it proves nothing about
-      // the push path. Ask the host to push for real, and fall back to the
-      // local notification only when the host has no such route.
+      // the push path. Ask the host to push for real; a missing route falls
+      // back to the local notification below.
       let pushed = null;
       try {
         const response = await fetch(`${PUSH_API}/test`, {
@@ -8766,7 +8793,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           // Carrying the id makes the test banner tappable: it opens the same
           // session a real notification would. The origin tells the host which
           // installed app is asking, so the push cannot reach the other one.
-          body: JSON.stringify({ sessionId: currentSessionId ?? "", origin: location.origin }),
+          body: JSON.stringify({ sessionId, origin: location.origin }),
         });
         if (response.status !== 404 && response.status !== 405) {
           pushed = await response.json();
@@ -8780,26 +8807,24 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         const detail = result === null || result === undefined
           ? String(pushed.error ?? t("notify.unknownError"))
           : `${result.status || "-"} ${result.error ?? ""}`.trim();
+        // The banner already proved the foreground path; a rejected push is a
+        // background-delivery problem, not a failed test.
+        if (local) {
+          console.warn("[dsh-mobile-maxxing] test push failed:", detail);
+          return;
+        }
         throw new Error(t("notify.rejected", { detail }));
       }
-      // No host route: still prove the two local paths, which is what the
-      // user will actually see.
-      const shown = notifyUser({
-        title: t("notify.testTitle"),
-        body: t("notify.testBody"),
-        sessionId: currentSessionId ?? "",
-        kind: "test",
+      // No banner and no host route: the system notification is the only
+      // remaining way to show the test.
+      const registration = await navigator.serviceWorker.getRegistration();
+      if (registration === null || registration === undefined) throw new Error(t("notify.noWorker"));
+      await registration.showNotification(t("notify.testTitle"), {
+        body: t("notify.testLocalBody"),
+        icon: "pwa/icon-192.png",
+        badge: "pwa/badge-96.png",
+        tag: "rdsh-mobile-ux:test",
       });
-      if (!shown) {
-        const registration = await navigator.serviceWorker.getRegistration();
-        if (registration === null || registration === undefined) throw new Error(t("notify.noWorker"));
-        await registration.showNotification(t("notify.testTitle"), {
-          body: t("notify.testLocalBody"),
-          icon: "pwa/icon-192.png",
-          badge: "pwa/badge-96.png",
-          tag: "rdsh-mobile-ux:test",
-        });
-      }
     }
 
     // ---------------------------------------------------------------------
@@ -8816,6 +8841,85 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     // Relative to the page so a deployment under a proxy prefix (/dsh/…) keeps
     // working; every caller does fetch(`${PUSH_API}/…`).
     const PUSH_API = "api/dsh-mobile-maxxing/push";
+
+    /** How long one visibility report keeps the host from pushing. */
+    const VISIBILITY_HEARTBEAT_MS = 20_000;
+
+    /** The 20s heartbeat timer id, or null while it is not running. */
+    let visibilityHeartbeat = null;
+    /** Whether this page already owns the visibility listener. */
+    let visibilityReporting = false;
+
+    /**
+     * Tell the host whether this device's app is on screen.
+     *
+     * iOS renders an incoming web push as an OS notification even while the
+     * PWA is in the foreground, so a visible device must be skipped at the
+     * source. The lease is keyed by endpoint: another device that shares the
+     * same origin still gets its push. Silent on failure — losing a lease
+     * only means the next push is delivered the old way.
+     *
+     * @param {boolean} visible - whether the page is visible now.
+     * @returns {Promise<void>}
+     */
+    async function reportVisibility(visible) {
+      try {
+        const registration = await navigator.serviceWorker.getRegistration();
+        const subscription = registration === null || registration === undefined
+          ? null
+          : await registration.pushManager.getSubscription();
+        const endpoint = typeof subscription?.endpoint === "string" ? subscription.endpoint : "";
+        // No endpoint means no push to suppress: nothing to gate.
+        if (endpoint === "") return;
+        await fetch(`${PUSH_API}/visibility`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ visible: visible === true, endpoint, origin: location.origin }),
+          keepalive: true,
+        });
+      } catch {
+        /* a visibility lease is an optimisation; never break the page for it */
+      }
+    }
+
+    /**
+     * Report now, on every visibility change, and every 20s while visible.
+     *
+     * The first report waits for the service-worker registration because the
+     * endpoint belongs to it; `ready` resolves once a worker controls the
+     * scope, and getRegistration() can still answer null during boot.
+     *
+     * @returns {() => void} stop listening and clear the heartbeat.
+     */
+    function startVisibilityReporting() {
+      if (visibilityReporting) return () => {};
+      visibilityReporting = true;
+      const sync = () => {
+        const visible = document.visibilityState === "visible";
+        void reportVisibility(visible);
+        if (visible) {
+          if (visibilityHeartbeat === null) {
+            visibilityHeartbeat = setInterval(() => void reportVisibility(true), VISIBILITY_HEARTBEAT_MS);
+          }
+        } else if (visibilityHeartbeat !== null) {
+          clearInterval(visibilityHeartbeat);
+          visibilityHeartbeat = null;
+        }
+      };
+      const worker = navigator.serviceWorker;
+      if (worker !== null && worker !== undefined && typeof worker.ready?.then === "function") {
+        worker.ready.then(sync).catch(() => {});
+      }
+      document.addEventListener("visibilitychange", sync);
+      return () => {
+        visibilityReporting = false;
+        document.removeEventListener("visibilitychange", sync);
+        if (visibilityHeartbeat !== null) {
+          clearInterval(visibilityHeartbeat);
+          visibilityHeartbeat = null;
+        }
+      };
+    }
 
     /** Preset notification sounds, synthesised — no audio files to ship. */
     const SOUND_PRESETS = {
@@ -8926,6 +9030,151 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     /** The last reason a banner was skipped, so a repeating one logs once. */
     let noticeSkipReason = "";
 
+    /** How long a local banner suppresses the same push hand-off. */
+    const LOCAL_NOTICE_DEDUP_MS = 4000;
+    /** Recently shown banners: `sessionId|kind` → timestamp. */
+    const recentLocalNotices = new Map();
+    /** The map stays small; expired entries are dropped before the oldest. */
+    const LOCAL_NOTICE_CACHE_MAX = 64;
+
+    /** The dedup key for one banner, or "" when it cannot be one. */
+    function localNoticeKey(sessionId, kind) {
+      if (typeof sessionId !== "string" || sessionId === "") return "";
+      if (typeof kind !== "string" || kind === "") return "";
+      return `${sessionId}|${kind}`;
+    }
+
+    /** Remember that a banner for this session and kind is on screen now. */
+    function markLocalNotice(sessionId, kind) {
+      const key = localNoticeKey(sessionId, kind);
+      if (key === "") return;
+      const now = Date.now();
+      recentLocalNotices.set(key, now);
+      if (recentLocalNotices.size <= LOCAL_NOTICE_CACHE_MAX) return;
+      for (const [existing, at] of recentLocalNotices) {
+        if (now - at >= LOCAL_NOTICE_DEDUP_MS) recentLocalNotices.delete(existing);
+      }
+      while (recentLocalNotices.size > LOCAL_NOTICE_CACHE_MAX) {
+        const oldest = recentLocalNotices.keys().next().value;
+        if (oldest === undefined) break;
+        recentLocalNotices.delete(oldest);
+      }
+    }
+
+    /** Whether this page already showed that banner moments ago. */
+    function localNoticeRecent(sessionId, kind) {
+      const key = localNoticeKey(sessionId, kind);
+      if (key === "") return false;
+      const at = recentLocalNotices.get(key);
+      if (at === undefined) return false;
+      return Date.now() - at < LOCAL_NOTICE_DEDUP_MS;
+    }
+
+    /**
+     * Diff two status snapshots into the banners worth raising locally.
+     *
+     * This is the push-independent path: the status store already changes on
+     * every turn end and every new question, so the page can announce them
+     * without waiting for the worker. Pure and total — a missing map, entry or
+     * field yields no notice instead of throwing — so the diff is testable
+     * without a React shell.
+     *
+     * Root sessions only: a subagent's turn is reported through its parent,
+     * and animating a banner for every child would bury the real ones. The
+     * first render has no previous map, and a re-run with the same map
+     * identity is not a transition; both answer [].
+     *
+     * @param {Map<string, object>|null} previousStatuses - last render's map.
+     * @param {Map<string, object>|null} statuses - this render's map.
+     * @param {object|null} byId - `sessions.byId`, for origin and title.
+     * @param {(key: string) => string} strings - the copy lookup (`t`).
+     * @returns {Array<{title: string, body: string, sessionId: string, kind: string}>}
+     */
+    function localNotices(previousStatuses, statuses, byId, strings) {
+      const notices = [];
+      if (previousStatuses === null || previousStatuses === undefined) return notices;
+      if (statuses === null || statuses === undefined) return notices;
+      if (previousStatuses === statuses) return notices;
+      if (typeof previousStatuses.get !== "function" || typeof statuses.entries !== "function") return notices;
+      const label = (key, fallback) => {
+        try {
+          const value = typeof strings === "function" ? strings(key) : undefined;
+          return typeof value === "string" && value !== "" && value !== key ? value : fallback;
+        } catch {
+          return fallback;
+        }
+      };
+      const sessionTitle = (row) => (row !== null && typeof row === "object" && typeof row.title === "string"
+        ? row.title.trim()
+        : "");
+      let entries;
+      try {
+        entries = [...statuses.entries()];
+      } catch {
+        return notices;
+      }
+      for (const [sessionId, status] of entries) {
+        if (typeof sessionId !== "string" || sessionId === "") continue;
+        let row = null;
+        if (byId !== null && byId !== undefined && typeof byId === "object") {
+          try {
+            row = byId[sessionId];
+          } catch {
+            row = null;
+          }
+        }
+        // Unknown rows are roots: only a known subagent is skipped.
+        if (row !== null && typeof row === "object" && row.origin === "subagent") continue;
+        let previous = null;
+        try {
+          previous = previousStatuses.get(sessionId);
+        } catch {
+          previous = null;
+        }
+        const wasRunning = previous !== null && previous !== undefined && typeof previous === "object" && previous.running === true;
+        const isRunning = status !== null && status !== undefined && typeof status === "object" && status.running === true;
+        const hadInteraction = previous !== null && previous !== undefined && typeof previous === "object"
+          && previous.pendingInteraction !== null && previous.pendingInteraction !== undefined;
+        const hasInteraction = status !== null && status !== undefined && typeof status === "object"
+          && status.pendingInteraction !== null && status.pendingInteraction !== undefined;
+        const title = sessionTitle(row);
+        if (!hadInteraction && hasInteraction) {
+          // A question is the one thing that needs the user, so it wins a
+          // snapshot that also ends a turn (one banner, one sound).
+          const fallback = label("notify.questionHeader", "Confirm");
+          notices.push({
+            sessionId,
+            kind: "question",
+            title: title !== "" ? title : fallback,
+            body: fallback,
+          });
+        } else if (wasRunning && !isRunning) {
+          notices.push({
+            sessionId,
+            kind: "turn-end",
+            title: title !== "" ? title : label("notify.turn.completed", "Work finished"),
+            body: label("notify.turn.detailCompleted", "The work finished."),
+          });
+        }
+      }
+      return notices;
+    }
+
+    /**
+     * Raise the local banners for one status transition.
+     *
+     * The thin half of the watcher: the diff above decides, `notifyUser` gates
+     * on visibility, plays the sound and renders the banner. Wrapped whole so
+     * a broken store entry can never take the overlay down.
+     */
+    function emitLocalNotices(previousStatuses, statuses, byId) {
+      try {
+        for (const notice of localNotices(previousStatuses, statuses, byId, t)) notifyUser(notice);
+      } catch (error) {
+        console.error("[rdsh-mobile-ux] local notification failed", error);
+      }
+    }
+
     /**
      * Say why an in-app banner was not shown, once per reason.
      *
@@ -9006,6 +9255,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           },
         },
       ));
+      // Remember it so the worker's hand-off for the same event does not
+      // stack a second banner on top of this one.
+      markLocalNotice(sessionId, kind);
       // A banner made it: the next failure is news again.
       noticeSkipReason = "";
       return true;
@@ -9177,11 +9429,20 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const data = event?.data;
       if (data === null || typeof data !== "object") return;
       if (NOTIFY_MESSAGES.includes(data.type)) {
+        const sessionId = typeof data.sessionId === "string" ? data.sessionId : "";
+        const kind = typeof data.kind === "string" ? data.kind : "notice";
+        // The local watcher may have announced this exact event a moment ago.
+        // The hand-off still gets its acknowledgement (a banner for it was
+        // rendered), but it must not stack a second one on top.
+        if (localNoticeRecent(sessionId, kind)) {
+          event?.ports?.[0]?.postMessage("shown");
+          return;
+        }
         const shown = notifyUser({
           title: typeof data.title === "string" ? data.title : "DSH",
           body: typeof data.body === "string" ? data.body : "",
-          sessionId: typeof data.sessionId === "string" ? data.sessionId : "",
-          kind: typeof data.kind === "string" ? data.kind : "notice",
+          sessionId,
+          kind,
         });
         // The worker shows a system banner unless we take the notification, so
         // acknowledge only when a banner was actually rendered.
@@ -11172,6 +11433,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
 
         scheduleDecorate();
         void refreshNotificationStatus();
+        const stopVisibilityReporting = startVisibilityReporting();
 
         globalThis.__RDSH_MOBILE_UX__ = {
           get state() { return { ...state }; },
@@ -11201,6 +11463,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           openDrawer: toggleDrawer,
           enableNotifications,
           sendTestNotification,
+          reportVisibility,
         };
 
         return () => {
@@ -11241,6 +11504,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             document.removeEventListener("pointermove", onPointerMove, true);
             document.removeEventListener("focusout", onModelFocusOut, true);
             media.removeEventListener("change", onMedia);
+            stopVisibilityReporting();
             // Invalidate any decorate frame queued before this teardown. The
             // frame checks `live` before touching the DOM, so it cannot undo
             // the cleanup below.
@@ -11294,6 +11558,20 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         disposeWorkspaceTools,
         filesMenu: () => filesMenu,
         filesSearch: () => filesSearch,
+      };
+    }
+
+    // Test seam for the push-independent notifications. The diff is a plain
+    // function, but rendering the banner needs React and a DOM; a harness that
+    // sets this flag before load gets the same closures production uses.
+    // Nothing reads it in a normal page.
+    const noticeTestHook = globalThis.__RDSH_NOTICE_TEST__;
+    if (noticeTestHook !== null && typeof noticeTestHook === "object") {
+      noticeTestHook.notice = {
+        localNotices,
+        emitLocalNotices,
+        onWorkerMessage,
+        localNoticeRecent,
       };
     }
 

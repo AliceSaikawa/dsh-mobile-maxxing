@@ -520,6 +520,153 @@ test("a broken push store does not stop the PWA routes", async () => {
 	assert.ok(routes.has("/sw.js"));
 });
 
+/**
+ * Boot applyNotify for the visibility tests: a temp DSH_HOME with the given
+ * endpoints subscribed to one origin, a fetch stub that records every send,
+ * and the registered routes.
+ */
+function visibilityHarness(endpoints) {
+	const home = mkdtempSync(join(tmpdir(), "rdsh-visibility-"));
+	mkdirSync(join(home, "dsh-mobile-maxxing"), { recursive: true });
+	const store = new PushStore(join(home, "dsh-mobile-maxxing", "push.json"));
+	const add = (endpoint) => {
+		const ecdh = createECDH("prime256v1");
+		ecdh.generateKeys();
+		store.add(
+			{ endpoint, keys: { p256dh: toBase64Url(ecdh.getPublicKey()), auth: toBase64Url(randomBytes(16)) } },
+			{ origin: "https://app.example:8446" },
+		);
+	};
+	for (const endpoint of endpoints) add(endpoint);
+	const previousHome = process.env.DSH_HOME;
+	const previousFetch = globalThis.fetch;
+	process.env.DSH_HOME = home;
+	const calls = [];
+	globalThis.fetch = async (url) => {
+		calls.push(String(url));
+		return { status: 201, ok: true };
+	};
+	const listeners = new Map();
+	const routes = new Map();
+	const agent = { id: "s1" };
+	const agents = { get: (id) => (id === "s1" ? agent : undefined), roots: () => [agent] };
+	const services = {
+		agents,
+		connection: { requestRejection: () => undefined },
+		webServer: {
+			register(route) { routes.set(route.path, route); return () => routes.delete(route.path); },
+			tapIndex() { return () => {}; },
+			getOrigin: () => "https://app.example:8446",
+		},
+	};
+	const scope = {
+		...services,
+		get: (name) => services[name],
+		on(event, handler) { listeners.set(event, handler); return () => listeners.delete(event); },
+		effect(fn) { const dispose = fn(); return typeof dispose === "function" ? dispose : () => {}; },
+	};
+	const ctx = {
+		inject(deps, callback) { return callback(scope); },
+		get: (name) => services[name],
+		on(event, handler) { listeners.set(event, handler); return () => {}; },
+		effect(fn) { return scope.effect(fn); },
+	};
+	applyNotify(ctx, { onlyMobileTurns: false });
+	const post = async (path, body) => {
+		const text = body === undefined ? "" : JSON.stringify(body);
+		const req = Readable.from(text === "" ? [] : [Buffer.from(text)]);
+		req.method = "POST";
+		req.url = path;
+		req.headers = { origin: "https://app.example:8446" };
+		let status = 0;
+		let responseText = "";
+		await routes.get(path).handler(req, {
+			writeHead(code) { status = code; },
+			end(chunk) { if (typeof chunk === "string") responseText += chunk; },
+		});
+		return { status, body: responseText === "" ? null : JSON.parse(responseText) };
+	};
+	return {
+		store,
+		add,
+		routes,
+		listeners,
+		calls,
+		post,
+		restore() {
+			globalThis.fetch = previousFetch;
+			if (previousHome === undefined) delete process.env.DSH_HOME;
+			else process.env.DSH_HOME = previousHome;
+		},
+	};
+}
+
+const VISIBILITY = "/api/dsh-mobile-maxxing/push/visibility";
+const TEST_PUSH = "/api/dsh-mobile-maxxing/push/test";
+const TEST_ORIGIN = "https://app.example:8446";
+
+test("a visible lease records a skip and sends nothing to that endpoint", async () => {
+	const visibleEndpoint = "https://web.push.apple.com/visible";
+	const otherEndpoint = "https://web.push.apple.com/other";
+	const harness = visibilityHarness([visibleEndpoint]);
+	try {
+		assert.equal((await harness.post(VISIBILITY, { visible: true, endpoint: visibleEndpoint })).status, 200);
+		const only = await harness.post(TEST_PUSH, { sessionId: "s1", origin: TEST_ORIGIN });
+		assert.equal(only.status, 200);
+		assert.equal(only.body.ok, true, "a gated test push reports success for the Settings button");
+		assert.equal(only.body.skipped, "visible");
+		assert.deepEqual(only.body.results, [{ status: 0, ok: true, skipped: "visible" }]);
+		assert.deepEqual(harness.calls, [], "the visible endpoint must not be pushed to");
+
+		// visible:false clears the lease: the same endpoint is sent again.
+		assert.equal((await harness.post(VISIBILITY, { visible: false, endpoint: visibleEndpoint })).status, 200);
+		const cleared = await harness.post(TEST_PUSH, { sessionId: "s1", origin: TEST_ORIGIN });
+		assert.equal(cleared.body.ok, true);
+		assert.deepEqual(harness.calls, [visibleEndpoint]);
+
+		// A different endpoint is not silenced by another device's lease.
+		harness.add(otherEndpoint);
+		harness.calls.length = 0;
+		await harness.post(VISIBILITY, { visible: true, endpoint: visibleEndpoint });
+		const mixed = await harness.post(TEST_PUSH, { sessionId: "s1", origin: TEST_ORIGIN });
+		assert.equal(mixed.body.ok, true, "sending to the other device still succeeds");
+		assert.deepEqual(harness.calls, [otherEndpoint], "only the endpoint without a lease was pushed");
+		assert.equal(mixed.body.skipped, undefined, "a partially gated fan-out is not wholly skipped");
+	} finally {
+		harness.restore();
+	}
+});
+
+test("an expired lease still sends and an invalid endpoint is refused", async () => {
+	const gated = "https://web.push.apple.com/gated";
+	const harness = visibilityHarness([gated]);
+	const realNow = Date.now;
+	try {
+		let now = realNow();
+		Date.now = () => now;
+		assert.equal((await harness.post(VISIBILITY, { visible: true, endpoint: gated })).status, 200);
+		// Inside the lease the device is skipped...
+		assert.deepEqual((await harness.post(TEST_PUSH, { sessionId: "s1", origin: TEST_ORIGIN })).body.results, [
+			{ status: 0, ok: true, skipped: "visible" },
+		]);
+		assert.deepEqual(harness.calls, []);
+		// ...and once it expires the stale entry is pruned and the push sends.
+		now += 45_001;
+		const expired = await harness.post(TEST_PUSH, { sessionId: "s1", origin: TEST_ORIGIN });
+		assert.equal(expired.body.ok, true);
+		assert.deepEqual(expired.body.results, [{ status: 201, ok: true }]);
+		assert.deepEqual(harness.calls, [gated], "an expired lease must not keep the device silent");
+
+		// An empty or non-string endpoint is a client bug, not a lease.
+		assert.equal((await harness.post(VISIBILITY, { visible: true })).status, 400);
+		assert.equal((await harness.post(VISIBILITY, { visible: true, endpoint: 7 })).status, 400);
+		assert.equal((await harness.post(VISIBILITY, { visible: true, endpoint: "   " })).status, 400);
+	} finally {
+		Date.now = realNow;
+		harness.restore();
+	}
+});
+
 test("payload shape is what the service worker reads", () => {
 	const payload = makePayload("session-9", "question", "t", "b");
 	assert.deepEqual(Object.keys(payload).sort(), ["body", "kind", "sessionId", "title", "url"]);

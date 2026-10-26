@@ -133,6 +133,7 @@ function memoryStorage(initial = {}) {
  * nodes it cares about, and `schedule` replaces setTimeout. `requireImpl`
  * replaces the module table the bundle loads (the default answers every name
  * with a stub), `services` supplies named client services through `ctx.get`,
+ * `globals` seeds the sandbox with the flags a test seam reads before load,
  * and `log` replaces the sandbox console.
  */
 function bootClient({
@@ -157,6 +158,7 @@ function bootClient({
 	locale = null,
 	requireImpl = null,
 	services = {},
+	globals = null,
 	log = console,
 	localePacks = LOCALE_PACKS,
 } = {}) {
@@ -271,6 +273,7 @@ function bootClient({
 	// the legacy default"; contract tests pass it explicitly. `injectMode:
 	// false` models an old/absent bootstrap and must fail closed to desktop.
 	if (injectMode) sandbox.__RDSH_DEVICE_MODE__ = mode ?? (narrow ? "mobile" : "desktop");
+	if (globals !== null && typeof globals === "object") Object.assign(sandbox, globals);
 	vm.createContext(sandbox);
 
 	vm.runInContext(CLIENT, sandbox, { filename: "client.js" });
@@ -1922,4 +1925,259 @@ test("font and language availability are independent and fail soft", () => {
 	localeOnly.disposeAll();
 	assert.equal(localeOnlyService.snapshot.active, "zh");
 	assert.equal(localeOnly.sandbox.document.documentElement.lang, "zh-CN");
+});
+
+/**
+ * Push-independent local banners.
+ *
+ * `__RDSH_NOTICE_TEST__` exposes the same closures the overlay watcher runs:
+ * the pure status diff, the thin emit that renders through `notifyUser`, and
+ * the worker-message handler that must not stack a second banner. The require
+ * table is a tiny React: `createElement` keeps the props so the fake root can
+ * write the banner text into the real notice host.
+ */
+function localNoticeHarness() {
+	const rendered = [];
+	const roots = [];
+	const react = {
+		createElement: (type, props) => ({ type, props }),
+		useState: (initial) => [initial, () => {}],
+		useEffect: () => {},
+		useRef: (initial) => ({ current: initial }),
+	};
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		lang: "en",
+		copy: COPY,
+		globals: { __RDSH_NOTICE_TEST__: {} },
+		requireImpl(name) {
+			if (name === "react") return react;
+			if (name === "react-dom/client") {
+				return {
+					createRoot(container) {
+						roots.push(container);
+						return {
+							render(node) {
+								if (node === null || node === undefined) return;
+								const text = node.props?.text ?? "";
+								rendered.push(text);
+								container.textContent = text;
+							},
+						};
+					},
+				};
+			}
+			if (name === "@deepseek-ai/dsh-client-ui-primitives") return { Toast: function Toast() {} };
+			return stub();
+		},
+	});
+	const notice = booted.sandbox.__RDSH_NOTICE_TEST__?.notice;
+	assert.ok(notice, "the local notice test seam was not installed");
+	return { booted, notice, rendered, roots };
+}
+
+test("a finished root turn raises one local banner and push does not stack", () => {
+	const { booted, notice, rendered, roots } = localNoticeHarness();
+	const byId = { "root-1": { title: "Main" } };
+	const running = new Map([["root-1", { running: true }]]);
+	const idle = new Map([["root-1", { running: false }]]);
+
+	// The very first render has no baseline and must stay silent.
+	notice.emitLocalNotices(null, running, byId);
+	assert.equal(rendered.length, 0, "the baseline render raised a banner");
+
+	notice.emitLocalNotices(running, idle, byId);
+	assert.equal(rendered.length, 1, "a finished root turn raised no banner");
+	assert.equal(rendered[0], "Main — The work finished.", "title and body reached the toast");
+	assert.equal(roots.length, 1, "one banner root");
+	assert.equal(roots[0].getAttribute("data-rdsh-notice-host"), "", "the banner rendered into the notice host");
+	assert.equal(roots[0].textContent, "Main — The work finished.", "the notice host carries the banner text");
+
+	// The worker's hand-off for the same event arrives inside the 4s window.
+	notice.onWorkerMessage({
+		data: { type: "dsh-mobile-maxxing:notify", title: "Main", body: "done", sessionId: "root-1", kind: "turn-end" },
+	});
+	assert.equal(rendered.length, 1, "the push hand-off stacked a second banner");
+	booted.disposeAll();
+});
+
+test("a subagent turn end and a first render raise no local banner", () => {
+	const { booted, notice, rendered } = localNoticeHarness();
+	const byId = { "child-1": { origin: "subagent", title: "Child" } };
+	const running = new Map([["child-1", { running: true }]]);
+	const idle = new Map([["child-1", { running: false }]]);
+
+	notice.emitLocalNotices(null, running, byId);
+	assert.equal(rendered.length, 0, "the first render notified");
+	notice.emitLocalNotices(running, idle, byId);
+	assert.equal(rendered.length, 0, "a subagent turn end notified");
+	// Missing fields must not throw either.
+	assert.doesNotThrow(() => notice.emitLocalNotices(
+		new Map([["root-x", null]]),
+		new Map([["root-x", { running: false }]]),
+		null,
+	));
+	booted.disposeAll();
+});
+
+
+
+/**
+ * Boot the mobile client with a real-enough push registration so the
+ * visibility reporter can be observed: every fetch is recorded, and the
+ * heartbeat's setInterval/clearInterval are captured instead of dropped by the
+ * default stub.
+ */
+function bootVisibilityClient({ endpoint = "", initialVisibility = "visible" } = {}) {
+	const calls = [];
+	const intervals = [];
+	const cleared = [];
+	const listeners = new Set();
+	const registration = {
+		active: null,
+		waiting: null,
+		installing: null,
+		update: async () => {},
+		addEventListener() {},
+		removeEventListener() {},
+		pushManager: { getSubscription: async () => (endpoint === "" ? null : { endpoint }) },
+	};
+	let timer = 0;
+	const navigator = {
+		onLine: true,
+		userAgent: "test",
+		platform: "test",
+		maxTouchPoints: 0,
+		standalone: false,
+		serviceWorker: {
+			ready: Promise.resolve(registration),
+			controller: null,
+			getRegistration: async () => registration,
+			register: async () => registration,
+			addEventListener() {},
+			removeEventListener() {},
+		},
+	};
+	const booted = bootClient({
+		mode: "mobile",
+		navigator,
+		globals: {
+			location: { origin: "https://app.example:8446", href: "https://app.example:8446/" },
+			setInterval(callback, ms) {
+				timer += 1;
+				intervals.push({ id: timer, ms, callback });
+				return timer;
+			},
+			clearInterval(id) {
+				cleared.push(id);
+			},
+		},
+		fetchImpl: async (url, options) => {
+			calls.push({ url: String(url), options });
+			return { status: 200, ok: true, json: async () => ({ ok: true }) };
+		},
+		configureDocument(doc) {
+			doc.visibilityState = initialVisibility;
+			doc.addEventListener = (type, handler) => {
+				if (type === "visibilitychange") listeners.add(handler);
+			};
+			doc.removeEventListener = (type, handler) => {
+				if (type === "visibilitychange") listeners.delete(handler);
+			};
+		},
+	});
+	const settle = async () => {
+		for (let index = 0; index < 6; index += 1) await new Promise((resolve) => setImmediate(resolve));
+	};
+	const fireVisibility = () => {
+		for (const handler of [...listeners]) handler();
+	};
+	const visibilityPosts = () => calls.filter((call) => call.url.endsWith("/push/visibility"));
+	// The PWA shell also polls for updates with setInterval; only the 20s one
+	// is the visibility heartbeat.
+	const heartbeats = () => intervals.filter((entry) => entry.ms === 20_000);
+	return { ...booted, calls, intervals, cleared, heartbeats, visibilityPosts, settle, fireVisibility };
+}
+
+test("the visibility reporter runs on boot, change and heartbeat only with an endpoint", async () => {
+	const endpoint = "https://web.push.apple.com/device";
+	const booted = bootVisibilityClient({ endpoint });
+	await booted.settle();
+	const bootPosts = booted.visibilityPosts();
+	assert.equal(bootPosts.length, 1, "boot must report visibility exactly once");
+	assert.equal(bootPosts[0].url, "api/dsh-mobile-maxxing/push/visibility");
+	assert.equal(bootPosts[0].options.method, "POST");
+	assert.equal(bootPosts[0].options.keepalive, true);
+	assert.deepEqual(JSON.parse(bootPosts[0].options.body), {
+		visible: true,
+		endpoint,
+		origin: "https://app.example:8446",
+	});
+	assert.deepEqual(booted.heartbeats().map((entry) => entry.ms), [20_000], "a visible page starts one heartbeat");
+
+	// The heartbeat re-sends the lease while the page stays visible.
+	booted.heartbeats()[0].callback();
+	await booted.settle();
+	assert.equal(booted.visibilityPosts().length, 2, "the heartbeat did not refresh the lease");
+	assert.equal(JSON.parse(booted.visibilityPosts()[1].options.body).visible, true);
+
+	// Hidden: report false and stop the heartbeat.
+	booted.sandbox.document.visibilityState = "hidden";
+	booted.fireVisibility();
+	await booted.settle();
+	assert.equal(JSON.parse(booted.visibilityPosts()[2].options.body).visible, false, "hiding must release the lease");
+	assert.deepEqual(booted.cleared, [booted.heartbeats()[0].id], "the heartbeat kept running while hidden");
+	assert.equal(booted.heartbeats().length, 1, "a hidden page must not start another heartbeat");
+
+	// Visible again: report true and restart the heartbeat.
+	booted.sandbox.document.visibilityState = "visible";
+	booted.fireVisibility();
+	await booted.settle();
+	assert.equal(JSON.parse(booted.visibilityPosts()[3].options.body).visible, true);
+	assert.equal(booted.heartbeats().length, 2, "returning to the page did not restart the heartbeat");
+	assert.deepEqual(booted.disposeAll(), []);
+});
+
+test("no push endpoint means no visibility request at all", async () => {
+	const booted = bootVisibilityClient({ endpoint: "" });
+	await booted.settle();
+	assert.equal(booted.visibilityPosts().length, 0, "a page without a subscription has nothing to gate");
+	booted.sandbox.document.visibilityState = "hidden";
+	booted.fireVisibility();
+	booted.sandbox.document.visibilityState = "visible";
+	booted.fireVisibility();
+	await booted.settle();
+	assert.equal(booted.visibilityPosts().length, 0, "visibility changes must stay silent without an endpoint");
+	assert.equal(booted.heartbeats().length, 2, "the heartbeat still runs (and restarts), but it sends nothing");
+	assert.deepEqual(booted.cleared, [booted.heartbeats()[0].id], "hiding did not stop the endpoint-less heartbeat");
+	// The helper on the diagnostics seam is silent too.
+	await assert.doesNotReject(booted.sandbox.__RDSH_MOBILE_UX__.reportVisibility(true));
+	assert.deepEqual(booted.disposeAll(), []);
+});
+
+test("a hidden boot releases the lease without starting a heartbeat", async () => {
+	const booted = bootVisibilityClient({ endpoint: "https://web.push.apple.com/device", initialVisibility: "hidden" });
+	await booted.settle();
+	assert.equal(booted.visibilityPosts().length, 1);
+	assert.equal(JSON.parse(booted.visibilityPosts()[0].options.body).visible, false, "a hidden boot must not hold a lease");
+	assert.equal(booted.heartbeats().length, 0, "a hidden boot started a heartbeat");
+	booted.disposeAll();
+});
+
+test("a new pending interaction raises a question banner once", () => {
+	const { booted, notice, rendered } = localNoticeHarness();
+	const byId = { "root-2": { title: "Ask" } };
+	const running = new Map([["root-2", { running: true }]]);
+	const asked = new Map([["root-2", { running: true, pendingInteraction: { kind: "question" } }]]);
+
+	notice.emitLocalNotices(null, running, byId);
+	assert.equal(rendered.length, 0, "the first render notified");
+	notice.emitLocalNotices(running, asked, byId);
+	assert.equal(rendered.length, 1, "a new question raised no banner");
+	assert.equal(rendered[0], "Ask — Confirm");
+	// The same map identity is not a transition.
+	notice.emitLocalNotices(asked, asked, byId);
+	assert.equal(rendered.length, 1, "an unchanged map raised another banner");
+	booted.disposeAll();
 });

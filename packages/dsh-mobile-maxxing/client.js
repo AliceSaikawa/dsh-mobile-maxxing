@@ -3119,10 +3119,15 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // than the screen (screen.height - innerHeight), so the unpainted strip is
       // below the web view. The home indicator is in that strip, not inside the
       // page; the inner bottom safe-area padding would only enlarge the blank.
+      // Only a translucent status bar puts the page under the clock. With any
+      // other style the web view starts below the status bar, so the same
+      // shortfall is at the top and the home indicator is inside the page.
       const viewport = window.visualViewport;
       const keyboardOpen = viewport !== null && viewport !== undefined && viewport.height < window.innerHeight - 100;
       const screenHeight = window.screen && Number.isFinite(window.screen.height) ? window.screen.height : 0;
-      const nativeGap = window.navigator.standalone === true && !keyboardOpen && screenHeight > 0 && screenHeight - window.innerHeight > 8;
+      const statusBar = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
+      const underStatusBar = statusBar !== null && statusBar.getAttribute("content") === "black-translucent";
+      const nativeGap = window.navigator.standalone === true && underStatusBar && !keyboardOpen && screenHeight > 0 && screenHeight - window.innerHeight > 8;
       root.toggleAttribute("data-rdsh-native-gap", nativeGap);
       for (const [name, value] of [["top", top], ["bottom", bottom], ["left", left], ["right", right]]) {
         if (value > 0) root.setAttribute(`data-rdsh-safe-${name}`, "");

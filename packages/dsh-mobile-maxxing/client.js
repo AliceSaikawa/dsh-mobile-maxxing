@@ -6176,19 +6176,31 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     // ---------------------------------------------------------------------
-    // #59: landscape drawer nav — one More row for the three stock actions
+    // #59 / #92: landscape drawer nav — one More row for the three stock actions
     //
     // Plugins, Automation tasks and Settings are wide rows; in landscape the
     // drawer is wider than the phone but still leaves the chat too little
     // room. Only the three rows are folded, and only while the viewport is
     // landscape: the stock nodes stay in place (React keeps its own state, the
     // single #87 Settings row keeps its lifecycle) and receive a hide
-    // attribute. The More row and its menu are this module's nodes and are
-    // removed on portrait, desktop and dispose.
+    // attribute.
+    //
+    // #92: rc.3 ships its own More launcher and portal menu, so a second row
+    // here would show "More" twice. When that launcher exists it is the only
+    // one; the folded rows' labels and glyphs are appended to its menu instead
+    // (decorateSidebarShellMore). A shell without the launcher keeps the #59
+    // row and its own menu, exactly as before.
     // ---------------------------------------------------------------------
     const NAV_MORE_HIDDEN = "data-rdsh-nav-more-hidden";
+    /** The shell slot rendered inside rc.3's More portal; its parent is the list. */
+    const SHELL_MORE_SLOT = "sidebar.panellist.actions";
     let sidebarNavMore = null;
     let sidebarNavMoreSeq = 0;
+    /** The menu our #92 rows live in, the stock rows they borrow from, and the exact nodes we appended. */
+    let shellMoreMenu = null;
+    let shellMoreRows = [];
+    let shellMoreNodes = [];
+    let shellMoreKey = "";
 
     /** #59: landscape means geometry, not the device mode; the mode gate is separate. */
     function navMoreLandscape() {
@@ -6361,6 +6373,117 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       return button;
     }
 
+    /** #92: the shell's own More launcher, matched structurally; never our row. */
+    function sidebarShellMoreLauncher(nav) {
+      if (nav === null) return null;
+      return [...nav.querySelectorAll('button[aria-haspopup="menu"]')]
+        .find((button) => !button.hasAttribute("data-rdsh-nav-more")) ?? null;
+    }
+
+    /** Remove the rows #92 appended to the shell menu and forget the menu. */
+    function clearSidebarShellMore() {
+      for (const node of shellMoreNodes) node.remove();
+      shellMoreNodes = [];
+      shellMoreRows = [];
+      shellMoreMenu = null;
+      shellMoreKey = "";
+    }
+
+    /**
+     * #92: close rc.3's More menu the way #41 closes a chip's menu — with the
+     * Escape its Menu already listens for — after dropping our own rows.
+     */
+    function dismissSidebarShellMore(menu) {
+      clearSidebarShellMore();
+      try {
+        menu.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+      } catch (error) {
+        /* a detached portal has already closed */
+      }
+    }
+
+    /**
+     * #92: put the three folded rows into the shell's own More menu.
+     *
+     * The stock launcher is the only More row now, so its menu must carry
+     * Plugins, Automation tasks and Settings. Labels and glyphs are borrowed
+     * from the hidden stock rows, which keeps the en/ja copy and the icons
+     * identical without another dictionary. These nodes live inside React's
+     * portal but React does not own them, so an open menu rebuilds them from
+     * scratch (a reused portal must not show them twice, #87) and a closed or
+     * unmounted portal drops them with its subtree.
+     */
+    function decorateSidebarShellMore(rows, launcher) {
+      if (launcher.getAttribute("aria-expanded") === "false") {
+        clearSidebarShellMore();
+        return;
+      }
+      const slot = document.querySelector(`[data-slot="${SHELL_MORE_SLOT}"]`);
+      const list = slot === null ? null : slot.parentElement;
+      const menu = slot === null ? null : slot.closest('[role="menu"]');
+      const stockRows = [rows.plugins, rows.automation, rows.settings];
+      const labels = [navRowLabel(stockRows[0]), navRowLabel(stockRows[1]), navRowLabel(stockRows[2])];
+      const key = labels.join("\u0000");
+      // Every decorate pass runs on the observer, including the one our own
+      // append wakes. Only a different menu, a different locale, a replaced
+      // stock row or a detached row list rebuilds; otherwise the pass must
+      // leave the DOM alone or it would rebuild once per frame.
+      const intact = list !== null
+        && menu === shellMoreMenu
+        && key === shellMoreKey
+        && shellMoreRows.length === 3
+        && shellMoreRows.every((row, index) => row === stockRows[index])
+        && shellMoreNodes.length === 4
+        && shellMoreNodes.every((node) => node.parentElement === list);
+      if (intact) return;
+      clearSidebarShellMore();
+      if (slot === null || list === null || menu === null) return;
+      const nodes = [];
+      for (const [index, row] of stockRows.entries()) {
+        const item = document.createElement("button");
+        item.type = "button";
+        item.className = "rdsh-mux-more-item";
+        item.setAttribute("role", "menuitem");
+        item.setAttribute("tabindex", "-1");
+        item.setAttribute("data-rdsh-more-item", "");
+        item.setAttribute("aria-label", labels[index]);
+        const glyph = row.querySelector(".hHd-Xa_panelGlyph svg") ?? row.querySelector("svg");
+        if (glyph !== null) {
+          const icon = document.createElement("span");
+          icon.className = "rdsh-mux-more-icon";
+          icon.setAttribute("aria-hidden", "true");
+          icon.append(glyph.cloneNode(true));
+          item.append(icon);
+        }
+        const text = document.createElement("span");
+        text.className = "rdsh-mux-more-label";
+        text.textContent = labels[index];
+        item.append(text);
+        item.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          // The stock row is display:none, but .click() still runs React's
+          // handler. Close first: Settings opens a second menu, and the Escape
+          // above would close that one instead if it were already mounted.
+          dismissSidebarShellMore(menu);
+          row.click();
+        });
+        nodes.push(item);
+      }
+      const separator = document.createElement("div");
+      separator.className = "rdsh-mux-more-sep";
+      separator.setAttribute("role", "separator");
+      separator.setAttribute("data-rdsh-more-item", "");
+      nodes.push(separator);
+      // The slot outlet is display:contents, so the list's own flex layout
+      // sees these rows and the shell rows as siblings in source order.
+      for (const node of nodes) list.insertBefore(node, slot);
+      shellMoreMenu = menu;
+      shellMoreRows = stockRows;
+      shellMoreNodes = nodes;
+      shellMoreKey = key;
+    }
+
     function decorateSidebarNavMore() {
       const nav = navMoreLandscape() ? document.querySelector("nav.hHd-Xa_panelList") : null;
       if (nav === null) {
@@ -6378,12 +6501,24 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         if (row !== rows.plugins && row !== rows.automation && row !== rows.settings) row.removeAttribute(NAV_MORE_HIDDEN);
       }
       for (const row of [rows.plugins, rows.automation, rows.settings]) row.setAttribute(NAV_MORE_HIDDEN, "");
+      const launcher = sidebarShellMoreLauncher(nav);
+      if (launcher !== null) {
+        // rc.3+: one launcher. Retire the #59 row (and its menu) if an older
+        // shell passed on the same page, then feed the shell menu instead.
+        if (sidebarNavMore !== null) closeSidebarNavMore();
+        for (const node of document.querySelectorAll("[data-rdsh-nav-more]")) node.remove();
+        decorateSidebarShellMore(rows, launcher);
+        return;
+      }
+      // rc.2 and older: no stock menu to feed, so #59's row stays the launcher.
+      clearSidebarShellMore();
       const button = ensureSidebarNavMore(nav, rows.plugins);
       if (sidebarNavMore !== null && sidebarNavMore.button !== button) closeSidebarNavMore();
     }
 
     function clearSidebarNavMore() {
       closeSidebarNavMore();
+      clearSidebarShellMore();
       for (const node of document.querySelectorAll("[data-rdsh-nav-more]")) node.remove();
       for (const row of document.querySelectorAll(`[${NAV_MORE_HIDDEN}]`)) row.removeAttribute(NAV_MORE_HIDDEN);
     }
@@ -13506,6 +13641,41 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
 .rdsh-mux-nav-more-menu button[disabled] {
   color: var(--dsw-alias-label-tertiary, #a1a1aa);
   cursor: default;
+}
+
+/* #92: the three folded rows appended to the shell's own More menu. React does
+   not reconcile these nodes, so they cannot use a hashed shell class; the
+   dimensions mirror a shell menu row (36px, 16px glyph + 8px gap, 14px label)
+   and the hover tint is the same alias. */
+.rdsh-mux-more-item {
+  box-sizing: border-box; width: 100%; min-height: 36px;
+  margin: 0; padding: 7px 10px; border: 0; border-radius: var(--dsw-radius-md, 8px);
+  display: flex; align-items: center; gap: 8px;
+  font: inherit; font-size: 14px; line-height: 22px; text-align: left;
+  color: var(--dsw-alias-label-primary, #f9fafb); background: transparent;
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.rdsh-mux-more-item:hover,
+.rdsh-mux-more-item:focus-visible {
+  background: var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,.08));
+  outline: none;
+}
+.rdsh-mux-more-item:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary, #7aaaff);
+  outline-offset: -2px;
+}
+.rdsh-mux-more-icon {
+  flex: none; width: 16px; height: 16px;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.rdsh-mux-more-icon svg { width: 16px; height: 16px; display: block; }
+.rdsh-mux-more-label {
+  min-width: 0; overflow: hidden;
+  white-space: nowrap; text-overflow: ellipsis;
+}
+.rdsh-mux-more-sep {
+  flex: none; height: 1px; margin: 4px 6px;
+  background: var(--dsw-alias-border-l3, rgba(255,255,255,.16));
 }
 
 `;

@@ -1509,7 +1509,8 @@ test("a left-edge swipe on a plugin detail presses the breadcrumb instead of ope
 	booted.disposeAll();
 });
 
-test("a left-edge swipe on an automation detail closes it instead of opening the drawer", () => {
+/** Drive one automation-detail swipe with the given (upstream) close label. */
+function assertAutomationDetailBack(label) {
 	const booted = bootGestures({ narrow: true });
 	const open = new FakeElement("button");
 	let drawerPresses = 0;
@@ -1526,7 +1527,7 @@ test("a left-edge swipe on an automation detail closes it instead of opening the
 	detailPane._rect = () => ({ x: 0, y: 0, top: 0, left: 0, right: 390, bottom: 800, width: 390, height: 800 });
 	detailPane.parentElement = page;
 	const close = new FakeElement("button");
-	close.setAttribute("aria-label", "Close details");
+	close.setAttribute("aria-label", label);
 	close._rect = () => ({ x: 354, y: 8, top: 8, left: 354, right: 382, bottom: 36, width: 28, height: 28 });
 	close.parentElement = detailPane;
 	close.click = () => {
@@ -1554,6 +1555,14 @@ test("a left-edge swipe on an automation detail closes it instead of opening the
 	move(swipeTouch(120));
 	assert.equal(drawerPresses, 1, "the list did not recover the ordinary drawer swipe");
 	booted.disposeAll();
+}
+
+test("a left-edge swipe on an en automation detail closes it instead of opening the drawer", () => {
+	assertAutomationDetailBack("Close details");
+});
+
+test("a left-edge swipe on a ja automation detail closes it instead of opening the drawer", () => {
+	assertAutomationDetailBack("詳細を閉じる");
 });
 
 test("nested plugin details go back one breadcrumb per swipe", () => {

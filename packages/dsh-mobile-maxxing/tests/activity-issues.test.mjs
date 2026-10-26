@@ -640,15 +640,15 @@ function activityPolls(booted) {
 // ---------------------------------------------------------------------------
 
 /** Boot with a narrow dock carrying the upstream three stats buttons. */
-function bootWithDock({ services = {}, getOverride = null } = {}) {
+function bootWithDock({ services = {}, getOverride = null, labels = {} } = {}) {
 	const dock = node("div");
 	dock.setAttribute("data-rdsh-composer-dock", "");
 	const turns = node("button");
-	turns.setAttribute("aria-label", "3 turns · 42 tok/s");
+	turns.setAttribute("aria-label", labels.turns ?? "3 turns · 42 tok/s");
 	const usage = node("button");
-	usage.setAttribute("aria-label", "Cache hit 40%");
+	usage.setAttribute("aria-label", labels.usage ?? "Cache hit 40%");
 	const context = node("button");
-	context.setAttribute("aria-label", "49% of context used");
+	context.setAttribute("aria-label", labels.context ?? "49% of context used");
 	dock.append(turns, usage, context);
 	const booted = boot({
 		services,
@@ -693,6 +693,26 @@ test("#36 the dock reads contextPressure from the public Session list snapshot",
 	const buttons = dock.querySelectorAll("button");
 	assert.equal(buttons[0].getAttribute("data-rdsh-stat-text"), "3 turns · 42 tok/s");
 	assert.equal(buttons[1].getAttribute("data-rdsh-stat-text"), "Cache hit 40%");
+});
+
+test("#36 the reviewed ja stats labels are recognised", () => {
+	// chat:stats.counts, chat:stats.cacheHit and conversation:context.aria as the
+	// reviewed ja catalogue renders them. The rendered text itself still follows
+	// this package's own copy pack, so the probe match is what is pinned here.
+	const harness = createServices();
+	const { booted, dock, context } = bootWithDock({
+		services: harness.services,
+		labels: {
+			turns: "3 ターン 42 ステップ · 42 tok/s",
+			usage: "キャッシュヒット 40%",
+			context: "コンテキストの使用率 49%",
+		},
+	});
+	showSession(booted, "s1");
+	assert.equal(statText(booted, context), "49%", "the ja context chip lost its percentage");
+	const buttons = dock.querySelectorAll("button");
+	assert.equal(buttons[0].getAttribute("data-rdsh-stat-text"), "3 turns · 42 tok/s", "the ja turns chip was not found");
+	assert.equal(buttons[1].getAttribute("data-rdsh-stat-text"), "Cache hit 40%", "the ja cache chip was not found");
 });
 
 test("#36 missing or malformed projections keep the percentage and ask once", () => {
@@ -1031,6 +1051,24 @@ test("#40 the actual zh subagent running label is recognised", () => {
 	decorateChips(booted, [running, idle]);
 	assert.equal(running.getAttribute("data-rdsh-activity-state"), "running", "正在运行 is a running word too");
 	assert.equal(idle.getAttribute("data-rdsh-activity-state"), "idle");
+});
+
+test("#40 the reviewed ja count labels are recognised", () => {
+	// subagent:count.running.other / job:count.live.other and their idle forms.
+	const booted = boot({ services: {} });
+	const subagentRunning = chip("3 件のサブエージェントが実行中");
+	const subagentIdle = chip("3 件のサブエージェント");
+	const jobRunning = chip("1件のバックグラウンドジョブが実行中");
+	const jobIdle = chip("1件のバックグラウンドジョブ");
+	decorateChips(booted, [subagentRunning, subagentIdle, jobRunning, jobIdle]);
+	assert.equal(subagentRunning.getAttribute("data-rdsh-activity-chip"), "subagent", "the ja subagent noun did not pick the subagent glyph");
+	assert.equal(subagentIdle.getAttribute("data-rdsh-activity-chip"), "subagent");
+	assert.equal(jobRunning.getAttribute("data-rdsh-activity-chip"), "shell", "the ja job noun did not pick the shell glyph");
+	assert.equal(jobIdle.getAttribute("data-rdsh-activity-chip"), "shell");
+	assert.equal(subagentRunning.getAttribute("data-rdsh-activity-state"), "running", "the ja running word is not probed");
+	assert.equal(jobRunning.getAttribute("data-rdsh-activity-state"), "running");
+	assert.equal(subagentIdle.getAttribute("data-rdsh-activity-state"), "idle");
+	assert.equal(jobIdle.getAttribute("data-rdsh-activity-state"), "idle");
 });
 
 test("#40 only count chips are decorated; the child breadcrumb switcher keeps stock paint", () => {

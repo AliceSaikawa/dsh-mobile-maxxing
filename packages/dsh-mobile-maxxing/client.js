@@ -5613,7 +5613,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         "shell command", "shell commands",
       ]);
       if (labels.length === 0) return null;
-      return new RegExp(`^\\d[\\d,.]*\\s+(?:${labels.join("|")})`, "i");
+      // The ja count puts its counter straight after the number ("3件の…"),
+      // so the separator is optional; en and zh still need their space.
+      return new RegExp(`^\\d[\\d,.]*\\s*(?:${labels.join("|")})`, "i");
     })();
 
     /** The subagent nouns, so a non-English label still picks the right glyph. */
@@ -5799,7 +5801,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         if (tagged !== moreRow) tagged.removeAttribute("data-rdsh-more-row");
       }
       if (moreRow !== null) moreRow.setAttribute("data-rdsh-more-row", "");
-      const auto = nav.querySelector('button[aria-label="Automation tasks"]');
+      const auto = nav.querySelector(ariaLabelSelector("button", "navAutomation", ["Automation tasks"]));
       if (row === null) {
         row = document.createElement("button");
         row.type = "button";
@@ -5813,7 +5815,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           openSettingsViaAccountMenu();
         });
       }
-      const anchor = auto ?? nav.querySelector('button[aria-label="Plugins"]');
+      const anchor = auto ?? nav.querySelector(ariaLabelSelector("button", "navPlugins", ["Plugins"]));
       // Two exclusive branches. Written as one `if` with a trailing `else if`,
       // the second branch also ran when the row was already directly after the
       // anchor but not last, so `after()` and `append()` moved the row on every
@@ -11332,6 +11334,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
 `;
 
+    /** The panel's own exit-control labels, as selectors scoped to the panel. */
+    const RIGHT_PANEL_EXIT = probeValues("fullscreenExit", ["Exit fullscreen"])
+      .map((label) => `[data-rdsh-rightpanel] [aria-label="${cssValue(label)}"]`)
+      .join(", ");
+
     const CSS_PHONE = `
 /* Controls the hide list matched. The attribute these selectors key off is
    written only while phone() holds (see applyHideList), and the rules sit in
@@ -11841,8 +11848,9 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
     }
     /* The tablet is wide enough for a user to leave fullscreen; keep the exit
        control that the phone hides. Split stays hidden everywhere: this plugin
-       never uses dockkit's pane split as the iPad layout. */
-    [data-rdsh-rightpanel] [aria-label="Exit fullscreen"] { display: inline-flex !important; }
+       never uses dockkit's pane split as the iPad layout. The selector carries
+       every known exit label, so a ja shell keeps the same control. */
+    ${RIGHT_PANEL_EXIT} { display: inline-flex !important; }
   }
   [data-rdsh-sidebar] {
     position: fixed !important; inset: 0 auto 0 0 !important;
@@ -12747,7 +12755,7 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   /* Two controls in the panel header duplicate what the phone already is or
      cannot do: "Exit fullscreen" closes the panel exactly like the ✕ next to
      it, and "Split" needs width the phone does not have. Keep only the ✕. */
-  [data-rdsh-rightpanel] [aria-label="Exit fullscreen"],
+  ${RIGHT_PANEL_EXIT},
   [data-rdsh-rightpanel] [aria-label="Split"] { display: none !important; }
 
   /* The native strip already contains the home indicator. */

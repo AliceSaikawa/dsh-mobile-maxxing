@@ -404,6 +404,9 @@ test("tapping a New session button on a phone closes the drawer", () => {
 	assert.equal(drawerClosedAfterTapping("New session in my-repo"), true, "workspace button");
 	assert.equal(drawerClosedAfterTapping("新建会话"), true, "zh sidebar button");
 	assert.equal(drawerClosedAfterTapping("在“my-repo”中新建会话"), true, "zh workspace button");
+	// Reviewed ja labels: the stock sidebar action and a workspace's "+".
+	assert.equal(drawerClosedAfterTapping("新しいセッションを作成"), true, "ja sidebar button");
+	assert.equal(drawerClosedAfterTapping("my-repo で新しいセッション"), true, "ja workspace button");
 });
 
 test("other buttons leave the drawer open, and so does a wide screen", () => {
@@ -1037,8 +1040,8 @@ test("the four-row drawer survives decoration when the upstream nav exists", () 
 	};
 	nav.contains = (node) => node.parentElement === nav;
 	nav.querySelector = (selector) => {
-		if (selector === 'button[aria-label="Automation tasks"]') return auto;
-		if (selector === 'button[aria-label="Plugins"]') return plugins;
+		if (selector.includes('aria-label="Automation tasks"')) return auto;
+		if (selector.includes('aria-label="Plugins"')) return plugins;
 		if (selector === "[data-rdsh-settings-row]") return null;
 		return null;
 	};
@@ -1115,8 +1118,8 @@ test("a localized Settings row is never mistaken for the account menu", () => {
 	};
 	nav.contains = (node) => node.parentElement === nav;
 	nav.querySelector = (selector) => {
-		if (selector === 'button[aria-label="Automation tasks"]') return auto;
-		if (selector === 'button[aria-label="Plugins"]') return plugins;
+		if (selector.includes('aria-label="Automation tasks"')) return auto;
+		if (selector.includes('aria-label="Plugins"')) return plugins;
 		if (selector === "[data-rdsh-settings-row]") return settingsRow();
 		return null;
 	};
@@ -1192,8 +1195,8 @@ test("re-applying the Settings row decoration never duplicates the row (#87)", (
 		nav.lastElementChild = node;
 	};
 	nav.querySelector = (selector) => {
-		if (selector === 'button[aria-label="Automation tasks"]') return auto;
-		if (selector === 'button[aria-label="Plugins"]') return plugins;
+		if (selector.includes('aria-label="Automation tasks"')) return auto;
+		if (selector.includes('aria-label="Plugins"')) return plugins;
 		return null;
 	};
 	auto.after = (node) => {
@@ -1271,6 +1274,11 @@ test("tapping Plugins or Automation tasks closes the phone drawer, never a deskt
 	assert.equal(drawerClosedAfterTapping("Automation tasks"), true, "Automation tasks left the drawer open");
 	assert.equal(drawerClosedAfterTapping("Plugins", { narrow: false, mode: "desktop" }), false, "a desktop sidebar was closed");
 	assert.equal(drawerClosedAfterTapping("Automation tasks", { narrow: false, mode: "desktop" }), false, "a desktop sidebar was closed");
+	// Reviewed ja labels for the same two folded rows.
+	assert.equal(drawerClosedAfterTapping("プラグイン"), true, "ja Plugins left the drawer open");
+	assert.equal(drawerClosedAfterTapping("自動化タスク"), true, "ja Automation tasks left the drawer open");
+	assert.equal(drawerClosedAfterTapping("プラグイン", { narrow: false, mode: "desktop" }), false, "a desktop ja sidebar was closed");
+	assert.equal(drawerClosedAfterTapping("自動化タスク", { narrow: false, mode: "desktop" }), false, "a desktop ja sidebar was closed");
 	// Existing rows keep their behaviour.
 	assert.equal(drawerClosedAfterTapping("New session"), true);
 	assert.equal(drawerClosedAfterTapping("Settings"), false);
@@ -2657,7 +2665,8 @@ function navMatches(node, selector) {
 	return false;
 }
 
-function navBoot({ mode = "mobile", narrow = false } = {}) {
+function navBoot({ mode = "mobile", narrow = false, lang = undefined, labels = {} } = {}) {
+	const label = (name, fallback) => labels[name] ?? fallback;
 	const frames = [];
 	const docListeners = [];
 	const windowListeners = [];
@@ -2671,6 +2680,7 @@ function navBoot({ mode = "mobile", narrow = false } = {}) {
 	const booted = bootClient({
 		mode,
 		narrow,
+		lang,
 		copy: COPY,
 		frames,
 		windowAdd(type, handler) { windowListeners.push({ type, handler }); },
@@ -2685,9 +2695,9 @@ function navBoot({ mode = "mobile", narrow = false } = {}) {
 			newSession = navNode(doc, "button");
 			plugins = navNode(doc, "button");
 			automation = navNode(doc, "button");
-			newSession.setAttribute("aria-label", "New Session");
-			plugins.setAttribute("aria-label", "Plugins");
-			automation.setAttribute("aria-label", "Automation tasks");
+			newSession.setAttribute("aria-label", label("newSession", "New Session"));
+			plugins.setAttribute("aria-label", label("plugins", "Plugins"));
+			automation.setAttribute("aria-label", label("automation", "Automation tasks"));
 			nav.append(newSession, plugins, automation);
 			body.append(nav);
 			doc.body = body;
@@ -2869,4 +2879,45 @@ test("#59 the More row is mobile-landscape only and is removed on dispose", () =
 	assert.equal(landscape.nav.children.includes(landscape.plugins), true, "dispose removed a stock row");
 	assert.equal(landscape.nav.children.includes(landscape.automation), true, "dispose removed a stock row");
 	assert.equal(landscape.settingsRow(), null, "dispose kept the injected Settings row");
+});
+
+test("#80 a full ja shell folds the three rows and runs every More action", () => {
+	const labels = { newSession: "新しいセッションを作成", plugins: "プラグイン", automation: "自動化タスク" };
+	const fixture = navBoot({ lang: "ja", labels });
+	const more = fixture.more();
+	assert.ok(more, "the ja landscape More row was not created");
+	const settingsRow = fixture.settingsRow();
+	assert.ok(settingsRow, "the ja Settings row was not injected");
+	for (const row of [fixture.plugins, fixture.automation, settingsRow]) {
+		assert.equal(row.hasAttribute("data-rdsh-nav-more-hidden"), true, "a ja folded row is still visible");
+	}
+	// The injected row still follows Automation tasks when its label is ja.
+	assert.equal(fixture.automation.nextElementSibling, settingsRow, "the ja Settings row did not follow Automation tasks");
+
+	fixture.plugins.click = () => { fixture.counts.plugins += 1; };
+	fixture.automation.click = () => { fixture.counts.automation += 1; };
+	settingsRow.click = () => { fixture.counts.settings += 1; };
+
+	more.click();
+	const items = fixture.items();
+	assert.deepEqual(
+		items.map((item) => item.textContent),
+		["プラグイン", "自動化タスク", COPY.ja["mux.settingsRow"]],
+		"the ja More menu does not list the three folded rows",
+	);
+	for (const item of items) item.click();
+	assert.deepEqual(fixture.counts, { plugins: 1, automation: 1, settings: 1 }, "a ja More item did not run its stock row");
+	assert.equal(fixture.menus().length, 0, "the ja More menu stayed open");
+	fixture.booted.disposeAll();
+});
+
+test("#80 a full ja desktop keeps the stock nav and installs no phone controls", () => {
+	const labels = { newSession: "新しいセッションを作成", plugins: "プラグイン", automation: "自動化タスク" };
+	const fixture = navBoot({ mode: "desktop", narrow: false, lang: "ja", labels });
+	assert.equal(fixture.more(), null, "a ja desktop got the landscape More row");
+	assert.equal(fixture.settingsRow(), null, "a ja desktop got the injected Settings row");
+	assert.equal(fixture.nav.querySelectorAll("[data-rdsh-nav-more-hidden]").length, 0, "a ja desktop folded a row");
+	assert.equal(fixture.plugins.getAttribute("aria-label"), "プラグイン", "a ja desktop nav was rewritten");
+	assert.equal(fixture.docListeners.length, 0, "a ja desktop installed the mobile click listener");
+	fixture.booted.disposeAll();
 });

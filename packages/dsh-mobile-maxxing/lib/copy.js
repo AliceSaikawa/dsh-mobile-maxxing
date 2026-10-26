@@ -585,40 +585,43 @@ export const COPY = {
  */
 export const PROBES = {
 	/** The account/menu button that opens Settings. */
-	accountMenu: ["Account menu", "設定"],
+	accountMenu: ["Account menu", "アカウントメニュー"],
 	/** The Settings row inside that menu. */
 	settingsMenu: ["Settings", "設定"],
 	/** Sidebar rows folded into the landscape More menu. */
-	navPlugins: ["Plugins", "插件"],
-	navAutomation: ["Automation tasks", "自动化任务"],
+	navPlugins: ["Plugins", "插件", "プラグイン"],
+	navAutomation: ["Automation tasks", "自动化任务", "自動化タスク"],
 	/** The Automation-tasks detail's close control: the only way back to the list
 	 *  once upstream hides the list on a phone. */
-	closeTaskDetail: ["Close details", "关闭详情"],
+	closeTaskDetail: ["Close details", "关闭详情", "詳細を閉じる"],
 	/** A session row's own "..." trigger. */
 	actions: ["actions", "操作"],
 	/** A button that stops the running turn (must not mark a phone send). */
 	stop: ["stop", "停止"],
 	/** The activity chip: "3 turns" / "3 steps". */
 	turns: ["turns", "turn", "steps", "step", "ターン", "ステップ"],
-	/** The usage chip: "Cache hit 40%". */
-	cacheHit: ["cache hit", "キャッシュ"],
+	/** The usage chip: "Cache hit 40%" / "キャッシュヒット 40%". */
+	cacheHit: ["cache hit", "キャッシュヒット"],
 	/** The context chip: "40% context". */
 	context: ["context", "コンテキスト"],
 	/** A running activity chip: "3 background jobs running" / "3 subagents running".
-	 *  DSH 0.2.1 ships en and zh only; a ja shell adds its word here. */
-	activityRunning: ["running", "运行中", "正在运行"],
-	/** Count-chip nouns in the two upstream locales; a ja pack adds its own. */
-	activityChip: ["subagent", "subagents", "background job", "background jobs", "shell command", "shell commands", "个子智能体", "个后台任务"],
+	 *  The ja wording puts the counter before the noun ("3 件の…が実行中"). */
+	activityRunning: ["running", "运行中", "正在运行", "実行中"],
+	/** Count-chip nouns; the ja catalogue counts with 件の, so the counter is
+	 *  part of the matched phrase ("3件のバックグラウンドジョブ"). */
+	activityChip: ["subagent", "subagents", "background job", "background jobs", "shell command", "shell commands", "个子智能体", "个后台任务", "件のサブエージェント", "件のバックグラウンドジョブ"],
 	/** The subagent noun inside a count chip, for choosing its glyph. */
-	activitySubagentChip: ["subagents", "subagent", "子智能体"],
+	activitySubagentChip: ["subagents", "subagent", "子智能体", "サブエージェント"],
 	/** Any aria-label that identifies the stats dock. */
 	stats: ["tok", "turns", "context", "ターン", "コンテキスト"],
 	/** A control that starts a new session (sidebar button, brand row, workspace "+"). */
-	newSession: ["new session", "新建会话", "中新建会话"],
+	newSession: ["new session", "新建会话", "中新建会话", "新しいセッション"],
 	/** Labels of a session that has no name yet. */
 	untitled: ["new session", "new chat", "untitled", "新しいセッション", "新しいチャット", "無題", "未命名", "新会话"],
 	/** The right panel's "make this pane fullscreen" control. */
-	fullscreen: ["Enter fullscreen", "Fullscreen", "全屏"],
+	fullscreen: ["Enter fullscreen", "Fullscreen", "全屏", "全画面表示"],
+	/** The same panel's "leave fullscreen" control, which a phone hides. */
+	fullscreenExit: ["Exit fullscreen", "全画面表示を終了"],
 	/** The Conversation view tab that opens the Trajectory view (#75). */
 	trajectoryTab: ["Trajectory", "軌跡", "轨迹", "トラジェクトリ"],
 };

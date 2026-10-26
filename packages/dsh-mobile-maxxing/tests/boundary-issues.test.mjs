@@ -28,7 +28,12 @@ function cssTemplate(name) {
 	const tick = String.fromCharCode(96);
 	const match = CLIENT.match(new RegExp(`const ${name} = ${tick}([\\s\\S]*?)${tick};\\n`));
 	assert.ok(match, `${name} exists`);
-	return match[1].replace(/\$\{NARROW_QUERY\}/g, "(max-width: 767px)");
+	// The exit-control selector is assembled from PROBES at runtime; render the
+	// same text here so the rule assertions still read ordinary CSS.
+	const rightPanelExit = '[data-rdsh-rightpanel] [aria-label="Exit fullscreen"], [data-rdsh-rightpanel] [aria-label="全画面表示を終了"]';
+	return match[1]
+		.replace(/\$\{NARROW_QUERY\}/g, "(max-width: 767px)")
+		.replace(/\$\{RIGHT_PANEL_EXIT\}/g, rightPanelExit);
 }
 
 function cssBlocks() {
@@ -724,7 +729,7 @@ function ipadFrame(booted) {
 	return { frame, center, rightbar };
 }
 
-function ipadPanel(booted, { viewportWidth, dockWidth, open = true }) {
+function ipadPanel(booted, { viewportWidth, dockWidth, open = true, label = "Fullscreen" }) {
 	const boundary = new FakeNode("div");
 	boundary.setAttribute("data-sidebar-right-panel", "push");
 	if (open) boundary.setAttribute("data-sidebar-right-open", "");
@@ -733,7 +738,7 @@ function ipadPanel(booted, { viewportWidth, dockWidth, open = true }) {
 	const collapse = new FakeNode("button");
 	collapse.setAttribute("aria-label", "Collapse right sidebar");
 	const fullscreen = new FakeNode("button");
-	fullscreen.setAttribute("aria-label", "Fullscreen");
+	fullscreen.setAttribute("aria-label", label);
 	const rect = (width) => () => ({ x: 0, y: 0, top: 0, left: 0, right: width, bottom: 844, width, height: 844 });
 	collapse.getBoundingClientRect = rect(30);
 	fullscreen.getBoundingClientRect = rect(30);
@@ -771,7 +776,12 @@ test("#72 the tablet tier reserves the measured dock and keeps safe-area padding
 		/grid-template-columns: 0 minmax\(400px, 1fr\) minmax\(300px, var\(--rdsh-rightbar-width, 45%\)\) !important;/,
 		"the tablet dock does not keep the 400px conversation minimum or the 300px panel floor",
 	);
-	assert.match(tablet, /\[data-rdsh-rightpanel\] \[aria-label="Exit fullscreen"\] \{ display: inline-flex !important; \}/, "the tablet cannot leave fullscreen");
+	assert.match(
+		tablet,
+		/\[data-rdsh-rightpanel\] \[aria-label="Exit fullscreen"\], \[data-rdsh-rightpanel\] \[aria-label="全画面表示を終了"\] \{ display: inline-flex !important; \}/,
+		"the tablet cannot leave fullscreen in en or ja",
+	);
+	assert.match(phone, /\[data-rdsh-rightpanel\] \[aria-label="全画面表示を終了"\]/, "the ja phone still shows the duplicate exit control");
 	assert.doesNotMatch(tablet, /\[aria-label="Split"\].*display: (?:inline-flex|block)/, "dockkit's pane split was restored");
 	assert.doesNotMatch(tablet, /padding-(?:top|right|bottom|left)/, "the tablet tier reset the panel's safe-area padding");
 
@@ -834,6 +844,25 @@ test("#72 below 768px the phone sheet keeps its fullscreen promotion", () => {
 	booted.api.decorateNow();
 	assert.equal(panel.clicks(), 1, "the phone clicked Fullscreen twice");
 	booted.dispose();
+});
+
+test("#80 the reviewed ja fullscreen label is promoted, but its exit label is not", () => {
+	const booted = bootBoundary({ mode: "mobile", narrow: true, width: 390 });
+	ipadFrame(booted);
+	const panel = ipadPanel(booted, { viewportWidth: 390, dockWidth: 390, label: "全画面表示" });
+	booted.api.decorateNow();
+	assert.equal(panel.clicks(), 1, "the ja phone did not promote its docked panel");
+	assert.equal(panel.fullscreen.getAttribute("data-rdsh-auto-fired"), "1");
+	booted.dispose();
+
+	// "全画面表示を終了" is the exit control; it must never be auto-clicked as
+	// the enter control (an exact aria label, not a substring).
+	const closing = bootBoundary({ mode: "mobile", narrow: true, width: 390 });
+	ipadFrame(closing);
+	const exit = ipadPanel(closing, { viewportWidth: 390, dockWidth: 390, label: "全画面表示を終了" });
+	closing.api.decorateNow();
+	assert.equal(exit.clicks(), 0, "the ja exit control was clicked as if it entered fullscreen");
+	closing.dispose();
 });
 
 test("#72 a desktop at a tablet width stays untouched", () => {

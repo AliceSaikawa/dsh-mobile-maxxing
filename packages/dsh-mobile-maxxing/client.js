@@ -3708,9 +3708,13 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * The panel kinds that get a heading, keyed by upstream's stable body
      * attribute. The text stays generic: the tab chip already carries the
      * per-tab name (the terminal number, the child session's label).
+     *
+     * #93: the terminal is deliberately absent. Its chip already names the
+     * shell ("bash"), so the heading was a duplicate that only cost the
+     * terminal ~30px of height. The child-session panel keeps one because its
+     * chip names the instance, not the kind.
      */
     const RIGHT_PANEL_HEADING_KEYS = {
-      "data-sidebar-terminal": "localDisplay.terminal",
       "data-sidebar-chat": "localDisplay.subagent",
     };
 
@@ -4446,7 +4450,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     /**
      * Which panel-type heading the active tab needs, or "" for any other tab.
      *
-     * A panel body carries the same id as its chip (data-sidebar-right-tab and
+     * The map is the whole list of named kinds (#93: the terminal is not in it,
+     * so a terminal tab answers "" and the heading comes down). A panel body
+     * carries the same id as its chip (data-sidebar-right-tab and
      * data-dockkit-tab), so the selected chip picks the active body even while
      * dockkit keeps another tab's section mounted. The chip title is
      * deliberately not read: it names the instance, the heading names the kind.
@@ -4459,22 +4465,35 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         ? null
         : selectedTab.getAttribute("data-dockkit-tab");
       let fallback = "";
-      for (const body of scope.querySelectorAll("[data-sidebar-terminal], [data-sidebar-chat]")) {
-        if (body.closest("[hidden]") !== null) continue;
-        const key = body.hasAttribute("data-sidebar-terminal")
-          ? RIGHT_PANEL_HEADING_KEYS["data-sidebar-terminal"]
-          : RIGHT_PANEL_HEADING_KEYS["data-sidebar-chat"];
-        const tab = body.closest("[data-sidebar-right-tab]");
-        if (selected !== null && tab !== null && tab.getAttribute("data-sidebar-right-tab") === selected) return key;
-        if (fallback === "") fallback = key;
+      for (const [attribute, key] of Object.entries(RIGHT_PANEL_HEADING_KEYS)) {
+        for (const body of scope.querySelectorAll(`[${attribute}]`)) {
+          if (body.closest("[hidden]") !== null) continue;
+          const tab = body.closest("[data-sidebar-right-tab]");
+          if (selected !== null && tab !== null && tab.getAttribute("data-sidebar-right-tab") === selected) return key;
+          if (fallback === "") fallback = key;
+        }
       }
       return fallback;
     }
 
-    /** Drop the heading node; safe to call when none exists. */
+    /**
+     * Drop the heading node; safe to call when none exists.
+     *
+     * The sweep covers a heading that an earlier client generation left in the
+     * DOM: a replaced module keeps the document but forgets its node, and
+     * without it the terminal would keep a heading the current code never
+     * inserts (#93). Returns whether anything was actually taken down, so the
+     * caller can refit the terminal that just grew.
+     */
     function removeRightPanelHeading() {
+      let removed = rightPanelHeadingNode !== null;
       rightPanelHeadingNode?.remove();
       rightPanelHeadingNode = null;
+      for (const stale of document.querySelectorAll("[data-rdsh-panel-heading]")) {
+        stale.remove();
+        removed = true;
+      }
+      return removed;
     }
 
     /**
@@ -4482,9 +4501,13 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      *
      * Only the mobile surface writes this node. It follows the active tab
      * (and a language change on the next pass), stays outside the tab strip
-     * and the terminal body, and is removed when the panel closes, moves to
+     * and the panel body, and is removed when the panel closes, moves to
      * another node, or the module tears down. The panel itself carries the
      * safe-area padding, so the heading only supplies its own gutters.
+     *
+     * #93: the terminal is not a named kind any more, so opening one (or
+     * switching to one) goes through the removal branch below; the terminal
+     * keeps the close X and the tab strip.
      */
     function decorateRightPanelHeading() {
       const open = document.documentElement.hasAttribute("data-rdsh-rightpanel-open");
@@ -4497,11 +4520,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const scope = activeRightPanelScope(rightPanelNode);
       const key = rightPanelHeadingKey(scope);
       if (key === "") {
-        // A file/preview tab takes the strip back: refit the terminal that a
-        // previous tab heading shortened, if one is still mounted.
-        const removed = rightPanelHeadingNode !== null;
-        removeRightPanelHeading();
-        if (removed) scheduleTerminalFit();
+        // A terminal or file/preview tab takes the strip back: refit the
+        // terminal that a previous heading shortened, if one is still mounted.
+        if (removeRightPanelHeading()) scheduleTerminalFit();
         return;
       }
       const label = t(key);
@@ -13278,10 +13299,12 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
        it to this full-width pane as well double-insets the panel (and cost 47px
        of height in portrait). */
   }
-  /* #82: name the kind of panel above dockkit's tab strip. The panel already
-     applies the safe-area insets; the heading only adds its own gutters. It
-     is pointer-transparent and sits outside the strip and the terminal body,
-     so it cannot claim a tab drag or resize the xterm mount. */
+  /* #82: name the kind of panel above dockkit's tab strip. #93: the terminal
+     gets no heading (its chip already says "bash"), so this rule only styles
+     the child-session panel now. The panel already applies the safe-area
+     insets; the heading only adds its own gutters. It is pointer-transparent
+     and sits outside the strip and the panel body, so it cannot claim a tab
+     drag or resize the xterm mount. */
   [data-rdsh-rightpanel] [data-rdsh-panel-heading] {
     flex: 0 0 auto;
     box-sizing: border-box;

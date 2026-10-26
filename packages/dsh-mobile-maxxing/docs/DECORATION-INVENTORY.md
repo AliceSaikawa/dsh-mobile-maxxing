@@ -52,7 +52,7 @@ mode. The mode never changes during a page, so the cleanup path is dispose
 | `decorateRightPanel` | panel node + `data-rdsh-rightpanel-open`, observers, `--rdsh-rightbar-width` | mobile mode only | `forgetRightPanel()` clears the attribute, the width variable and the observers |
 | `decorateRightPanelTabs` | `data-rdsh-rtab` | mobile mode only | attribute removed |
 | `decorateCodePreview` | code pre/scroll locks | mobile mode only | attributes removed |
-| `decorateQuestionCards` / `decorateQuestionArrow` | question card/frame/tile + injected arrow button | mobile mode only | attributes + arrows removed |
+| `decorateQuestionCards` / `decorateQuestionArrow` | question card/frame/tile/typing + injected arrow button; Enter/CMD-Enter and required-selection listeners | mobile mode only | attributes + arrows removed |
 | `decorateTodoPanel` | todo row text/status/tab/title | mobile mode only | attributes restored/removed via `clearDetailPanelHooks()` |
 | `decorateGoalBar` | goal objective/actions/editing, role/tab/title | mobile mode only | same |
 | `decorateHeaderTitle` | header title/running | mobile mode only | attributes removed |

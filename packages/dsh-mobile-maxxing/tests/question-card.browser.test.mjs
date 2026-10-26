@@ -171,9 +171,9 @@ html, body { margin: 0; padding: 0; background: #111; }
 `;
 
 /** One card; `plan` adds the review strip/summary the plan-review card uses. */
-function card({ plan = false } = {}) {
+function card({ plan = false, typing = false } = {}) {
 	return `<div class="Mbwy4a_frame" data-rdsh-question-frame>
-  <div class="Mbwy4a_card" data-rdsh-question-card>
+  <div class="Mbwy4a_card" data-rdsh-question-card${typing ? ' data-rdsh-question-typing=""' : ""}>
     <div class="Mbwy4a_header">
       <div class="Mbwy4a_headingBlock"><div class="Mbwy4a_title">${LONG_TOKEN}</div></div>
       <div class="Mbwy4a_headerActions"><button class="Mbwy4a_iconButton" aria-label="Collapse the question card">x</button></div>
@@ -197,11 +197,11 @@ function card({ plan = false } = {}) {
 </div>`;
 }
 
-function fixtureHtml() {
+function fixtureHtml({ typing = false } = {}) {
 	return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>${UPSTREAM_SCAFFOLD}${SHIPPED_STYLESHEET}</style></head>
-<body>${card()}${card({ plan: true })}</body></html>`;
+<body>${card({ typing })}${card({ plan: true })}</body></html>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -268,15 +268,15 @@ class Page {
 		return result.result.value;
 	}
 
-	async load(width) {
+	async load(width, height = 844, options = {}) {
 		await this.send("Emulation.setDeviceMetricsOverride", {
 			width,
-			height: 844,
+			height,
 			deviceScaleFactor: 3,
 			mobile: width < 768,
 		});
 		await this.send("Page.navigate", {
-			url: `data:text/html;base64,${Buffer.from(fixtureHtml()).toString("base64")}`,
+			url: `data:text/html;base64,${Buffer.from(fixtureHtml(options)).toString("base64")}`,
 		});
 		await sleep(400);
 	}
@@ -386,4 +386,68 @@ browserTest("real browser: the viewport-wide card is phone-only", async () => {
 		assert.ok(card.card.width <= 349.5, `a desktop card grew to ${card.card.width}px`);
 		assert.ok(card.fieldFontSize < 16, "the 16px answer field leaked out of the phone query");
 	}
+});
+
+/**
+ * The card's answer field is the only part the user needs while typing, so the
+ * keyboard-height measurement records whether it is still inside the card's
+ * scroll body and above the fold.
+ */
+const MEASURE_ANSWER = `(() => {
+  const round = (value) => Math.round(value * 10) / 10;
+  const card = document.querySelector("[data-rdsh-question-card][data-rdsh-question-typing]")
+    ?? document.querySelector("[data-rdsh-question-card]");
+  const body = card.querySelector('[class*="_body"]');
+  const field = card.querySelector("textarea");
+  const cardRect = card.getBoundingClientRect();
+  const bodyRect = body.getBoundingClientRect();
+  const fieldRect = field.getBoundingClientRect();
+  return {
+    vh: innerHeight,
+    typing: card.hasAttribute("data-rdsh-question-typing"),
+    cardH: round(cardRect.height),
+    bodyH: round(bodyRect.height),
+    fieldBottom: round(fieldRect.bottom),
+    bodyBottom: round(bodyRect.bottom),
+    maxHeight: getComputedStyle(card).maxHeight,
+  };
+})()`;
+
+/** Load one card at a phone/keyboard geometry and measure the answer field. */
+async function measureAnswer(width, height, typing) {
+	const page = await Page.open();
+	try {
+		await page.load(width, height, { typing });
+		return await page.eval(MEASURE_ANSWER);
+	} finally {
+		await page.close();
+	}
+}
+
+browserTest("real browser: a focused answer field keeps the card open at the keyboard height", async () => {
+	const typing = await measureAnswer(390, 400, true);
+	assert.equal(typing.vh, 400, "the keyboard-height viewport did not apply");
+	assert.equal(typing.typing, true, "the typing hook is missing");
+	assert.equal(typing.maxHeight, "372px", "the 60vh cap still applies while typing");
+	assert.ok(typing.cardH > 280, `the card collapsed while typing (${typing.cardH}px)`);
+	assert.ok(typing.bodyH > 140, `the card body collapsed while typing (${typing.bodyH}px)`);
+	// The body is the scrollport; the shipped JS scrolls this field into it.
+	assert.ok(typing.cardH <= typing.vh, "the typing card is taller than the visible viewport");
+
+	// Without the hook, upstream's 60vh cap is still what ships.
+	const capped = await measureAnswer(390, 400, false);
+	assert.equal(capped.maxHeight, "240px", "upstream's cap changed without the typing hook");
+	assert.ok(capped.cardH <= 241, `the untyped card grew to ${capped.cardH}px`);
+	assert.ok(capped.fieldBottom > capped.bodyBottom, "the fixture no longer reproduces the clipped field");
+});
+
+browserTest("real browser: a 200px keyboard height still leaves the card body usable", async () => {
+	const typing = await measureAnswer(390, 200, true);
+	assert.equal(typing.maxHeight, "172px", "the visible-height cap did not apply at 200px");
+	assert.ok(typing.cardH >= 160, `the 200px card collapsed to ${typing.cardH}px`);
+
+	const capped = await measureAnswer(390, 200, false);
+	assert.equal(capped.maxHeight, "120px", "upstream's 60vh cap changed without the typing hook");
+	assert.ok(capped.bodyH <= 40, `the untyped 200px body is not the collapsed original (${capped.bodyH}px)`);
+	assert.ok(typing.bodyH > capped.bodyH, `the typing hook bought no body height (${typing.bodyH} vs ${capped.bodyH})`);
 });

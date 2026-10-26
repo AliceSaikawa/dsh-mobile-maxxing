@@ -1,4 +1,4 @@
-# rdsh-locale-ja
+# dsh-locale-ja
 
 Separate, optional Japanese locale package for DSH. It implements the final
 ownership and packaging migration of
@@ -98,8 +98,8 @@ catalog is complete, so `scripts/pack-all.mjs` will build the locale tarball;
 install it separately from that local file:
 
 ```sh
-node scripts/pack-all.mjs            # dist/rdsh-locale-ja-<version>.tgz only when complete
-dsh plugin --profile web add ./dist/rdsh-locale-ja-0.1.0.tgz
+node scripts/pack-all.mjs            # dist/dsh-locale-ja-<version>.tgz only when complete
+dsh plugin --profile web add ./dist/dsh-locale-ja-0.1.0.tgz
 # restart DSH to load the client half
 ```
 
@@ -163,7 +163,7 @@ English file.
 
 `client.js` is a browser bundle, not an ES module. DSH concatenates each
 plugin's client file verbatim into a classic `<script>` batch, so the file only
-calls `window.__ModuleLoader__.load({ id: "rdsh-locale-ja", factory })`; the
+calls `window.__ModuleLoader__.load({ id: "dsh-locale-ja", factory })`; the
 loader queues that registration and materializes the factory once on first
 import. Raw `export` statements would fail to parse in that position and
 register nothing, so `./client` cannot be loaded with a bare Node `import`
@@ -224,7 +224,7 @@ Then, from the repository root:
 node tools/merge-batches.mjs --check   # validate reviewed batches, write nothing
 node tools/merge-batches.mjs           # atomically update locale/namespaces/ja
 node tools/build-client.mjs            # regenerate client and status
-node --test packages/rdsh-locale-ja/test/stage2.test.mjs
+node --test packages/dsh-locale-ja/test/stage2.test.mjs
 ```
 
 The merge accepts only batch ids present in `work/reviewed.json`. It rejects
@@ -344,7 +344,7 @@ assertions when the installed version differs, while `--check` still fails.
 ## Tests
 
 ```sh
-node --test packages/rdsh-locale-ja/test/*.test.mjs
+node --test packages/dsh-locale-ja/test/*.test.mjs
 # or
 pnpm test:locale
 ```

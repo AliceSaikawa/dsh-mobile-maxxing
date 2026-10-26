@@ -7,9 +7,9 @@ import test from 'node:test';
 import { buildSnapshot, checkSnapshot, writeSnapshot } from '../../../tools/extract-upstream.mjs';
 
 const repoRoot = path.resolve(import.meta.dirname, '../../..');
-const snapshotDir = path.join(repoRoot, 'packages', 'rdsh-locale-ja', 'locale');
+const snapshotDir = path.join(repoRoot, 'packages', 'dsh-locale-ja', 'locale');
 const englishDir = path.join(snapshotDir, 'namespaces', 'en');
-const fixtureRoot = path.join(repoRoot, 'packages', 'rdsh-locale-ja', 'test', 'fixtures', 'runtime', '@deepseek-ai');
+const fixtureRoot = path.join(repoRoot, 'packages', 'dsh-locale-ja', 'test', 'fixtures', 'runtime', '@deepseek-ai');
 const committedUpstream = JSON.parse(fs.readFileSync(path.join(snapshotDir, 'upstream.json'), 'utf8'));
 const placeholderPattern = /\{([A-Za-z][A-Za-z0-9_.-]*)\}/gu;
 
@@ -120,7 +120,7 @@ test('extractor follows spreads, templates, joins, comments, multi-namespace fil
 
 test('writeSnapshot writes only the English snapshot and upstream.json, leaving existing ja data untouched', async () => {
 	const snapshot = await buildSnapshot({ dshRoot: fixtureRoot });
-	const output = fs.mkdtempSync(path.join(os.tmpdir(), 'rdsh-locale-ja-'));
+	const output = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-locale-ja-'));
 	try {
 		const japaneseDir = path.join(output, 'namespaces', 'ja');
 		fs.mkdirSync(japaneseDir, { recursive: true });

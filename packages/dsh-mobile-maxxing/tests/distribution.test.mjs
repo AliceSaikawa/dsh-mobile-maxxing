@@ -54,9 +54,9 @@ test("the inventory can read a title, a description and an icon", async () => {
 test("the root tarball stays free of the optional locale whole-pack", async () => {
 	const output = execFileSync("npm", ["pack", "--dry-run", "--json"], { cwd: repo, encoding: "utf8" });
 	const entries = JSON.parse(output)[0].files.map((entry) => entry.path);
-	assert.equal(entries.some((entry) => entry.includes("rdsh-locale-ja")), false,
+	assert.equal(entries.some((entry) => entry.includes("dsh-locale-ja")), false,
 		"the mobile tarball contains the separate locale package");
-	assert.equal(entries.some((entry) => entry === "packages/rdsh-locale-ja/client.js"), false);
+	assert.equal(entries.some((entry) => entry === "packages/dsh-locale-ja/client.js"), false);
 	assert.ok(entries.includes("packages/dsh-mobile-maxxing/locale/ja.json"),
 		"the mobile package keeps its own UI locale metadata");
 });

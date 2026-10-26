@@ -5,7 +5,7 @@
  * plugin only matches their rendered labels. These tests pin the labels that
  * the #59 More menu, the Automation detail, New session, Fullscreen and the
  * activity chips depend on, against the reviewed outputs in
- * `packages/rdsh-locale-ja` work/out (namespace:key in the comments). They
+ * `packages/dsh-locale-ja` work/out (namespace:key in the comments). They
  * also keep the en and zh vocabularies that existing shells still need.
  */
 
@@ -16,7 +16,7 @@ import { PROBES } from "../lib/copy.js";
 
 /** One committed ja namespace, as the full translation ships it. */
 function ja(name) {
-	return JSON.parse(readFileSync(new URL(`../../rdsh-locale-ja/locale/namespaces/ja/${name}.json`, import.meta.url), "utf8"));
+	return JSON.parse(readFileSync(new URL(`../../dsh-locale-ja/locale/namespaces/ja/${name}.json`, import.meta.url), "utf8"));
 }
 
 /** One count template from the committed catalogue, rendered. */

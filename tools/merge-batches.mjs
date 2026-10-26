@@ -20,7 +20,7 @@
  * Usage:
  *   node tools/merge-batches.mjs
  *   node tools/merge-batches.mjs --check
- *   node tools/merge-batches.mjs --package-dir /tmp/rdsh-locale-ja --work-dir /tmp/work
+ *   node tools/merge-batches.mjs --package-dir /tmp/dsh-locale-ja --work-dir /tmp/work
  */
 
 import fs from 'node:fs';
@@ -233,7 +233,7 @@ function printHelp() {
 		'',
 		'Options:',
 		'  --check              Validate reviewed batches without writing.',
-		'  --package-dir <path> Package directory (default: packages/rdsh-locale-ja).',
+		'  --package-dir <path> Package directory (default: packages/dsh-locale-ja).',
 		'  --work-dir <path>    Work directory (default: <package>/work).',
 		'  --help               Show this help.',
 		'',

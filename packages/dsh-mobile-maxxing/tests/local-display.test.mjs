@@ -135,7 +135,7 @@ test("the mobile package no longer owns a ja language pack (#80)", () => {
 	assert.doesNotMatch(CLIENT, /installJapaneseLocale/, "the mobile ja installer is still present");
 	assert.doesNotMatch(HOST, /__RDSH_PWA_LOCALES__|LOCALE_PACKS/,
 		"the host still injects a ja pack");
-	// rdsh-locale-ja is the sole owner; the mobile picker consumes the catalog.
+	// dsh-locale-ja is the sole owner; the mobile picker consumes the catalog.
 	assert.match(CLIENT, /function localeOptionsFrom\(snapshot\) \{/);
 });
 

@@ -605,7 +605,7 @@ test("the legacy hide list applies at phone width even with a fine pointer", () 
 
 /** One committed ja namespace, as the full translation ships it. */
 function jaNamespace(name) {
-	return JSON.parse(readFileSync(new URL(`../../rdsh-locale-ja/locale/namespaces/ja/${name}.json`, import.meta.url), "utf8"));
+	return JSON.parse(readFileSync(new URL(`../../dsh-locale-ja/locale/namespaces/ja/${name}.json`, import.meta.url), "utf8"));
 }
 
 test("#80 the default hide list matches the committed ja labels", () => {
@@ -2908,7 +2908,7 @@ test("#80 an owner that activates after the mobile attach reaches the picker and
 	assert.deepEqual(api.state.localDisplay.languages.map((entry) => entry.id), ["zh", "en"]);
 	assert.equal(api.state.localDisplay.language, "", "ja cannot be selected before its owner exists");
 
-	// rdsh-locale-ja activates late: addLanguage publishes the catalog through
+	// dsh-locale-ja activates late: addLanguage publishes the catalog through
 	// the LocaleFace listeners only, because the active locale stays zh.
 	const releaseJa = service.addLanguage(ja);
 	await settleLocale();

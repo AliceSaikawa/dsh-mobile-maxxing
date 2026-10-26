@@ -609,7 +609,7 @@ const NAMESPACES = new Map();
 function countLabel(lang, name, key, count = 3) {
 	const id = `${lang}/${name}`;
 	if (!NAMESPACES.has(id)) {
-		const file = new URL(`../../rdsh-locale-ja/locale/namespaces/${id}.json`, import.meta.url);
+		const file = new URL(`../../dsh-locale-ja/locale/namespaces/${id}.json`, import.meta.url);
 		NAMESPACES.set(id, JSON.parse(readFileSync(file, "utf8")));
 	}
 	return NAMESPACES.get(id)[key].replace("{count}", String(count));

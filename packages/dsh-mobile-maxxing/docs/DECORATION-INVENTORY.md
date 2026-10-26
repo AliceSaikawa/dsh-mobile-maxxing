@@ -114,7 +114,7 @@ hide overrides are ignored without deleting storage.
 
 Device-local additions live in the same section: font sizes (text/code/terminal), UI
 language from the registered catalog (`ja` only when the separate optional
-`rdsh-locale-ja` package owns it), and a default permission preset. Storage keys are
+`dsh-locale-ja` package owns it), and a default permission preset. Storage keys are
 `rdsh-mobile-ux:local-permission` and `rdsh-mobile-ux:local-display`; no Host writer is
 called. The permission preset is applied through the opened session's own `/permission`
 command, using the public `uiWorkspace.openWorkspaceSession(beforeOpen)` contract plus

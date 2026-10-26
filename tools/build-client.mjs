@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Generate the rdsh-locale-ja package manifest, host entry, browser client,
+ * Generate the dsh-locale-ja package manifest, host entry, browser client,
  * batch manifest, and translation status from the committed JSON data.
  *
  * Stage 2 of #80. The English snapshot is read-only here. Japanese source files
@@ -11,7 +11,7 @@
  * Usage:
  *   node tools/build-client.mjs
  *   node tools/build-client.mjs --check
- *   node tools/build-client.mjs --package-dir /tmp/rdsh-locale-ja
+ *   node tools/build-client.mjs --package-dir /tmp/dsh-locale-ja
  */
 
 import path from 'node:path';
@@ -53,7 +53,7 @@ function printHelp() {
 		'',
 		'Options:',
 		'  --check             Compare the generated files with the committed copies.',
-		'  --package-dir <path> Package directory (default: packages/rdsh-locale-ja).',
+		'  --package-dir <path> Package directory (default: packages/dsh-locale-ja).',
 		'  --help              Show this help.',
 	].join('\n'));
 }
@@ -68,12 +68,12 @@ if (isMain) {
 			const result = checkArtifacts({ packageDir: options.packageDir });
 			for (const warning of result.warnings) console.warn('warning: ' + warning);
 			if (result.problems.length > 0) {
-				console.error('rdsh-locale-ja generated files are out of date:');
+				console.error('dsh-locale-ja generated files are out of date:');
 				for (const problem of result.problems) console.error('  - ' + problem);
 				process.exitCode = 1;
 			} else {
 				const totals = result.artifacts.status.totals;
-				console.log('rdsh-locale-ja generated files are up to date: ' + totals.namespaces + ' namespaces, ' + totals.keys + ' keys, ' + totals.translated + ' translated, ' + totals.fallback + ' development-only English fallbacks');
+				console.log('dsh-locale-ja generated files are up to date: ' + totals.namespaces + ' namespaces, ' + totals.keys + ' keys, ' + totals.translated + ' translated, ' + totals.fallback + ' development-only English fallbacks');
 			}
 		} else {
 			const artifacts = buildArtifacts({ packageDir: options.packageDir });

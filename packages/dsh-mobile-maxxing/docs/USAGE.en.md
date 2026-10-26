@@ -60,7 +60,7 @@ none writes the shared DSH profile.
 | --- | --- |
 | Font sizes (text / code / terminal) | Changes this device's rendering only |
 | Terminal-only dark | Keeps the terminal dark on a light page; the shared theme and the rest of the UI are unchanged |
-| Display language | Changes this device's UI language; only locales registered in the shared locale service are offered. Japanese appears only with the optional separate `rdsh-locale-ja` package |
+| Display language | Changes this device's UI language; only locales registered in the shared locale service are offered. Japanese appears only with the optional separate `dsh-locale-ja` package |
 | Default permission | Applies to new sessions started on this device only |
 
 The permission choice is recorded as the session's own `/permission` right after it opens; the
@@ -128,12 +128,12 @@ untranslated dictionary keys fall back to English.
 This package does not add a `ja` language pack. The picker lists only the `en` /
 `zh` locales the host registers, and a stored `ja` choice is ignored while no owner
 registers it (nothing is guessed). Japanese requires the optional separate
-`rdsh-locale-ja` package, installed from its local tarball. It is not part of the
+`dsh-locale-ja` package, installed from its local tarball. It is not part of the
 mobile tarball and is never enabled automatically. Both packages may be enabled
 together without a duplicate registration (the mobile half never calls
 `addLanguage`), and the shared display language is never rewritten: only this
 device's view is projected. See
-[`packages/rdsh-locale-ja/README.md`](../../rdsh-locale-ja/README.md) for its
+[`packages/dsh-locale-ja/README.md`](../../dsh-locale-ja/README.md) for its
 translation status and install steps. The PC's language list is unchanged.
 
 ## Mobile layout

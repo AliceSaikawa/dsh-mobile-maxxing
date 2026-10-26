@@ -26,10 +26,10 @@
 
 - 2026-10-26
 - モバイルパッケージは `ja` の `addLanguage` / `register` と `__RDSH_PWA_LOCALES__` の注入を持たない。`COPY.ja` はこのパッケージ自身の UI 文言（manifest・SW・通知など）専用で、共有ロケールの辞書ではない。端末の「表示言語」は共有ロケールサービスに登録済みの言語だけを出し、PC は何も変えない。
-- `rdsh-locale-ja` が `ja` の言語・名前空間の唯一の所有者である。モバイルの tarball には含まれず、依存にも bundle にも入らず、自動で有効化されない。別途ローカルの tarball から入れた場合だけ `ja` が増える。両方を入れても二重登録は起きない。共有の表示言語は書き換えず、この端末だけの投影に留める。
-- 翻訳は完了している。64 名前空間 / 2906 キーのすべてにレビュー済みの日本語値があり、英語フォールバックは 0（`translation-status.json` は `complete`）。移行済みの 83 値（`common` 41、`settings` 41、`settings.locale` 1）はそのまま維持し、残りの 2823 キーは 94 バッチに分けて独立レビューしたうえでマージした。数値の正は `packages/rdsh-locale-ja/locale/translation-status.json` である。
+- `dsh-locale-ja` が `ja` の言語・名前空間の唯一の所有者である。モバイルの tarball には含まれず、依存にも bundle にも入らず、自動で有効化されない。別途ローカルの tarball から入れた場合だけ `ja` が増える。両方を入れても二重登録は起きない。共有の表示言語は書き換えず、この端末だけの投影に留める。
+- 翻訳は完了している。64 名前空間 / 2906 キーのすべてにレビュー済みの日本語値があり、英語フォールバックは 0（`translation-status.json` は `complete`）。移行済みの 83 値（`common` 41、`settings` 41、`settings.locale` 1）はそのまま維持し、残りの 2823 キーは 94 バッチに分けて独立レビューしたうえでマージした。数値の正は `packages/dsh-locale-ja/locale/translation-status.json` である。
 - モバイル側の ja 表示は実辞書で回帰固定している。idle のサブエージェント件数は名詞先（「サブエージェント 3 件」）、phone で隠すコントロールと分割（「分割」）はコミット済み ja 名前空間のラベルで照合し、デスクトップでは hide が no-op であることもテストで固定する。
-- profile 順で `rdsh-locale-ja` が後から有効になっても、`locale/change` に加えて公開 `localeService.subscribe()` の store の再publish で追従する。カタログ・端末の選択意思・dispose を保全し、取り下げは System へ戻して再追加で再適用、dispose は最新の Host 表示だけを復元する（外部で取り下げた `ja` を復活させない）。
+- profile 順で `dsh-locale-ja` が後から有効になっても、`locale/change` に加えて公開 `localeService.subscribe()` の store の再publish で追従する。カタログ・端末の選択意思・dispose を保全し、取り下げは System へ戻して再追加で再適用、dispose は最新の Host 表示だけを復元する（外部で取り下げた `ja` を復活させない）。
 - Host がこの端末の投影言語へ通知なしに切り替わると `LocaleRuntime.adopt` はイベントを出さない。復元は DSH 0.2.1-rc.2 の `resolveActive()`（runtime-callable だが d.ts では private）を読み取り専用で参照する。この関数が不在・throw・未登録 ID を返す場合は最後に publish された baseline に fallback するため、無通知の変化は検知できない。`write`/`setLocale` は呼ばず、将来の SDK がこの内部 API を保証する前提も置かない。
 - 投影 revision は Host の数値（125）のまま `Object(125)` の identity token として公開し、revision の同一性で再描画する mounted text/slot cache を更新する。`<=`・`+ 1`・JSON は数値と同じで、System/dispose では primitive な Host snapshot に戻す。SDK の public 型 `number` から object への局所 adapter であり、rc.2 の実 consumer は検証済みだが `typeof number` / `Number.isInteger` を前提とする第三者・将来 SDK には非互換で、一般保証はしない。Host への write・偽 `locale/change`・数値 revision の増加は行わず、source の `SHORTCUT(#80)` にも明記している。
 - `scripts/pack-all.mjs` は `translation-status.json` が 64/2906・翻訳 2906・fallback 0・`complete` でない限り別の locale tarball を作らない。不完全な状態では `REFUSED` を表示して tarball を作らず、英語フォールバックの pack を黙って配布しない。`--require-locale` を付けたときだけその拒否を失敗にする。現在の status は `complete` なのでこのガードは通るが、リリース用の URL はなく、ローカルの tarball からのみ入れる。

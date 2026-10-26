@@ -210,7 +210,7 @@ export const COPY = {
 
 		// --- session frame palette ------------------------------------------
 		"frame.menu": "Color frame",
-		"frame.paletteAria": "Session frame color",
+		"frame.paletteAria": "Frame color",
 		"frame.paletteTitle": "Frame color",
 		"frame.color.blue": "Blue",
 		"frame.color.green": "Green",
@@ -487,7 +487,7 @@ export const COPY = {
 
 		// --- session frame palette ------------------------------------------
 		"frame.menu": "色枠",
-		"frame.paletteAria": "セッションの枠色",
+		"frame.paletteAria": "枠の色",
 		"frame.paletteTitle": "枠の色",
 		"frame.color.blue": "ブルー",
 		"frame.color.green": "グリーン",

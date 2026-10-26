@@ -725,6 +725,8 @@ test("representative Japanese copy matches the reference wording", () => {
 		"crop.cancel": "キャンセル",
 		"crop.save": "クエリに追加",
 		"frame.menu": "色枠",
+		// The palette is shared by sessions and folders: no target in the label.
+		"frame.paletteAria": "枠の色",
 		"notify.turn.completed": "作業完了",
 		"notify.questionHeader": "確認",
 		"notify.previewQuestion": "このまま進めますか？",
@@ -741,6 +743,7 @@ test("representative Japanese copy matches the reference wording", () => {
 		assert.equal(copyFor("ja")[key], value, `${key} does not match the reference Japanese`);
 	}
 	assert.equal(copyFor("en")["tab.mobile"], "Mobile");
+	assert.equal(copyFor("en")["frame.paletteAria"], "Frame color", "the English palette label names a session only");
 });
 
 test("the local session-id copy row is gone (#99)", () => {

@@ -15,9 +15,10 @@ keys** have a reviewed Japanese value, and `locale/translation-status.json`
 reports `complete` with zero English fallback. The migrated seed of **83
 values** is unchanged, and the other **2823 keys were reviewed and merged in
 94 batches**. The package is still `private` and optional: it is not
-published, the local tarball is the only install path, and a live-profile
-install is unverified: the loader contract is verified in isolation, but the
-real GUI and a real profile are not (see [Status and limits](#status-and-limits)).
+published, the local tarball is the only install path, and a production
+profile install and a device run remain unverified. The loader contract is
+verified in isolation; GUI evidence is tracked under #70, separately from
+production installs (see [Status and limits](#status-and-limits)).
 
 ## What the package contains
 
@@ -55,6 +56,33 @@ Consequences:
   dispose this package's dictionaries;
 - the desktop stays a hard no-op: neither package sets the shared language or
   changes a desktop catalog.
+
+## Consuming the catalog from the mobile plugin (#80)
+
+The mobile plugin reads this catalog but never owns it. Its tests pin these
+behaviors and the known limit they cannot cover:
+
+- **Reviewed labels, not guessed strings.** The phone's default hide list and
+  the dock's Split control match the committed `ja` renderings (`分割` and
+  the hide-list labels), and the idle subagent total is noun-first
+  (`サブエージェント 3 件`) while the running form is count-first. Tests read
+  the committed `ja` namespaces instead of spelling those labels out, so a
+  dictionary edit that breaks a probe fails there; a desktop stays a no-op.
+- **Late owner, still followed.** A profile may activate this package after
+  the mobile plugin attached. In addition to `locale/change`, the picker
+  follows the public `localeService.subscribe()` store republishes, so
+  `addLanguage`/`removeLanguage` reach it. The device choice stays a
+  separate intent (a withdrawn language unprojects to System and re-applies
+  when re-added), and dispose restores the latest Host view instead of
+  resurrecting a withdrawn `ja`.
+- **Silent Host switches are a known limit.** A Host switch to the language
+  this device already projects emits no event. To restore it, the plugin
+  reads DSH `0.2.1-rc.2`'s `resolveActive()` read-only while projecting, on
+  System/reset and on dispose; that method is runtime-callable but private in
+  its type declarations. If it is absent, throws or returns an unregistered
+  id, the plugin falls back to the last published baseline and a silent switch
+  is not detected. It never calls `write`/`setLocale`, and no future SDK is
+  assumed to keep that internal reader available.
 
 ## Install (optional, local tarball)
 
@@ -235,10 +263,10 @@ JSON keys are hard errors.
   registration through a `window.__ModuleLoader__` harness, and a separate
   check with the real ClientModuleSystem and the upstream locale bundle in an
   isolated Chrome completed `modules.import` with 64 namespaces / 2906 keys /
-  65 disposers. This is not a live-profile or device test: a real-profile
-  install, use beside the real GUI (still being verified) and device
-  acceptance remain unverified. Do not claim a production install, GUI success
-  or device success yet.
+  65 disposers. GUI-level checks use isolated source replacement and their
+  evidence is tracked under #70 rather than here. Neither is a production
+  profile install or a device run: those remain unverified, and this document
+  claims no release, production or device success.
 - **Batch sizing:** namespaces with at least 40 keys use 40-50 key chunks except
   the final remainder; namespaces below 40 keys stay in one short batch so a
   worker always owns one namespace per output file.

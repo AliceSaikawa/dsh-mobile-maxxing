@@ -283,7 +283,16 @@ window.__ModuleLoader__.load({
     const useEffect = React.useEffect;
 
     const SCOPE = new URL("./", document.baseURI);
-    const SW_URL = new URL("sw.js", SCOPE).href;
+    /**
+     * Script revision for the worker URL.
+     *
+     * An installed iOS app can keep answering with its previous worker for a
+     * very long time; a changed script URL forces the browser to treat this as
+     * a new worker instead of reusing the bytes it already has (#25). Bump this
+     * whenever the worker's push handling changes.
+     */
+    const SW_REVISION = "20261026b";
+    const SW_URL = new URL(`sw.js?v=${SW_REVISION}`, SCOPE).href;
     /** Script URL of the notification plugin's worker (see unifyWorker below). */
     const PUSH_WORKER_PATH = "/push/sw.js";
     const STYLE_ATTR = "data-dsh-mobile-maxxing-style";

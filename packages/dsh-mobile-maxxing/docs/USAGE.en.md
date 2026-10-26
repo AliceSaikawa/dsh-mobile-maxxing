@@ -165,14 +165,17 @@ close it; swipe left to open it.
 
 | App state | How you are told |
 | --- | --- |
-| Visible (foreground) | In-app banner. No system notification |
+| Visible (foreground) | In-app banner; no system push if the host receives its acknowledgement |
 | Background, another app, closed | Web Push system notification |
 | Tap the notification | That session opens (banner "open" while in the app) |
 
-The service worker decides: `clients.matchAll()` finds a window with
-`visibilityState === "visible"` and hands the payload to the page, waiting up to 1.5s for the
-banner to acknowledge it. A visible window owns the notification: if no acknowledgement
-arrives, the miss is logged and no system notification is stacked on top of the app.
+The host waits up to 1.5s per notification event for an acknowledgement. A visible
+page renders the local banner from session state, then acknowledges that event for its
+own push endpoint. Only acknowledged endpoints skip push. A hidden, disconnected, or
+failed page sends no acknowledgement, so ordinary Web Push is the fallback; there is
+no visibility heartbeat or expiring lease. Every push that reaches the service worker
+calls `showNotification`, as WebKit requires. A fallback may occasionally duplicate a
+foreground banner, but it cannot silently discard a notification.
 
 ### Sounds
 

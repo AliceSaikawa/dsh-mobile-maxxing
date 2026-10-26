@@ -267,11 +267,11 @@ function pushPayload(event) {
 self.addEventListener("push", (event) => {
 	const payload = pushPayload(event);
 	event.waitUntil((async () => {
-		// Every received push must present a user-visible notification. WebKit
-		// enforces that promise (three silent pushes revoke the subscription)
-		// and Chromium/Edge substitute a generic banner, so a visible page can
-		// never be a reason to skip this. Foreground delivery is the page's own
-		// local banner; the host does not push while that page is visible.
+		// Every received Web Push must produce a user-visible notification:
+		// WebKit revokes a subscription after three silent pushes, and
+		// Chromium/Edge substitute a generic banner. A visible page shows its
+		// own local banner instead; the host only skips a push for a notice
+		// that page already acknowledged.
 		await self.registration.showNotification(payload.title, {
 			body: payload.body,
 			icon: new URL("pwa/icon-192.png", SCOPE).href,

@@ -33,7 +33,7 @@ import { applyNotify, PushStore, toBase64Url } from "../notify/host.js";
 const NEW_ORIGIN = "https://app.example:8446";
 const OLD_ORIGIN = "https://app.example:8444";
 const INTERNAL_ORIGIN = "http://127.0.0.1:3207";
-const WAIT_MS = 40;
+const WAIT_MS = 1550;
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -1079,7 +1079,7 @@ test("an offline launch falls back to the cached shell, not the network error", 
 	assert.notEqual(response?.error, true, "the offline launch fell through to Response.error() despite a cached shell");
 });
 // ---------------------------------------------------------------------------
-// #25: a visible app owns the notification
+// #25: every received push is user-visible
 // ---------------------------------------------------------------------------
 
 test("#25 every received push shows a system notification, even with a visible window", async () => {
@@ -1087,15 +1087,22 @@ test("#25 every received push shows a system notification, even with a visible w
 	const storage = new FakeCacheStorage(origin);
 	const payload = { title: "Session A", body: "Turn finished", sessionId: "s1", kind: "turn-end" };
 	const posted = [];
+	const timers = [];
 	const clients = [{ visibilityState: "visible", postMessage(...args) { posted.push(args); } }];
-	const { listeners, shown } = loadServiceWorker({ origin, cacheStorage: storage, clients });
+	const { listeners, shown } = loadServiceWorker({
+		origin,
+		cacheStorage: storage,
+		clients,
+		timers: { setTimeout: (...args) => { timers.push(args); return setTimeout(...args); } },
+	});
 	await fire(listeners, "push", payload);
 	// WebKit revokes a subscription after three pushes that show no
 	// notification, and Chromium/Edge substitute a generic banner, so the
 	// worker has no "silent because the app is visible" branch. Foreground
 	// in-app delivery is the page's own local notice.
+	assert.equal(posted.length, 0, "the worker handed the notice to the page instead of showing it");
+	assert.deepEqual(timers, [], "the worker waited for an acknowledgment timer");
 	assert.equal(shown.length, 1, "a received push must be user-visible");
-	assert.equal(posted.length, 0, "the worker must not hand the notice to the page");
 	const [title, options] = shown[0];
 	assert.equal(title, payload.title, "the system banner lost the title");
 	assert.equal(options.body, payload.body, "the system banner lost the body");

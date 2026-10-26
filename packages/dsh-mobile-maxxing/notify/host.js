@@ -740,27 +740,28 @@ export function applyNotify(ctx, config) {
 	/** Enough remembered origins for two apps plus a proxy and a stale tab. */
 	const MAX_OWN_ORIGINS = 8;
 
+	/** Allow a foreground client to render and acknowledge before sending push. */
+	const NOTICE_ACK_GRACE_MS = 1500;
+	/** Only actual, in-flight notices are kept: nothing remains after the grace. */
+	const pendingNotices = new Set();
+
 	/**
-	 * How long one visibility report keeps a device out of the fan-out.
-	 *
-	 * The client re-reports every 20s while visible; 45s leaves room for one
-	 * dropped request (or a suspended timer) without pushing to an app that is
-	 * still on screen. A hidden page reports false immediately.
+	 * Acknowledge one notice for one subscription, only if that origin is a
+	 * target of a currently pending delivery. An unsolicited/stale ack cannot
+	 * suppress a later event, and another device still receives its push.
 	 */
-	const VISIBILITY_LEASE_MS = 45_000;
-
-	/** Endpoint -> the moment its visibility lease expires, in ms. */
-	const visibleUntil = new Map();
-
-	/** A hard cap: a client that invents endpoints cannot grow the map. */
-	const MAX_VISIBILITY_LEASES = 64;
-
-	/** Drop leases that have expired; called on report and on every fan-out. */
-	function pruneVisibilityLeases() {
-		const now = Date.now();
-		for (const [endpoint, until] of visibleUntil) {
-			if (!(until > now)) visibleUntil.delete(endpoint);
+	function acknowledgeNotice({ endpoint, sessionId, kind, origin }) {
+		if (typeof endpoint !== "string" || endpoint === "") return false;
+		if (typeof sessionId !== "string" || sessionId === "") return false;
+		if (kind !== "turn-end" && kind !== "question") return false;
+		for (const pending of pendingNotices) {
+			if (pending.payload.sessionId !== sessionId || pending.payload.kind !== kind) continue;
+			if (!sameOrigin(pending.origin, origin)) continue;
+			if (!pending.endpoints.has(endpoint) || pending.acked.has(endpoint)) continue;
+			pending.acked.add(endpoint);
+			return true;
 		}
+		return false;
 	}
 
 	/** Record one origin as the most recently served. */
@@ -874,13 +875,27 @@ export function applyNotify(ctx, config) {
 		}
 		const subject = store.subject(copy.subject);
 		const results = [];
-		pruneVisibilityLeases();
+		let pending = null;
+		if (target.awaitAck === true && typeof payload?.sessionId === "string" && payload.sessionId !== "") {
+			pending = {
+				payload,
+				origin: targetOrigin,
+				endpoints: new Set(subscriptions.map((item) => item.endpoint)),
+				acked: new Set(),
+			};
+			pendingNotices.add(pending);
+			try {
+				await new Promise((resolve) => setTimeout(resolve, NOTICE_ACK_GRACE_MS));
+			} finally {
+				pendingNotices.delete(pending);
+			}
+		}
 		for (const subscription of subscriptions) {
-			// The app on this endpoint is on screen and shows its own banner, so
-			// a push would only add an OS notification on top of it. Count the
-			// skip as success: the client asked for in-app-only delivery.
-			if ((visibleUntil.get(subscription.endpoint) ?? 0) > Date.now()) {
-				results.push({ status: 0, ok: true, skipped: "visible" });
+			// Skip only after this particular notice was rendered and acknowledged.
+			// A suspended page, failed request, or missing UI always gets normal
+			// push instead of losing the notification behind a stale visibility lease.
+			if (pending?.acked.has(subscription.endpoint)) {
+				results.push({ status: 0, ok: true, skipped: "acknowledged" });
 				continue;
 			}
 			try {
@@ -895,8 +910,8 @@ export function applyNotify(ctx, config) {
 			}
 		}
 		const everyDelivered = results.every((item) => item.ok);
-		const skipped = results.length > 0 && results.every((item) => item.skipped === "visible")
-			? "visible"
+		const skipped = results.length > 0 && results.every((item) => item.skipped === "acknowledged")
+			? "acknowledged"
 			: undefined;
 		return { ok: results.length > 0 && everyDelivered, subject, results, targetOrigin, skipped };
 	}
@@ -926,7 +941,7 @@ export function applyNotify(ctx, config) {
 				copy,
 				lang: copy.lang,
 				session: sessionNameOf(ctx, session),
-			}), { origin }).catch((error) => {
+			}), { origin, awaitAck: true }).catch((error) => {
 				console.error("[dsh-mobile-maxxing] turn-end push failed", error);
 			});
 		});
@@ -944,7 +959,7 @@ export function applyNotify(ctx, config) {
 					copy,
 					lang: copy.lang,
 					session: asking === undefined ? "" : sessionNameOf(ctx, asking),
-				}), { origin }).catch((error) => {
+				}), { origin, awaitAck: true }).catch((error) => {
 					console.error("[dsh-mobile-maxxing] question push failed", error);
 				});
 			}
@@ -1057,7 +1072,7 @@ export function applyNotify(ctx, config) {
 			},
 			{
 				kind: "exact",
-				path: "/api/dsh-mobile-maxxing/push/visibility",
+				path: "/api/dsh-mobile-maxxing/push/ack",
 				handler: async (req, res) => {
 					if (!guard(req, res)) return;
 					if (req.method !== "POST") {
@@ -1067,27 +1082,13 @@ export function applyNotify(ctx, config) {
 					}
 					const body = await readJsonBody(req);
 					noteOrigin(req, body);
-					const endpoint = body?.endpoint;
-					if (typeof endpoint !== "string" || endpoint.trim() === "") {
-						json(res, 400, { ok: false, error: "endpoint is required" });
-						return;
-					}
-					// Leases are per endpoint, so one visible device never
-					// silences another device that shares the origin.
-					pruneVisibilityLeases();
-					if (body.visible === true) {
-						// Re-insert so the newest lease is also the last evicted.
-						visibleUntil.delete(endpoint);
-						visibleUntil.set(endpoint, Date.now() + VISIBILITY_LEASE_MS);
-						while (visibleUntil.size > MAX_VISIBILITY_LEASES) {
-							const oldest = visibleUntil.keys().next().value;
-							if (oldest === undefined) break;
-							visibleUntil.delete(oldest);
-						}
-					} else {
-						visibleUntil.delete(endpoint);
-					}
-					json(res, 200, { ok: true, visible: body.visible === true, count: visibleUntil.size });
+					const acknowledged = acknowledgeNotice({
+						endpoint: body?.endpoint,
+						sessionId: body?.sessionId,
+						kind: body?.kind,
+						origin: requestOrigin(req, body),
+					});
+					json(res, 200, { ok: true, acknowledged });
 				},
 			},
 			{

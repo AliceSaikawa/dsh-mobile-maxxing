@@ -48,6 +48,11 @@ window.__ModuleLoader__.load({
     let localDisplayStoredLanguage = "";
     /** The shared DSH locale, tracked so "System" copy follows the shell. */
     let localDisplayHostLanguage = "";
+    /**
+     * The language "System" projects on this device (#103), or "" when the
+     * device offers no supported language and the shared Host applies.
+     */
+    let localDisplaySystemLanguage = "";
 
     /**
      * The language host injected for this page, then the document language,
@@ -68,8 +73,13 @@ window.__ModuleLoader__.load({
       const local = knownLang(localDisplayLanguage);
       if (local !== "") return local;
       if (localDisplayLanguage !== "") return "en";
-      // With a locale service, "System" means the shared DSH UI language, not
-      // the host's independent ja-by-default copy global.
+      // "System" follows this device's language when a pack exists for it
+      // (#103); the shared Host language is only the fallback.
+      const system = knownLang(localDisplaySystemLanguage);
+      if (system !== "") return system;
+      if (localDisplaySystemLanguage !== "") return "en";
+      // With a locale service, the fallback is the shared DSH UI language,
+      // not the host's independent ja-by-default copy global.
       const host = knownLang(localDisplayHostLanguage);
       if (host !== "") return host;
       if (localDisplayHostLanguage !== "") return "en";
@@ -2834,6 +2844,33 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       };
 
       /**
+       * The device's preferred language this catalog offers, or "" (#103).
+       *
+       * The Host preference is shared by every device, so "System" following
+       * it alone left an iPhone that is already Japanese on the profile's en.
+       * `navigator.languages` is ordered by preference and carries a region
+       * (`ja-JP`); round each tag to the base language a pack id uses. The
+       * first supported one wins. "" means the device offers nothing this
+       * build can show, so the Host preference stays the fallback.
+       */
+      const systemLanguage = () => {
+        let tags;
+        try {
+          if (typeof navigator === "undefined" || navigator === null) return "";
+          tags = Array.isArray(navigator.languages) ? navigator.languages : [navigator.language];
+        } catch (error) {
+          return "";
+        }
+        for (const tag of Array.isArray(tags) ? tags : []) {
+          if (typeof tag !== "string") continue;
+          const base = tag.trim().toLowerCase().split(/[-_]/)[0];
+          if (base === "") continue;
+          if (state.localDisplay.languages.some((entry) => entry.id === base)) return base;
+        }
+        return "";
+      };
+
+      /**
        * Adopt one Host snapshot as the projection baseline and refresh the
        * picker. Returns false for the known baseline and for this module's own
        * projections, so one publish notified twice stays cheap.
@@ -2871,8 +2908,19 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           // re-read the durable preference before projecting or restoring.
           refreshHostActive();
           const chosen = state.localDisplay.language;
-          const localeDocumentLang = chosen === "zh" ? "zh-CN" : chosen;
-          if (chosen === "" || !state.localDisplay.languages.some((entry) => entry.id === chosen)) {
+          // "System" is the device language, not the shared Host preference
+          // (#103). An explicit choice always wins; a device with no
+          // supported language keeps the Host fallback.
+          const system = chosen === "" ? systemLanguage() : "";
+          if (system !== localDisplaySystemLanguage) {
+            localDisplaySystemLanguage = system;
+            // Rows built from currentLang() repaint at the new device
+            // language even though the picker still shows "System".
+            emit({ localDisplay: { ...state.localDisplay } });
+          }
+          const deviceLanguage = chosen !== "" ? chosen : system;
+          const localeDocumentLang = deviceLanguage === "zh" ? "zh-CN" : deviceLanguage;
+          if (deviceLanguage === "" || !state.localDisplay.languages.some((entry) => entry.id === deviceLanguage)) {
             const hadProjection = projectedLocale !== null;
             projectedLocale = null;
             if (hadProjection || localeService.snapshot !== hostLocale) {
@@ -2891,7 +2939,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           // token stable so readers do not churn for nothing.
           if (projectedLocale !== null
             && localeService.snapshot === projectedLocale
-            && projectedLocale.active === chosen
+            && projectedLocale.active === deviceLanguage
             && Number(projectedLocale.revision) === Number(hostLocale.revision)
             && sameLocales(projectedLocale, hostLocale)) {
             if (document.documentElement.lang !== localeDocumentLang) document.documentElement.lang = localeDocumentLang;
@@ -2902,7 +2950,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           // then lets those caches rebuild at the device language.
           const projected = {
             ...hostLocale,
-            active: chosen,
+            active: deviceLanguage,
             revision: localLocaleRevision(hostLocale.revision),
           };
           // Anyone reading the service back (this module's catalog listener
@@ -3020,6 +3068,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           localDisplayLanguage = "";
           localDisplayStoredLanguage = "";
           localDisplayHostLanguage = "";
+          localDisplaySystemLanguage = "";
           projectedLocale = null;
           localDisplayRuntime = null;
         };

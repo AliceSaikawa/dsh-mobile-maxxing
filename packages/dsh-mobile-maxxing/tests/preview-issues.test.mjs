@@ -1209,3 +1209,178 @@ test("#81 a desktop leaves the wrap state and the code scroller alone", () => {
 	assert.equal(code.header.querySelector("[data-rdsh-preview-kebab]"), null, "a desktop got the kebab");
 	env.dispose();
 });
+
+/* ---------------------------------------------------------------------- */
+/* #82: the right panel names its kind on a phone                         */
+/* ---------------------------------------------------------------------- */
+
+const PANEL_KINDS = {
+	terminal: { tabId: "tab-terminal", chip: "Terminal 1", tag: "section", attribute: "data-sidebar-terminal" },
+	subagent: { tabId: "tab-chat", chip: "Fix the bug", tag: "div", attribute: "data-sidebar-chat" },
+};
+
+function sidebarHeadRect(env) {
+	return () => ({
+		x: 0,
+		y: 0,
+		top: 0,
+		left: 0,
+		right: env.window.innerWidth,
+		bottom: 844,
+		width: env.window.innerWidth,
+		height: 844,
+	});
+}
+
+/**
+ * A phone-sized right panel with dockkit's pane, strip, chips and one body.
+ * The collapse button sits in the strip, so the decorator tags the pane (the
+ * first ancestor that spans the screen) exactly as it does upstream.
+ */
+function makeSidebarPanel(env, { type = "terminal" } = {}) {
+	const { document } = env;
+	const full = sidebarHeadRect(env);
+	const boundary = document.createElement("div");
+	boundary.setAttribute("data-sidebar-right-panel", "");
+	const panel = document.createElement("div");
+	panel.setAttribute("data-sidebar-right-open", "");
+	const pane = document.createElement("div");
+	pane.setAttribute("data-dockkit-pane", "pane-1");
+	pane.setAttribute("data-dockkit-pane-active", "");
+	pane.getBoundingClientRect = full;
+	const strip = document.createElement("div");
+	strip.setAttribute("role", "tablist");
+	strip.getBoundingClientRect = () => ({ x: 0, y: 0, top: 0, left: 0, right: 390, bottom: 44, width: 390, height: 44 });
+	const chips = new Map();
+	for (const [name, kind] of Object.entries(PANEL_KINDS)) {
+		const chip = document.createElement("div");
+		chip.setAttribute("role", "tab");
+		chip.setAttribute("data-dockkit-tab", kind.tabId);
+		chip.setAttribute("aria-selected", name === type ? "true" : "false");
+		chip.textContent = kind.chip;
+		chips.set(name, chip);
+		strip.append(chip);
+	}
+	const collapse = document.createElement("button");
+	collapse.setAttribute("aria-label", "Collapse right sidebar");
+	collapse.getBoundingClientRect = () => ({ x: 0, y: 0, top: 0, left: 0, right: 30, bottom: 30, width: 30, height: 30 });
+	strip.append(collapse);
+	const body = document.createElement("div");
+	body.setAttribute("data-sidebar-right-tab", PANEL_KINDS[type].tabId);
+	const typeNode = document.createElement(PANEL_KINDS[type].tag);
+	typeNode.setAttribute(PANEL_KINDS[type].attribute, "");
+	body.append(typeNode);
+	pane.append(strip, body);
+	panel.append(pane);
+	boundary.append(panel);
+	document.body.append(boundary);
+	return { boundary, panel, pane, strip, collapse, body, chips, typeNode, full };
+}
+
+/** Swap the rendered tab body the way dockkit does when the user taps a chip. */
+function switchSidebarPanel(env, fixture, type) {
+	const kind = PANEL_KINDS[type];
+	for (const [name, chip] of fixture.chips) {
+		chip.setAttribute("aria-selected", name === type ? "true" : "false");
+	}
+	fixture.body.setAttribute("data-sidebar-right-tab", kind.tabId);
+	for (const old of fixture.body.querySelectorAll("[data-sidebar-terminal], [data-sidebar-chat]")) old.remove();
+	const typeNode = env.document.createElement(kind.tag);
+	typeNode.setAttribute(kind.attribute, "");
+	fixture.body.append(typeNode);
+	fixture.typeNode = typeNode;
+}
+
+function panelHeading(env) {
+	return env.document.querySelector("[data-rdsh-panel-heading]");
+}
+
+test("#82 the heading is generic, localised and follows the active tab", () => {
+	const env = boot();
+	const fixture = makeSidebarPanel(env);
+	env.api.decorateNow();
+	const heading = panelHeading(env);
+	assert.notEqual(heading, null, "a terminal panel got no heading");
+	assert.equal(heading.getAttribute("role"), "heading", "the heading has no semantic role");
+	assert.equal(heading.getAttribute("aria-level"), "2");
+	assert.equal(heading.textContent, "Terminal");
+	assert.equal(heading.parentElement, fixture.pane, "the heading is not at the top of the panel");
+	assert.equal(fixture.pane.children[0], heading, "the heading does not lead the panel");
+	assert.equal(fixture.strip.contains(heading), false, "the heading sits inside the tab strip");
+	assert.equal(heading.closest("[data-sidebar-terminal]"), null, "the heading is inside the terminal body");
+	// The chip names the instance; the heading names the kind.
+	assert.notEqual(heading.textContent, fixture.chips.get("terminal").textContent);
+
+	switchSidebarPanel(env, fixture, "subagent");
+	env.api.decorateNow();
+	assert.equal(heading.textContent, "Subagent", "the heading did not follow the active tab");
+	assert.equal(env.document.querySelectorAll("[data-rdsh-panel-heading]").length, 1, "the tab change added a second heading");
+	assert.notEqual(heading.textContent, fixture.chips.get("subagent").textContent);
+
+	// The chosen display language changes the same node on the next pass.
+	env.sandbox.__RDSH_PWA_LANG__ = "ja";
+	env.api.decorateNow();
+	assert.equal(heading.textContent, "サブエージェント");
+	switchSidebarPanel(env, fixture, "terminal");
+	env.api.decorateNow();
+	assert.equal(heading.textContent, "ターミナル");
+	env.dispose();
+});
+
+test("#82 a remounted panel gets exactly one fresh heading", () => {
+	const env = boot();
+	const first = makeSidebarPanel(env, { type: "terminal" });
+	env.api.decorateNow();
+	const oldHeading = panelHeading(env);
+	assert.notEqual(oldHeading, null);
+
+	first.boundary.remove();
+	const second = makeSidebarPanel(env, { type: "subagent" });
+	env.api.decorateNow();
+	const heading = panelHeading(env);
+	assert.notEqual(heading, null, "the remounted panel got no heading");
+	assert.equal(env.document.querySelectorAll("[data-rdsh-panel-heading]").length, 1, "the old heading survived the remount");
+	assert.equal(heading.textContent, "Subagent");
+	assert.equal(heading.parentElement, second.pane);
+	assert.equal(oldHeading.isConnected, false, "the detached panel kept its heading");
+	env.dispose();
+});
+
+test("#82 closing and disposing remove the heading; reopening adds it back", () => {
+	const env = boot();
+	const fixture = makeSidebarPanel(env, { type: "terminal" });
+	env.api.decorateNow();
+	assert.notEqual(panelHeading(env), null);
+
+	// The panel leaves the layout (its node no longer spans the screen).
+	fixture.pane.getBoundingClientRect = () => ({ x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0 });
+	env.api.decorateNow();
+	assert.equal(panelHeading(env), null, "closing the panel left the heading behind");
+	assert.equal(fixture.pane.hasAttribute("data-rdsh-rightpanel"), false, "the closed panel kept its mobile hook");
+
+	// Opening it again rebuilds the heading from the active tab.
+	fixture.pane.getBoundingClientRect = fixture.full;
+	env.api.decorateNow();
+	assert.notEqual(panelHeading(env), null, "reopening the panel did not restore the heading");
+
+	env.dispose();
+	assert.equal(panelHeading(env), null, "dispose left the heading in the document");
+});
+
+test("#82 a desktop never gets the heading", () => {
+	const desktop = boot({ mode: "desktop", width: 390 });
+	const fixture = makeSidebarPanel(desktop, { type: "terminal" });
+	assert.equal(desktop.api, undefined, "a desktop booted the mobile half");
+	assert.equal(desktop.document.querySelectorAll("[data-rdsh-panel-heading]").length, 0, "a desktop got a panel heading");
+	assert.equal(fixture.pane.hasAttribute("data-rdsh-rightpanel"), false, "a desktop got the right-panel hook");
+	desktop.dispose();
+});
+
+test("#82 the heading rule stays in the safe-area-padded panel and cannot take gestures", () => {
+	const start = CLIENT.indexOf("[data-rdsh-rightpanel] [data-rdsh-panel-heading]");
+	assert.notEqual(start, -1, "the mobile heading rule is missing");
+	const rule = CLIENT.slice(start, CLIENT.indexOf("}", start));
+	assert.match(rule, /pointer-events:\s*none/, "the heading can take a tab gesture");
+	assert.doesNotMatch(rule, /position:\s*(?:fixed|absolute)/, "the heading is positioned over the panel");
+	assert.match(CLIENT, /\[data-rdsh-rightpanel\] \{[\s\S]*?padding-top: env\(safe-area-inset-top/, "the panel lost its safe-area top inset");
+});

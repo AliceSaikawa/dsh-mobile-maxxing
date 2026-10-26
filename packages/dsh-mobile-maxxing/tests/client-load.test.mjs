@@ -1705,7 +1705,16 @@ function noticeRequire(state) {
 			return { Toast: function Toast() {} };
 		}
 		if (name === "react-dom/client") {
-			return { createRoot: () => ({ render: (node) => state.renders.push(node) }) };
+			return {
+				createRoot: () => ({
+					render: (node) => {
+						state.renders.push(node);
+						// React runs the banner's effect once it commits; the
+						// hand-off answer and the host ACK both wait for that.
+						node?.props?.onCommit?.();
+					},
+				}),
+			};
 		}
 		return stub();
 	};
@@ -1757,7 +1766,7 @@ test("a notification hand-off from the current or old worker name renders one ba
 		booted.send({ type, title: "Session A", body: "Turn finished", sessionId: "s1", kind: "turn-end" });
 		assert.deepEqual(booted.state.acks, ["shown"], type + " was not acknowledged exactly once");
 		assert.equal(booted.state.renders.length, 1, type + " did not render exactly one banner");
-		assert.equal(booted.state.renders[0].props.text, "Session A — Turn finished");
+		assert.equal(booted.state.renders[0].props.toastProps?.text, "Session A — Turn finished");
 		const host = booted.state.appended.find((node) => node.getAttribute?.("data-rdsh-notice-host") === "");
 		assert.ok(host, "the banner host was not attached to the body");
 		assert.deepEqual(booted.state.warnings, [], "a shown banner warned");
@@ -3445,12 +3454,33 @@ test("font and language availability are independent and fail soft", () => {
  * the pure status diff, the thin emit that renders through `notifyUser`, and
  * the worker-message handler that must not stack a second banner. The require
  * table is a tiny React: `createElement` keeps the props so the fake root can
- * write the banner text into the real notice host.
+ * write the banner text into the real notice host. The shipping `Toast` portals
+ * into `document.body` (`div[role="alert"]`), so the fake root stands in for
+ * that portal and reads the text it was handed; the commit model below is what
+ * these tests are actually about.
  */
-function localNoticeHarness({ endpoint = "", initialVisibility = "visible", subscriptionGate = null } = {}) {
+function localNoticeHarness({
+	endpoint = "",
+	initialVisibility = "visible",
+	subscriptionGate = null,
+	commits = "auto",
+	onlyMobileTurns = undefined,
+	pushTest = "ok",
+} = {}) {
 	const rendered = [];
 	const roots = [];
 	const ackPosts = [];
+	const testPushes = [];
+	let latestBanner = null;
+	let lastKey = null;
+	let mountedOnce = false;
+	// What React does after the render it was handed: run the effect. The
+	// default fakes a real commit; "manual" keeps the banner uncommitted until
+	// the test asks, which is the only way to assert that an ACK waits for it.
+	const commitNode = (node) => {
+		const onCommit = node?.props?.onCommit;
+		if (typeof onCommit === "function") onCommit();
+	};
 	const registration = {
 		update: async () => {},
 		addEventListener() {},
@@ -3463,7 +3493,11 @@ function localNoticeHarness({ endpoint = "", initialVisibility = "visible", subs
 		},
 	};
 	const react = {
-		createElement: (type, props) => ({ type, props }),
+		// React takes `key` out of the props and keeps it on the element.
+		createElement: (type, props) => {
+			const { key, ...rest } = props ?? {};
+			return { type, props: rest, key };
+		},
 		useState: (initial) => [initial, () => {}],
 		useEffect: () => {},
 		useRef: (initial) => ({ current: initial }),
@@ -3488,7 +3522,24 @@ function localNoticeHarness({ endpoint = "", initialVisibility = "visible", subs
 			location: { origin: "https://app.example:8446", href: "https://app.example:8446/" },
 		},
 		fetchImpl: async (url, options) => {
-			if (String(url).endsWith("/push/ack")) ackPosts.push({ url: String(url), options });
+			const target = String(url);
+			if (target.endsWith("/push/ack")) ackPosts.push({ url: target, options });
+			if (target.endsWith("/push/config")) {
+				// The real route answers with the host's copy, which carries
+				// onlyMobileTurns. An absent key is the host default (true).
+				return {
+					status: 200,
+					ok: true,
+					json: async () => ({ ok: true, copy: onlyMobileTurns === undefined ? {} : { onlyMobileTurns } }),
+				};
+			}
+			if (target.endsWith("/push/test")) {
+				testPushes.push({ url: target, options });
+				if (pushTest === "fail") {
+					return { status: 200, ok: true, json: async () => ({ ok: false, results: [{ status: 410, error: "gone" }] }) };
+				}
+				return { status: 200, ok: true, json: async () => ({ ok: true }) };
+			}
 			return { status: 200, ok: true, json: async () => ({ ok: true }) };
 		},
 		configureDocument(doc) { doc.visibilityState = initialVisibility; },
@@ -3500,10 +3551,21 @@ function localNoticeHarness({ endpoint = "", initialVisibility = "visible", subs
 						roots.push(container);
 						return {
 							render(node) {
-								if (node === null || node === undefined) return;
-								const text = node.props?.text ?? "";
-								rendered.push(text);
-								container.textContent = text;
+								if (node === null || node === undefined) {
+									latestBanner = null;
+									container.textContent = "";
+									return;
+								}
+								const props = node.props ?? {};
+								const key = node.key ?? null;
+								const mounted = !mountedOnce || key !== lastKey;
+								mountedOnce = true;
+								lastKey = key;
+								latestBanner = node;
+								rendered.push(props.toastProps?.text ?? props.text ?? "");
+								container.textContent = rendered[rendered.length - 1];
+								// Only a fresh mount runs the wrapper's effect again.
+								if (commits === "auto" && mounted) commitNode(node);
 							},
 						};
 					},
@@ -3515,11 +3577,25 @@ function localNoticeHarness({ endpoint = "", initialVisibility = "visible", subs
 	});
 	const notice = booted.sandbox.__RDSH_NOTICE_TEST__?.notice;
 	assert.ok(notice, "the local notice test seam was not installed");
-	return { booted, notice, rendered, roots, ackPosts };
+	const api = booted.sandbox.__RDSH_MOBILE_UX__;
+	return {
+		booted,
+		notice,
+		rendered,
+		roots,
+		ackPosts,
+		testPushes,
+		api,
+		// A turn this browser sent is the one the host will route back to it.
+		markSend: (sessionId) => api.markMobileSession(sessionId),
+		flushCommits: () => {
+			if (latestBanner !== null) commitNode(latestBanner);
+		},
+	};
 }
 
 test("a finished root turn raises one local banner and push does not stack", () => {
-	const { booted, notice, rendered, roots } = localNoticeHarness();
+	const { booted, notice, rendered, roots, markSend } = localNoticeHarness();
 	const byId = { "root-1": { title: "Main" } };
 	const running = new Map([["root-1", { running: true }]]);
 	const idle = new Map([["root-1", { running: false }]]);
@@ -3528,6 +3604,7 @@ test("a finished root turn raises one local banner and push does not stack", () 
 	notice.emitLocalNotices(null, running, byId);
 	assert.equal(rendered.length, 0, "the baseline render raised a banner");
 
+	markSend("root-1");
 	notice.emitLocalNotices(running, idle, byId);
 	assert.equal(rendered.length, 1, "a finished root turn raised no banner");
 	assert.equal(rendered[0], "Main — The work finished.", "title and body reached the toast");
@@ -3566,7 +3643,7 @@ test("a subagent turn end and a first render raise no local banner", () => {
 
 test("a rendered local banner acknowledges its event without visibility polling", async () => {
 	const endpoint = "https://web.push.apple.com/device";
-	const { booted, notice, rendered, ackPosts } = localNoticeHarness({ endpoint });
+	const { booted, notice, rendered, ackPosts, markSend } = localNoticeHarness({ endpoint });
 	const settle = async () => {
 		for (let index = 0; index < 6; index += 1) await new Promise((resolve) => setImmediate(resolve));
 	};
@@ -3575,6 +3652,7 @@ test("a rendered local banner acknowledges its event without visibility polling"
 	const byId = { "root-ack": { title: "Main" } };
 	const running = new Map([["root-ack", { running: true }]]);
 	const idle = new Map([["root-ack", { running: false }]]);
+	markSend("root-ack");
 	notice.emitLocalNotices(running, idle, byId);
 	await settle();
 	assert.equal(rendered.length, 1);
@@ -3596,12 +3674,14 @@ test("hidden, unsubscribed, and just-backgrounded pages cannot suppress push", a
 	const running = new Map([["root-ack", { running: true }]]);
 	const idle = new Map([["root-ack", { running: false }]]);
 	const hidden = localNoticeHarness({ endpoint, initialVisibility: "hidden" });
+	hidden.markSend("root-ack");
 	hidden.notice.emitLocalNotices(running, idle, byId);
 	await new Promise((resolve) => setImmediate(resolve));
 	assert.deepEqual(hidden.ackPosts, [], "a hidden page acknowledged an invisible banner");
 	hidden.booted.disposeAll();
 
 	const unregistered = localNoticeHarness();
+	unregistered.markSend("root-ack");
 	unregistered.notice.emitLocalNotices(running, idle, byId);
 	await new Promise((resolve) => setImmediate(resolve));
 	assert.deepEqual(unregistered.ackPosts, [], "a device without push subscription sent an ACK");
@@ -3610,6 +3690,7 @@ test("hidden, unsubscribed, and just-backgrounded pages cannot suppress push", a
 	let releaseSubscription;
 	const gate = new Promise((resolve) => { releaseSubscription = resolve; });
 	const transitioning = localNoticeHarness({ endpoint, subscriptionGate: gate });
+	transitioning.markSend("root-ack");
 	transitioning.notice.emitLocalNotices(running, idle, byId);
 	transitioning.booted.sandbox.document.visibilityState = "hidden";
 	releaseSubscription();
@@ -3632,6 +3713,213 @@ test("a new pending interaction raises a question banner once", () => {
 	// The same map identity is not a transition.
 	notice.emitLocalNotices(asked, asked, byId);
 	assert.equal(rendered.length, 1, "an unchanged map raised another banner");
+	booted.disposeAll();
+});
+
+/** Let the page's promises (subscription lookup, ACK fetch) settle. */
+async function settleNoticeWork() {
+	for (let index = 0; index < 8; index += 1) await new Promise((resolve) => setImmediate(resolve));
+}
+
+test("a turn this browser did not send raises no local banner", async () => {
+	const endpoint = "https://web.push.apple.com/device";
+	const { booted, notice, rendered, ackPosts } = localNoticeHarness({ endpoint });
+	const byId = { "root-pc": { title: "Main" } };
+	const running = new Map([["root-pc", { running: true }]]);
+	const idle = new Map([["root-pc", { running: false }]]);
+
+	// A PC turn: the host (onlyMobileTurns) never notifies it, so a banner here
+	// would invent a notification the user asked not to get.
+	notice.emitLocalNotices(running, idle, byId);
+	await settleNoticeWork();
+	assert.equal(rendered.length, 0, "a turn from another device raised a local banner");
+	assert.deepEqual(ackPosts, [], "a turn from another device acknowledged a push it never got");
+	booted.disposeAll();
+});
+
+test("a turn this browser did send raises one banner and one ACK", async () => {
+	const endpoint = "https://web.push.apple.com/device";
+	const { booted, notice, rendered, ackPosts, markSend } = localNoticeHarness({ endpoint });
+	const byId = { "root-phone": { title: "Main" } };
+	const running = new Map([["root-phone", { running: true }]]);
+	const idle = new Map([["root-phone", { running: false }]]);
+
+	markSend("root-phone");
+	notice.emitLocalNotices(running, idle, byId);
+	await settleNoticeWork();
+	assert.equal(rendered.length, 1, "a turn this browser sent raised no banner");
+	assert.equal(ackPosts.length, 1, "a turn this browser sent was not acknowledged");
+	assert.equal(JSON.parse(ackPosts[0].options.body).sessionId, "root-phone");
+	booted.disposeAll();
+});
+
+test("a question from another device still raises a local banner", async () => {
+	const endpoint = "https://web.push.apple.com/device";
+	const { booted, notice, rendered, ackPosts } = localNoticeHarness({ endpoint });
+	const byId = { "root-ask": { title: "Ask" } };
+	const running = new Map([["root-ask", { running: true }]]);
+	const asked = new Map([["root-ask", { running: true, pendingInteraction: { kind: "question" } }]]);
+
+	// A question needs the user wherever the turn came from.
+	notice.emitLocalNotices(running, asked, byId);
+	await settleNoticeWork();
+	assert.equal(rendered.length, 1, "an unmarked session lost its question banner");
+	assert.equal(ackPosts.length, 1, "a question banner was not acknowledged");
+	assert.equal(JSON.parse(ackPosts[0].options.body).kind, "question");
+	booted.disposeAll();
+});
+
+test("a host that notifies every turn keeps the local banner for an unmarked session", async () => {
+	const endpoint = "https://web.push.apple.com/device";
+	const { booted, notice, rendered, markSend } = localNoticeHarness({ endpoint, onlyMobileTurns: false });
+	const byId = { "root-pc": { title: "Main" } };
+	const running = new Map([["root-pc", { running: true }]]);
+	const idle = new Map([["root-pc", { running: false }]]);
+
+	// The config answer arrives on boot; without it the host default (true)
+	// applies. Marked here so the config fetch is not racing the assertion.
+	markSend("root-unused");
+	await settleNoticeWork();
+	notice.emitLocalNotices(running, idle, byId);
+	await settleNoticeWork();
+	assert.equal(rendered.length, 1, "onlyMobileTurns:false still suppressed a legitimately notified turn");
+	booted.disposeAll();
+});
+
+test("the ACK waits for the banner commit and is sent once", async () => {
+	const endpoint = "https://web.push.apple.com/device";
+	const { booted, notice, rendered, ackPosts, markSend, flushCommits } = localNoticeHarness({ endpoint, commits: "manual" });
+	const byId = { "root-ack": { title: "Main" } };
+	const running = new Map([["root-ack", { running: true }]]);
+	const idle = new Map([["root-ack", { running: false }]]);
+
+	markSend("root-ack");
+	notice.emitLocalNotices(running, idle, byId);
+	await settleNoticeWork();
+	assert.equal(rendered.length, 1, "the banner was not rendered");
+	assert.deepEqual(ackPosts, [], "the ACK was sent before the banner committed");
+	flushCommits();
+	await settleNoticeWork();
+	assert.equal(ackPosts.length, 1, "the committed banner did not acknowledge its event");
+	// StrictMode and a re-run effect call the same commit twice.
+	flushCommits();
+	flushCommits();
+	await settleNoticeWork();
+	assert.equal(ackPosts.length, 1, "a repeated commit sent a second ACK");
+	booted.disposeAll();
+});
+
+test("a second banner that replaces a shown one is acknowledged on its own", async () => {
+	const endpoint = "https://web.push.apple.com/device";
+	const { booted, notice, rendered, ackPosts, markSend } = localNoticeHarness({ endpoint });
+	const byId = { "root-a": { title: "A" }, "root-b": { title: "B" } };
+	markSend("root-a");
+	markSend("root-b");
+
+	// First banner commits while it is on screen (its hold is still running).
+	notice.emitLocalNotices(new Map([["root-a", { running: true }]]), new Map([["root-a", { running: false }]]), byId);
+	await settleNoticeWork();
+	assert.equal(rendered.length, 1, "the first banner was not rendered");
+	assert.equal(ackPosts.length, 1, "the first banner did not acknowledge its event");
+
+	// The second banner is the same component at the same position: without its
+	// own identity React reuses the instance and the mount effect never runs
+	// again, so its event would never be acknowledged.
+	notice.emitLocalNotices(new Map([["root-b", { running: true }]]), new Map([["root-b", { running: false }]]), byId);
+	await settleNoticeWork();
+	assert.equal(rendered.length, 2, "the second banner was not rendered");
+	assert.equal(ackPosts.length, 2, "the second banner was never acknowledged");
+	assert.deepEqual(
+		ackPosts.map((post) => JSON.parse(post.options.body).sessionId),
+		["root-a", "root-b"],
+		"the two banners acknowledged the wrong events",
+	);
+	booted.disposeAll();
+});
+
+test("a teardown during the subscription lookup acknowledges nothing", async () => {
+	const endpoint = "https://web.push.apple.com/device";
+	let releaseSubscription;
+	const gate = new Promise((resolve) => { releaseSubscription = resolve; });
+	const harness = localNoticeHarness({ endpoint, subscriptionGate: gate });
+	const byId = { "root-gone": { title: "Main" } };
+
+	harness.markSend("root-gone");
+	harness.notice.emitLocalNotices(new Map([["root-gone", { running: true }]]), new Map([["root-gone", { running: false }]]), byId);
+	// HMR / teardown unmounts the banner while the endpoint lookup is still in
+	// flight; the page is still "visible" but nothing is on screen any more.
+	harness.booted.disposeAll();
+	releaseSubscription();
+	await settleNoticeWork();
+	assert.deepEqual(harness.ackPosts, [], "a torn-down page acknowledged an unmounted banner");
+});
+
+test("a banner replaced before it commits is never acknowledged", async () => {
+	const endpoint = "https://web.push.apple.com/device";
+	const { booted, notice, rendered, ackPosts, markSend, flushCommits } = localNoticeHarness({ endpoint, commits: "manual" });
+	const byId = { "root-a": { title: "A" }, "root-b": { title: "B" } };
+	const running = new Map([["root-a", { running: true }], ["root-b", { running: true }]]);
+	const idle = new Map([["root-a", { running: false }], ["root-b", { running: false }]]);
+
+	markSend("root-a");
+	markSend("root-b");
+	// Two events in one snapshot; the last banner replaces the first before
+	// React commits, so only the visible one may be acknowledged.
+	notice.emitLocalNotices(running, idle, byId);
+	await settleNoticeWork();
+	assert.equal(rendered.length, 2, "both transitions rendered a banner");
+	assert.deepEqual(ackPosts, [], "an uncommitted banner acknowledged its event");
+	flushCommits();
+	await settleNoticeWork();
+	assert.equal(ackPosts.length, 1, "exactly the visible banner acknowledges its event");
+	assert.equal(JSON.parse(ackPosts[0].options.body).sessionId, "root-b", "the replaced banner was acknowledged");
+	booted.disposeAll();
+});
+
+test("the old worker's hand-off is answered only after the banner commits", async () => {
+	const { booted, notice, rendered, flushCommits } = localNoticeHarness({ commits: "manual" });
+	const ports = [];
+	notice.onWorkerMessage({
+		data: { type: "dsh-mobile-maxxing:notify", title: "Main", body: "done", sessionId: "root-old", kind: "turn-end" },
+		ports: [{ postMessage: (value) => ports.push(value) }],
+	});
+	assert.equal(rendered.length, 1, "the hand-off raised no banner");
+	assert.deepEqual(ports, [], "the hand-off was accepted before the banner committed");
+	flushCommits();
+	assert.deepEqual(ports, ["shown"], "the committed banner did not answer the hand-off");
+	booted.disposeAll();
+});
+
+test("a failed test push is not hidden by a local banner", async () => {
+	const endpoint = "https://web.push.apple.com/device";
+	const { booted, api, rendered, testPushes, ackPosts } = localNoticeHarness({ endpoint, pushTest: "fail" });
+	await settleNoticeWork();
+	await assert.rejects(() => api.sendTestNotification(), /Push was rejected/);
+	assert.equal(testPushes.length, 1, "the test did not reach the push path");
+	assert.equal(rendered.length, 0, "the test raised a local banner before the push result");
+	assert.deepEqual(ackPosts, [], "the test acknowledged a foreground event");
+	booted.disposeAll();
+});
+
+test("a successful test push raises no extra local banner", async () => {
+	const endpoint = "https://web.push.apple.com/device";
+	const { booted, api, rendered, testPushes } = localNoticeHarness({ endpoint });
+	await settleNoticeWork();
+	await api.sendTestNotification();
+	assert.equal(testPushes.length, 1, "the test did not reach the push path");
+	assert.equal(rendered.length, 0, "a successful test push stacked a local banner on the system one");
+	booted.disposeAll();
+});
+
+test("a local-only notice still marks the banner for the worker hand-off", async () => {
+	const { booted, notice, rendered, markSend } = localNoticeHarness();
+	const byId = { "root-1": { title: "Main" } };
+	const running = new Map([["root-1", { running: true }]]);
+	const idle = new Map([["root-1", { running: false }]]);
+	markSend("root-1");
+	notice.emitLocalNotices(running, idle, byId);
+	assert.equal(rendered.length, 1, "the banner was not rendered");
+	assert.equal(notice.localNoticeRecent("root-1", "turn-end"), true, "a committed banner is not deduplicated against the hand-off");
 	booted.disposeAll();
 });
 

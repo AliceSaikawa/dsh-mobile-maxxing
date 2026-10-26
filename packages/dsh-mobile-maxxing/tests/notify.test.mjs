@@ -654,6 +654,27 @@ test("lost, mismatched, or stale acknowledgements never suppress push", async ()
 	}
 });
 
+test("a late ACK consumes the newest pending event, not an older one", async () => {
+	const endpoint = "https://web.push.apple.com/stacked";
+	const harness = acknowledgementHarness([endpoint]);
+	try {
+		harness.turnEnded();
+		await new Promise((resolve) => setTimeout(resolve, 600));
+		harness.turnEnded();
+		// One ACK arrives while two events of this session are pending. It
+		// belongs to the newest one (the banner the page just rendered), so the
+		// older event's push must still leave at its own 1.5s deadline.
+		const acked = await harness.post(ACK, { endpoint, sessionId: "s1", kind: "turn-end", origin: TEST_ORIGIN });
+		assert.equal(acked.body.acknowledged, true);
+		await new Promise((resolve) => setTimeout(resolve, 1100));
+		assert.equal(harness.calls.length, 1, "a late ACK suppressed the older event instead of the newest");
+		await new Promise((resolve) => setTimeout(resolve, 900));
+		assert.equal(harness.calls.length, 1, "the acknowledged newest event pushed as well");
+	} finally {
+		harness.restore();
+	}
+});
+
 test("payload shape is what the service worker reads", () => {
 	const payload = makePayload("session-9", "question", "t", "b");
 	assert.deepEqual(Object.keys(payload).sort(), ["body", "kind", "sessionId", "title", "url"]);

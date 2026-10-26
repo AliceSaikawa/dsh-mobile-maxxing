@@ -749,12 +749,16 @@ export function applyNotify(ctx, config) {
 	 * Acknowledge one notice for one subscription, only if that origin is a
 	 * target of a currently pending delivery. An unsolicited/stale ack cannot
 	 * suppress a later event, and another device still receives its push.
+	 *
+	 * Newest pending first: a late ACK belongs to the event the page just
+	 * rendered. Taking the oldest would silently drop the newer, unrendered
+	 * one, and losing a notification is worse than the duplicate this causes.
 	 */
 	function acknowledgeNotice({ endpoint, sessionId, kind, origin }) {
 		if (typeof endpoint !== "string" || endpoint === "") return false;
 		if (typeof sessionId !== "string" || sessionId === "") return false;
 		if (kind !== "turn-end" && kind !== "question") return false;
-		for (const pending of pendingNotices) {
+		for (const pending of [...pendingNotices].reverse()) {
 			if (pending.payload.sessionId !== sessionId || pending.payload.kind !== kind) continue;
 			if (!sameOrigin(pending.origin, origin)) continue;
 			if (!pending.endpoints.has(endpoint) || pending.acked.has(endpoint)) continue;

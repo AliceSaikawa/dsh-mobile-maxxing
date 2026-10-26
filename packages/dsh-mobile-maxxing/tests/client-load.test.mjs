@@ -2116,7 +2116,11 @@ test("device-local projections keep Host revisions so rows keep updating (#73/#6
 	assert.equal(theme.snapshot.revision, hostTheme.revision, "the font projection inflated the Host revision");
 	assert.notEqual(theme.snapshot, hostTheme, "the font projection reused the Host identity");
 	assert.equal(locale.snapshot.active, "en", "the local language was not projected");
-	assert.equal(locale.snapshot.revision, hostLocale.revision, "the locale projection inflated the Host revision");
+	// A projected locale view carries a boxed identity token whose numeric value
+	// is still the Host revision; row stores compare the number, reader caches
+	// compare the identity.
+	assert.equal(Number(locale.snapshot.revision), hostLocale.revision, "the locale projection inflated the Host revision");
+	assert.notEqual(locale.snapshot.revision, hostLocale.revision, "the locale projection kept the Host revision identity");
 	assert.notEqual(locale.snapshot, hostLocale, "the locale projection reused the Host identity");
 	assert.equal(booted.sandbox.document.documentElement.lang, "en");
 	assert.deepEqual(terminal.fonts, [19], "the local font projection did not reach the mounted terminal");
@@ -2145,7 +2149,7 @@ test("device-local projections keep Host revisions so rows keep updating (#73/#6
 	assert.equal(rows.localeRevision, 3, "the language row froze after a device-local projection");
 	assert.equal(rows.active, "zh", "the language row did not take the Host snapshot");
 	assert.equal(locale.snapshot.active, "en", "the Host locale change reverted the device-local language");
-	assert.equal(locale.snapshot.revision, 3, "the Host locale revision was left inflated");
+	assert.equal(Number(locale.snapshot.revision), 3, "the Host locale revision was left inflated");
 	assert.equal(localeReads.at(-1)?.active, "en", "locale readers lost the local language after a Host change");
 
 	// "System" restores the Host language.
@@ -2525,7 +2529,6 @@ function localeService({ locales = [
 	const registered = [];
 	const removed = [];
 	const listeners = new Set();
-	let revision = 2;
 	let catalog = [...locales];
 	/** The Host's own selection; catalog changes re-resolve to this value. */
 	let hostActive = active;
@@ -2534,17 +2537,24 @@ function localeService({ locales = [
 		if (catalog.some((entry) => entry.id === hostActive)) return hostActive;
 		return catalog.some((entry) => entry.id === "en") ? "en" : (catalog[0]?.id ?? "");
 	};
+	/** Every Host-originated snapshot, kept to prove none carries a local token. */
+	const initial = Object.freeze({ active, revision: 2, locales: Object.freeze([...locales]) });
+	const hostSnapshots = [initial];
 	const publish = (localeActive) => {
-		revision += 1;
-		service.snapshot = Object.freeze({
+		// LocaleRuntime.publish: this.snapshot.revision + 1. A projected boxed
+		// token must coerce to the Host number and publish a primitive again.
+		const revision = service.snapshot.revision + 1;
+		const snapshot = Object.freeze({
 			active: localeActive,
 			revision,
 			locales: Object.freeze([...catalog]),
 		});
+		hostSnapshots.push(snapshot);
+		service.snapshot = snapshot;
 		for (const listener of [...listeners]) listener();
 	};
 	const service = {
-		snapshot: Object.freeze({ active, revision, locales: Object.freeze([...locales]) }),
+		snapshot: initial,
 		listeners,
 		getSnapshot() { return this.snapshot; },
 		subscribe(listener) {
@@ -2585,7 +2595,7 @@ function localeService({ locales = [
 		setLocale() { throw new Error("the shared locale writer was called"); },
 	};
 	if (!withResolver) delete service.resolveActive;
-	return { service, registered, removed };
+	return { service, registered, removed, hostSnapshots };
 }
 
 test("a phone lists only the shared catalog and never adds ja itself (#64/#80)", () => {
@@ -2640,6 +2650,239 @@ async function settleLocale() {
 	for (let index = 0; index < 4; index += 1) await Promise.resolve();
 }
 
+test("#80 mounted text and slot labels refresh on the device language without a revision bump", async () => {
+	const ja = { id: "ja", label: "日本語", fallback: "en" };
+	const { service } = localeService({
+		locales: [
+			{ id: "zh", label: "中文", fallback: "en" },
+			{ id: "en", label: "English" },
+			ja,
+		],
+	});
+	const hostRevision = Number(service.snapshot.revision);
+	// Copy the upstream modules actually consult: the renderer's t seat is
+	// keyed by the LocaleFace revision identity and outlets re-render through
+	// useSyncExternalStore; the Settings/Plugins ledgers rebuild their slot
+	// labels only when getSnapshot().revision changes. Both are mounted
+	// before the device language is selected, as the conversation is.
+	const copy = {
+		"hero.headline": { en: "Into the Unknown", ja: "未知の世界へ" },
+		"settings.general": { en: "General", ja: "一般" },
+		"settings.models": { en: "Models", ja: "モデル" },
+		"settings.agentPreset": { en: "Agent presets", ja: "エージェントプリセット" },
+		"tab.mobile": { en: "Mobile", ja: "モバイル" },
+	};
+	const translate = (key) => copy[key][service.getSnapshot().active] ?? copy[key].en;
+	const outlet = {
+		revision: service.getSnapshot().revision,
+		headline: translate("hero.headline"),
+	};
+	service.subscribe(() => {
+		const revision = service.getSnapshot().revision;
+		if (Object.is(revision, outlet.revision)) return;
+		outlet.revision = revision;
+		outlet.headline = translate("hero.headline");
+	});
+	let labels = ["Mobile", "General", "Models", "Agent presets"];
+	let labelsRevision = service.getSnapshot().revision;
+	let labelsSnapshot = labels;
+	const readLabels = () => {
+		const revision = service.getSnapshot().revision;
+		if (revision !== labelsRevision) {
+			labelsRevision = revision;
+			labels = ["tab.mobile", "settings.general", "settings.models", "settings.agentPreset"].map(translate);
+			labelsSnapshot = labels;
+		}
+		return labelsSnapshot;
+	};
+	const settings = { labels: labelsSnapshot };
+	service.subscribe(() => {
+		const next = readLabels();
+		if (next !== settings.labels) settings.labels = next;
+	});
+	// The shared Language row store adopts only a numerically newer revision;
+	// the #73/#64 high-water guard must not see the device projection.
+	const rows = { revision: hostRevision, active: service.getSnapshot().active };
+	service.subscribe(() => {
+		const snapshot = service.getSnapshot();
+		if (snapshot.revision <= rows.revision) return;
+		rows.revision = Number(snapshot.revision);
+		rows.active = snapshot.active;
+	});
+
+	assert.equal(outlet.headline, "Into the Unknown", "the test did not start mounted in English");
+	assert.deepEqual(settings.labels, ["Mobile", "General", "Models", "Agent presets"]);
+
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		locale: service,
+		configureDocument(doc) { doc.documentElement.lang = "zh-CN"; },
+	});
+	const api = booted.sandbox.__RDSH_MOBILE_UX__;
+	api.setLanguage("ja");
+	await settleLocale();
+
+	assert.equal(service.snapshot.active, "ja", "the device language was not projected");
+	assert.equal(outlet.headline, "未知の世界へ", "an already-mounted text outlet kept the English copy");
+	assert.deepEqual(settings.labels, ["モバイル", "一般", "モデル", "エージェントプリセット"],
+		"the settings slot labels were not re-resolved after the locale changed");
+	assert.equal(rows.active, "zh", "the device projection was adopted by the shared language row");
+	assert.equal(rows.revision, hostRevision, "the device projection moved the shared row high-water mark");
+	assert.equal(Number(service.snapshot.revision), hostRevision,
+		"the projection changed the Host numeric revision");
+	assert.notEqual(service.snapshot.revision, hostRevision,
+		"the projection reused the Host revision identity the reader caches key on");
+	assert.equal(service.snapshot.revision + 1, hostRevision + 1,
+		"the revision token broke numeric revision arithmetic");
+	assert.equal(JSON.stringify(service.snapshot.revision), String(hostRevision),
+		"the revision token changed the serialized Host revision");
+	assert.equal(booted.sandbox.document.documentElement.lang, "ja");
+	assert.equal(booted.emitted.some((entry) => entry.event === "locale/change"), false,
+		"a fake locale/change was emitted to local or native listeners");
+
+	// A real Host publish with an ordinary revision must still land: the token
+	// must not freeze the shared row store the way the +1000 synthetic bump did.
+	service.hostSelect("en");
+	const hostSwitch = service.snapshot;
+	booted.emit("locale/change", hostSwitch);
+	await settleLocale();
+	assert.equal(rows.revision, hostRevision + 1, "the row store froze after the device projection");
+	assert.equal(rows.active, "en", "the row store did not take the Host switch");
+	assert.equal(service.snapshot.active, "ja", "the Host switch dropped the device projection");
+	assert.equal(outlet.headline, "未知の世界へ", "the device text fell back to the Host language");
+
+	// System unprojects to the newest Host view and refreshes the same mounted
+	// consumers back, without restoring through a cached English seat.
+	api.setLanguage("");
+	await settleLocale();
+	assert.equal(service.snapshot, hostSwitch, "System did not restore the Host snapshot");
+	assert.equal(outlet.headline, "Into the Unknown", "System left the mounted text in the device language");
+	assert.deepEqual(settings.labels, ["Mobile", "General", "Models", "Agent presets"],
+		"System left the settings labels in the device language");
+	// The Host switched to en, so SEA-880's restoredDocumentLang() is en, not
+	// the attach-time zh-CN.
+	assert.equal(booted.sandbox.document.documentElement.lang, "en");
+
+	// Re-select, then dispose: the same mounted consumers must follow the
+	// restored Host baseline, and no shared writer may run.
+	api.setLanguage("ja");
+	await settleLocale();
+	assert.equal(outlet.headline, "未知の世界へ");
+	booted.disposeAll();
+	assert.equal(service.snapshot, hostSwitch, "dispose did not restore the latest Host locale");
+	assert.equal(outlet.headline, "Into the Unknown", "dispose left the mounted text in the device language");
+	assert.deepEqual(settings.labels, ["Mobile", "General", "Models", "Agent presets"],
+		"dispose left the settings labels in the device language");
+	assert.equal(rows.active, "en", "dispose wrote the device language into the shared row");
+});
+
+test("#80 the local revision token stays inside the rc.2 LocaleFace compatibility boundary", async () => {
+	const MARKER = Symbol.for("rdsh-mobile-ux:local-display-revision");
+	const PROJECTION = Symbol.for("rdsh-mobile-ux:local-display-projection");
+	const ja = { id: "ja", label: "日本語", fallback: "en" };
+	const { service, hostSnapshots } = localeService({
+		locales: [
+			{ id: "zh", label: "中文", fallback: "en" },
+			{ id: "en", label: "English" },
+			ja,
+		],
+	});
+	const originalHost = service.snapshot;
+	const hostRevision = originalHost.revision;
+	assert.equal(typeof hostRevision, "number", "the Host baseline did not start primitive");
+	assert.equal(hostRevision, 2);
+
+	// The actual rc.2 consumers only compare by identity, order by number, or
+	// do arithmetic. None performs a typeof/Number.isInteger type gate:
+	// - renderer localeSeat()/slots locale cache: cached.revision === revision
+	// - ui-settings-general/plugins ledgers: revision !== storedRevision
+	// - locale Language row store: revision <= d.revision (high-water guard)
+	// - LocaleRuntime.publish: revision + 1
+	let seatRevision = hostRevision;
+	let labelRevision = hostRevision;
+	let slotRevision = hostRevision;
+	const rows = { revision: hostRevision, active: originalHost.active };
+	service.subscribe(() => {
+		const snapshot = service.snapshot;
+		if (snapshot.revision !== seatRevision) seatRevision = snapshot.revision;
+		if (snapshot.revision !== labelRevision) labelRevision = snapshot.revision;
+		if (snapshot.revision !== slotRevision) slotRevision = snapshot.revision;
+		if (snapshot.revision <= rows.revision) return;
+		rows.revision = snapshot.revision;
+		rows.active = snapshot.active;
+	});
+
+	const booted = bootClient({ mode: "mobile", narrow: true, locale: service });
+	const api = booted.sandbox.__RDSH_MOBILE_UX__;
+	api.setLanguage("ja");
+	await settleLocale();
+
+	const projected = service.snapshot;
+	assert.equal(projected.active, "ja");
+	assert.equal(projected[PROJECTION], true, "the projection identity marker is missing");
+	assert.equal(typeof projected.revision, "object", "the projection did not mint an identity token");
+	assert.equal(projected.revision[MARKER], true, "the local revision token is not marked");
+	assert.equal(Number(projected.revision), hostRevision, "the token changed the Host numeric revision");
+	// Known limit: typeof number / Number.isInteger consumers would reject the
+	// token. rc.2 has none; the four operations above accepted it.
+	assert.equal(Number.isInteger(projected.revision), false);
+	assert.equal(projected.revision !== hostRevision, true, "the token did not change the reader identity");
+	assert.equal(seatRevision, projected.revision, "the renderer t-seat cache ignored the token");
+	assert.equal(labelRevision, projected.revision, "the settings label ledger ignored the token");
+	assert.equal(slotRevision, projected.revision, "the slots locale cache ignored the token");
+	assert.equal(rows.revision, hostRevision, "the language row adopted the projection");
+	assert.equal(rows.active, originalHost.active);
+
+	assert.equal(projected.revision + 1, hostRevision + 1, "publish arithmetic did not see the Host number");
+	assert.equal(typeof (projected.revision + 1), "number", "publish arithmetic stayed boxed");
+	assert.equal(JSON.stringify(projected.revision), String(hostRevision), "the serialized revision changed");
+
+	// LocaleRuntime.publish uses this.snapshot.revision + 1 and must mint a
+	// primitive Host snapshot again; the shared row then takes the new number.
+	service.hostSelect("en");
+	const nextHost = hostSnapshots.at(-1);
+	assert.equal(service.snapshot, nextHost, "the runtime did not replace the snapshot on publish");
+	assert.equal(nextHost.revision, hostRevision + 1);
+	assert.equal(typeof nextHost.revision, "number", "publish did not mint a primitive revision");
+	assert.equal(Number.isInteger(nextHost.revision), true);
+	assert.equal(nextHost[PROJECTION], undefined);
+	assert.equal(nextHost.revision[MARKER], undefined);
+	assert.equal(rows.revision, nextHost.revision, "the language row ignored the next Host revision");
+	assert.equal(rows.active, "en");
+	await settleLocale();
+	assert.equal(service.snapshot.active, "ja", "the Host switch dropped the device projection");
+	assert.equal(Number(service.snapshot.revision), hostRevision + 1);
+	assert.equal(typeof service.snapshot.revision, "object");
+
+	// Every Host-originated snapshot, including the original baseline, stays
+	// primitive and marker-free: no token ever enters a Host baseline.
+	for (const snapshot of hostSnapshots) {
+		assert.equal(typeof snapshot.revision, "number", "a Host snapshot held a local token");
+		assert.equal(Number.isInteger(snapshot.revision), true);
+		assert.equal(snapshot[PROJECTION], undefined, "a Host snapshot carried the projection marker");
+		assert.equal(snapshot.revision[MARKER], undefined, "a Host revision carried the token marker");
+	}
+	assert.equal(originalHost.revision, hostRevision, "the original Host baseline was mutated");
+
+	// System restores the exact Host object and its primitive revision.
+	api.setLanguage("");
+	await settleLocale();
+	assert.equal(service.snapshot, nextHost, "System did not restore the Host snapshot");
+	assert.equal(service.snapshot.revision, nextHost.revision);
+	assert.equal(typeof service.snapshot.revision, "number");
+	assert.equal(service.snapshot[PROJECTION], undefined);
+
+	// Re-project then dispose: unprojection restores the same primitive view.
+	api.setLanguage("ja");
+	await settleLocale();
+	assert.equal(typeof service.snapshot.revision, "object");
+	booted.disposeAll();
+	assert.equal(service.snapshot, nextHost, "dispose did not restore the Host snapshot");
+	assert.equal(service.snapshot.revision, hostRevision + 1);
+	assert.equal(typeof service.snapshot.revision, "number", "dispose left a token in the Host view");
+});
+
 test("#80 an owner that activates after the mobile attach reaches the picker and keeps the stored ja", async () => {
 	const ja = { id: "ja", label: "日本語", fallback: "en" };
 	const { service, registered, removed } = localeService();
@@ -2663,7 +2906,7 @@ test("#80 an owner that activates after the mobile attach reaches the picker and
 	assert.equal(api.state.localDisplay.language, "ja",
 		"the stored choice was not restored when its owner arrived");
 	assert.equal(service.snapshot.active, "ja", "the late catalog was not projected");
-	assert.equal(service.snapshot.revision, 3, "the projection inflated the Host revision");
+	assert.equal(Number(service.snapshot.revision), 3, "the projection inflated the Host revision");
 	assert.deepEqual(registered, [{ kind: "language", input: { ...ja } }],
 		"the mobile package registered a language of its own");
 
@@ -2683,6 +2926,60 @@ test("#80 an owner that activates after the mobile attach reaches the picker and
 		"dispose dropped the externally owned ja from the restored snapshot");
 	assert.equal(service.snapshot.revision, 3, "dispose changed the Host revision");
 	assert.deepEqual(removed, [], "the mobile package withdrew a definition it does not own");
+});
+
+test("#80 a late owner's withdraw and re-add refresh already-mounted consumers", async () => {
+	const ja = { id: "ja", label: "日本語", fallback: "en" };
+	const { service } = localeService();
+	// The conversation is already mounted in the Host language when the owner
+	// activates, the device language is selected, withdrawn, and re-added.
+	const headline = () => (service.getSnapshot().active === "ja" ? "未知の世界へ" : "Into the Unknown");
+	const outlet = { revision: service.getSnapshot().revision, text: headline() };
+	service.subscribe(() => {
+		const revision = service.getSnapshot().revision;
+		if (Object.is(revision, outlet.revision)) return;
+		outlet.revision = revision;
+		outlet.text = headline();
+	});
+	let labelsRevision = service.getSnapshot().revision;
+	let labels = ["Mobile"];
+	service.subscribe(() => {
+		const revision = service.getSnapshot().revision;
+		if (revision === labelsRevision) return;
+		labelsRevision = revision;
+		labels = [service.getSnapshot().active === "ja" ? "モバイル" : "Mobile"];
+	});
+
+	const booted = bootClient({ mode: "mobile", narrow: true, locale: service });
+	const api = booted.sandbox.__RDSH_MOBILE_UX__;
+	assert.equal(api.state.localDisplay.language, "", "the test started with a selectable language");
+	assert.equal(outlet.text, "Into the Unknown");
+
+	const releaseJa = service.addLanguage(ja);
+	await settleLocale();
+	api.setLanguage("ja");
+	await settleLocale();
+	assert.equal(service.snapshot.active, "ja");
+	assert.equal(outlet.text, "未知の世界へ", "the late owner's language never reached the mounted text");
+	assert.deepEqual(labels, ["モバイル"], "the late owner's language never reached the slot labels");
+
+	releaseJa();
+	await settleLocale();
+	assert.equal(service.snapshot.active, "zh", "the withdrawn language was not unprojected");
+	assert.equal(outlet.text, "Into the Unknown", "the withdrawn language stayed on the mounted text");
+	assert.deepEqual(labels, ["Mobile"], "the withdrawn language stayed on the slot labels");
+
+	const releaseAgain = service.addLanguage(ja);
+	await settleLocale();
+	assert.equal(api.state.localDisplay.language, "ja", "the stored choice did not return with the owner");
+	assert.equal(outlet.text, "未知の世界へ", "the re-added language did not reach the mounted text");
+	assert.deepEqual(labels, ["モバイル"]);
+
+	booted.disposeAll();
+	assert.equal(service.snapshot.active, "zh", "dispose kept the device language projected");
+	assert.equal(outlet.text, "Into the Unknown", "dispose left the mounted text in the device language");
+	assert.deepEqual(labels, ["Mobile"]);
+	releaseAgain();
 });
 
 test("#80 a withdrawn ja is unprojected without forgetting the device choice, and re-adding restores it", async () => {
@@ -2781,7 +3078,7 @@ test("#80 a later Host locale change keeps the device language and disposes to t
 	await settleLocale();
 	assert.equal(api.state.localDisplay.language, "ja", "the Host change won over the device choice");
 	assert.equal(service.snapshot.active, "ja", "the Host change dropped the device projection");
-	assert.equal(service.snapshot.revision, 3, "the projection did not keep the new Host revision");
+	assert.equal(Number(service.snapshot.revision), 3, "the projection did not keep the new Host revision");
 	assert.deepEqual(service.snapshot.locales.map((entry) => entry.id), ["zh", "en", "ja"]);
 	assert.equal(docEl.lang, "ja", "the Host change dropped the device document language");
 
@@ -2867,7 +3164,7 @@ test("#80 a silent Host switch to the projected language survives System and dis
 	service.silentHostSelect("ja");
 	await settleLocale();
 	assert.equal(api.state.localDisplay.language, "ja");
-	assert.equal(service.snapshot.revision, 2, "a silent Host switch bumped the Host revision");
+	assert.equal(Number(service.snapshot.revision), 2, "a silent Host switch bumped the Host revision");
 
 	// System restores the Host's ja, not the previous zh baseline.
 	api.setLanguage("");
@@ -2920,7 +3217,7 @@ test("#80 an authoritative locale/change naming the projected language is not no
 	await settleLocale();
 	assert.equal(api.state.localDisplay.language, "ja");
 	assert.equal(service.snapshot.active, "ja");
-	assert.equal(service.snapshot.revision, 3, "the projection inflated the Host revision");
+	assert.equal(Number(service.snapshot.revision), 3, "the projection inflated the Host revision");
 
 	api.setLanguage("");
 	await settleLocale();

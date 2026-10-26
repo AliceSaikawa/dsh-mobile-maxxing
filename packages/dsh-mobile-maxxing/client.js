@@ -1713,6 +1713,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     const TERMINAL_DARK_PROJECTION = Symbol.for("rdsh-mobile-ux:terminal-dark-projection");
     /** Marks the device-local font/locale projection so it is not a Host baseline. */
     const LOCAL_DISPLAY_PROJECTION = Symbol.for("rdsh-mobile-ux:local-display-projection");
+    /** Marks the locally unique revision token a device-local locale view carries. */
+    const LOCAL_DISPLAY_REVISION = Symbol.for("rdsh-mobile-ux:local-display-revision");
     /** The three published theme font roles and their accepted integer ranges. */
     const LOCAL_FONT_SPECS = {
       text: { min: 10, max: 22, default: 14, variable: "--dsh-content-font-size" },
@@ -2540,13 +2542,14 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * directly (not through `locale/change`) so the native shell bridge never
      * observes the device-local choice.
      *
-     * The projected snapshots keep the Host revision and differ only by object
-     * identity. Upstream Appearance, font and Language row stores ignore a
-     * snapshot whose revision is not newer than the one they stored, so a
-     * synthetic revision here would become their high-water mark and freeze
-     * the shared rows. The new identity is what makes local readers (the
-     * mounted terminal's theme subscription, locale subscribers) reread the
-     * device-local values.
+     * The projected snapshots keep the Host numeric revision. Upstream
+     * Appearance, font and Language row stores ignore a snapshot whose
+     * revision is not newer than the one they stored, so a numeric bump here
+     * would become their high-water mark and freeze the shared rows. Object
+     * identity is enough for local readers that reread the service snapshot
+     * (the mounted terminal's theme subscription); the locale projection
+     * additionally carries a boxed revision token so the upstream readers
+     * that invalidate text and slot labels by revision identity refresh.
      */
     function attachLocalDisplay(ctx) {
       let theme;
@@ -2788,6 +2791,40 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         return Object.freeze({ ...snapshot, active });
       };
 
+      /**
+       * A revision token for one device-local locale view.
+       *
+       * Upstream refreshes already-mounted text and slot labels through the
+       * LocaleFace revision, not through object identity or locale/change:
+       * the renderer's t seat cache, the Settings section ledger and the
+       * Plugins ledgers compare getSnapshot().revision by identity and
+       * rebuild their labels/translations only when it changes. Replacing the
+       * snapshot alone therefore leaves their cached English copy mounted.
+       *
+       * A numeric bump is not an option: the shared Language row store adopts
+       * the highest revision it sees and then ignores later Host snapshots at
+       * or below that high-water mark (#73/#64, and the +1000 regression).
+       * This token keeps the Host numeric revision for every ordering,
+       * arithmetic and JSON use (+ 1, <=, JSON.stringify) while giving the
+       * local view a distinct identity for the reader caches, so they refresh
+       * and the row store still ignores the projection.
+       *
+       * SHORTCUT(#80): identity-only token, not a number. rc.2 consumers
+       * (renderer t-seat/slots cache, settings/plugins ledgers, language row,
+       * LocaleRuntime.publish) only use ===/!==, <=, + 1 and JSON, so none
+       * rejects it. A third-party or future SDK consumer that requires
+       * typeof revision === "number" or Number.isInteger would; that is the
+       * known limit of a device-local projection on the shared face. A
+       * numeric bump (row high-water) or a fabricated locale/change (native
+       * bridge, slot/dictionary re-registration loops) are not substitutes.
+       */
+      const localLocaleRevision = (revision) => {
+        if (typeof revision !== "number" || !Number.isFinite(revision)) return revision;
+        const token = Object(revision);
+        Object.defineProperty(token, LOCAL_DISPLAY_REVISION, { value: true });
+        return Object.freeze(token);
+      };
+
       /** The remembered device choice while the catalog offers it, else "" (System). */
       const selectedLanguage = (nextOptions) => {
         const offered = (id) => id !== "" && nextOptions.some((entry) => entry.id === id);
@@ -2834,9 +2871,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           // re-read the durable preference before projecting or restoring.
           refreshHostActive();
           const chosen = state.localDisplay.language;
+          const localeDocumentLang = chosen === "zh" ? "zh-CN" : chosen;
           if (chosen === "" || !state.localDisplay.languages.some((entry) => entry.id === chosen)) {
+            const hadProjection = projectedLocale !== null;
             projectedLocale = null;
-            if (localeService.snapshot !== hostLocale) {
+            if (hadProjection || localeService.snapshot !== hostLocale) {
               localeService.snapshot = hostLocale;
               notifyLocale();
             }
@@ -2847,18 +2886,31 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
             if (document.documentElement.lang !== lang) document.documentElement.lang = lang;
             return;
           }
-          // Same Host revision as the theme projection, for the same row-store
-          // reason; notifyLocale() carries the new identity to local readers.
+          // An unchanged device view may be reapplied by a catalog or Host
+          // notification; reusing the installed snapshot keeps its revision
+          // token stable so readers do not churn for nothing.
+          if (projectedLocale !== null
+            && localeService.snapshot === projectedLocale
+            && projectedLocale.active === chosen
+            && Number(projectedLocale.revision) === Number(hostLocale.revision)
+            && sameLocales(projectedLocale, hostLocale)) {
+            if (document.documentElement.lang !== localeDocumentLang) document.documentElement.lang = localeDocumentLang;
+            return;
+          }
+          // The token carries the Host revision for row-store ordering but a
+          // new identity for the renderer/slot-label caches; notifyLocale()
+          // then lets those caches rebuild at the device language.
           const projected = {
             ...hostLocale,
             active: chosen,
+            revision: localLocaleRevision(hostLocale.revision),
           };
           // Anyone reading the service back (this module's catalog listener
           // included) must see a device-local view, never a Host baseline.
           Object.defineProperty(projected, LOCAL_DISPLAY_PROJECTION, { value: true });
           projectedLocale = Object.freeze(projected);
           localeService.snapshot = projectedLocale;
-          document.documentElement.lang = chosen === "zh" ? "zh-CN" : chosen;
+          document.documentElement.lang = localeDocumentLang;
           notifyLocale();
         } finally {
           applyingLocale = false;

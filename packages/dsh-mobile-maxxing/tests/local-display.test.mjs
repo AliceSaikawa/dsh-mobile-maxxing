@@ -107,6 +107,26 @@ test("catalog publishes ride the public LocaleFace subscription, not locale/chan
 	assert.match(body, /refreshHostActive/, "a silent Host switch is not folded into the baseline");
 });
 
+test("the locale projection refreshes revision-identity readers without inflating the Host revision (#80)", () => {
+	const body = block("function attachLocalDisplay(ctx) {", "function localeOptions(");
+	// The renderer's t seat cache, the Settings section ledger and the Plugins
+	// ledgers compare getSnapshot().revision by identity: object identity alone
+	// leaves their cached English copy. The projection therefore carries a
+	// local revision token whose numeric value is the Host revision.
+	assert.match(body, /LOCAL_DISPLAY_REVISION/, "the local revision token is not marked");
+	assert.match(body, /const localLocaleRevision = \(revision\) => \{/, "the local revision token is missing");
+	assert.match(body, /Object\(revision\)/, "the token does not preserve the Host numeric value");
+	assert.match(body, /revision: localLocaleRevision\(hostLocale\.revision\)/, "the projection does not carry the token");
+	assert.match(body, /Number\(projectedLocale\.revision\) === Number\(hostLocale\.revision\)/,
+		"an unchanged projection is not reused");
+	assert.match(body, /SHORTCUT\(#80\)/, "the typeof-number compatibility limit is not documented");
+	// A numeric bump freezes the shared row stores (#73/#64); never reintroduce it.
+	assert.doesNotMatch(body, /revision\s*\+\s*1000/);
+	assert.doesNotMatch(body, /revision:\s*hostLocale\.revision\s*[+-]/);
+	assert.doesNotMatch(body, /ctx\.emit\("locale\/change"/,
+		"a fake Host event would reach the native bridge");
+});
+
 test("the mobile package no longer owns a ja language pack (#80)", () => {
 	assert.doesNotMatch(COPY, /LOCALE_PACKS/, "the mobile copy module still exports a locale pack");
 	assert.doesNotMatch(CLIENT, /addLanguage\(|JA_LOCALE_PACK|__RDSH_PWA_LOCALES__/,

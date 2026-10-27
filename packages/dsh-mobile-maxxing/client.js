@@ -5931,6 +5931,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     function questionNeedsSelection(card) {
       const options = card.querySelectorAll('[class*="_options"] [role="radio"], [class*="_options"] [role="checkbox"]');
       if (options.length === 0) return null;
+      const field = card.querySelector("textarea");
+      if (typeof field?.value === "string" && field.value.trim() !== "") return false;
       return card.querySelector('[role="radio"][aria-checked="true"], [role="checkbox"][aria-checked="true"]') === null;
     }
 
@@ -5966,10 +5968,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     /**
-     * The submit button stays the only way to send without a keyboard
-     * shortcut; the guard runs before the click, so upstream's "a custom
-     * answer counts" rule cannot send a zero-selection answer for a question
-     * that has options. Skip remains its own explicit, labelled action.
+     * The guard accepts a selected option or a non-empty custom answer.
+     * Skip remains its own explicit, labelled action.
      */
     function submitQuestionCard(card) {
       if (questionNeedsSelection(card) === true) {
@@ -6015,6 +6015,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         card.removeAttribute("data-rdsh-question-typing");
       });
       field.addEventListener("keydown", (event) => questionCardKeyDown(event, card), true);
+      field.addEventListener("input", () => { if (questionNeedsSelection(card) === false) clearQuestionFeedback(card); });
       card.addEventListener("click", (event) => {
         const button = event.target?.closest?.("button") ?? null;
         if (button === null || button !== questionSubmitButton(card)) {
@@ -7692,6 +7693,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     let notificationTotal = 0;
+    let notificationSessions = null;
+
+    function isRootSession(row) {
+      return row !== null && typeof row === "object" && row.origin !== "subagent" && !row.parentId && !row.parentSessionId;
+    }
 
     function applyNotificationCount(count) {
       notificationTotal = Math.max(0, Math.floor(Number(count) || 0));
@@ -7718,6 +7724,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       return count;
     }
 
+    function rootSessionIds(byId) {
+      return new Set(byId !== null && byId !== undefined && typeof byId === "object"
+        ? Object.entries(byId).filter(([, row]) => isRootSession(row)).map(([id]) => id)
+        : []);
+    }
+
     function NotificationWatcher(props) {
       const useSessionStatus = props.useSessionStatus;
       const useSessions = props.useSessions;
@@ -7730,9 +7742,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const previousStatuses = React.useRef(null);
       useEffect(() => {
         const byId = sessions !== null && sessions !== undefined ? sessions.byId : null;
-        const mainIds = byId !== null && byId !== undefined && typeof byId === "object"
-          ? new Set(Object.entries(byId).filter(([, row]) => row !== null && row !== undefined && row.origin !== "subagent").map(([id]) => id))
-          : null;
+        notificationSessions = byId;
+        const mainIds = rootSessionIds(byId);
         const total = countSessionStatuses(statuses, null);
         const main = countSessionStatuses(statuses, mainIds);
         applyNotificationCount(main);
@@ -12361,8 +12372,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
             row = null;
           }
         }
-        // Unknown rows are roots: only a known subagent is skipped.
-        if (row !== null && typeof row === "object" && row.origin === "subagent") continue;
+        // Wait for the session catalog; an unknown row may be a child.
+        if (!isRootSession(row)) continue;
         let previous = null;
         try {
           previous = previousStatuses.get(sessionId);
@@ -12412,7 +12423,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           // browser's own send, or a host that turned `onlyMobileTurns` off.
           // Questions always need the user, wherever the turn came from.
           if (notice.kind === "turn-end" && !hostNotifiesEveryTurn && !markedSendRecent(notice.sessionId)) continue;
-          notifyUser({ ...notice, onShown: () => acknowledgeLocalNotice(notice) });
+          notifyUser({ ...notice, parentVerified: true, onShown: () => acknowledgeLocalNotice(notice) });
         }
       } catch (error) {
         console.error("[rdsh-mobile-ux] local notification failed", error);
@@ -12510,6 +12521,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const toastProps = {
         // The session name is the headline; the detail is what happened.
         text: body === "" ? title : `${title} — ${body}`,
+        icon: h("svg", { "data-rdsh-notice-icon": "", "aria-hidden": "true", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round" }, h("path", { d: "M18 8a6 6 0 0 0-12 0c0 7-2 7-2 9h16c0-2-2-2-2-9M10 20h4" })),
         holdMs: kind === "question" ? 6000 : 4200,
         actions: sessionId === ""
           ? undefined
@@ -12563,7 +12575,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         warnNoticeSkipped("the page is not visible");
         return false;
       }
-      playNoticeSound(notice.kind === "question" ? "pop" : readSoundPreset());
+      if (!["turn-end", "question"].includes(notice.kind) || notice.parentVerified === true || isRootSession(notificationSessions?.[notice.sessionId])) {
+        playNoticeSound(notice.kind === "question" ? "pop" : readSoundPreset());
+      }
       return showInAppNotice(notice);
     }
 
@@ -13287,6 +13301,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       .join(", ");
 
     const CSS_PHONE = `
+@property --rdsh-question-angle { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
+@keyframes rdsh-question-glow { to { --rdsh-question-angle: 360deg; } }
+html[data-rdsh-device-mode="mobile"] body > [role="alert"]:has([data-rdsh-notice-icon]) { max-width: calc(100vw - 32px); box-sizing: border-box; }
+html[data-rdsh-device-mode="mobile"] body > [role="alert"]:has([data-rdsh-notice-icon]) button { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; min-width: 56px; margin-left: 8px; padding: 6px 12px; border: 1px solid currentColor; border-radius: 9px; font: inherit; font-weight: 600; text-decoration: none; }
+html[data-rdsh-device-mode="mobile"] [data-rdsh-notice-icon] { width: 18px; height: 18px; }
 /* Controls the hide list matched. The attribute these selectors key off is
    written only while phone() holds (see applyHideList), and the rules sit in
    the mobile sheet as well: a desktop keeps every control. */
@@ -14340,6 +14359,17 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
     border-radius: 10px !important;
     background: var(--dsw-alias-bg-module-platform, rgba(255,255,255,.02));
   }
+  [data-rdsh-question-card] [data-rdsh-question-tile][aria-checked="true"],
+  [data-rdsh-question-card] [data-rdsh-question-tile][class*="_customRowActive"] {
+    border: 2px solid transparent !important;
+    background: linear-gradient(color-mix(in srgb, var(--dsw-alias-link, #7aaaff) 14%, var(--dsw-alias-bg-module-platform, #26262a)), color-mix(in srgb, var(--dsw-alias-link, #7aaaff) 14%, var(--dsw-alias-bg-module-platform, #26262a))) padding-box, conic-gradient(from var(--rdsh-question-angle, 0deg), var(--dsw-alias-link, #7aaaff), var(--dsw-alias-label-primary, #f9fafb), var(--dsw-alias-link, #7aaaff)) border-box !important;
+    box-shadow: 0 0 10px color-mix(in srgb, var(--dsw-alias-link, #7aaaff) 35%, transparent);
+    animation: rdsh-question-glow 2.8s linear infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    [data-rdsh-question-card] [data-rdsh-question-tile][aria-checked="true"],
+    [data-rdsh-question-card] [data-rdsh-question-tile][class*="_customRowActive"] { animation: none; }
+  }
   [data-rdsh-question-card] [class*="_options"] { gap: 6px !important; }
   /* A down chevron bubble for a scrollable question body. It follows the
      Settings-tab arrow look, but sits over the card and disappears at the
@@ -15383,6 +15413,8 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
     if (noticeTestHook !== null && typeof noticeTestHook === "object") {
       noticeTestHook.notice = {
         localNotices,
+        rootSessionIds,
+        countSessionStatuses,
         emitLocalNotices,
         onWorkerMessage,
         localNoticeRecent,

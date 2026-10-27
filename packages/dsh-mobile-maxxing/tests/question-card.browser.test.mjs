@@ -371,6 +371,34 @@ function assertPhoneGeometry(measured, width) {
 	}
 }
 
+browserTest("real browser: selected choices use the session glow and custom text shares it", async () => {
+  const page = await Page.open();
+  try {
+    await page.load(390);
+    const measured = await page.eval(`(() => {
+      const options = [...document.querySelectorAll(".Mbwy4a_option")];
+      options[0].setAttribute("data-rdsh-question-tile", "");
+      options[0].setAttribute("role", "radio");
+      options[0].setAttribute("aria-checked", "true");
+      options[1].setAttribute("data-rdsh-question-tile", "");
+      options[1].setAttribute("role", "checkbox");
+      options[1].setAttribute("aria-checked", "true");
+      const custom = document.querySelector(".Mbwy4a_customRow");
+      custom.setAttribute("data-rdsh-question-tile", "");
+      custom.classList.add("Mbwy4a_customRowActive");
+      return [options[0], options[1], custom].map((node) => {
+        const style = getComputedStyle(node);
+        return { background: style.backgroundImage, animation: style.animationName, border: style.borderTopWidth };
+      });
+    })()`);
+    for (const style of measured) {
+      assert.match(style.background, /conic-gradient/, "the session glow was not reused");
+      assert.equal(style.animation, "rdsh-question-glow");
+      assert.equal(style.border, "2px");
+    }
+  } finally { await page.close(); }
+});
+
 browserTest("real browser: question and plan-review cards keep 16px gutters and wrap long tokens at 390px", async () => {
 	assertPhoneGeometry(await measureAt(390), 390);
 });

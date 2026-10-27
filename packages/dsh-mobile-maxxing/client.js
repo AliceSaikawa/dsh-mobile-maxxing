@@ -7685,7 +7685,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     let notificationSessions = null;
 
     function isRootSession(row) {
-      return row !== null && typeof row === "object" && row.origin !== "subagent" && !row.parentId && !row.parentSessionId;
+      // A forked root keeps parentId; only the explicit origin marks a child.
+      return row !== null && typeof row === "object" && row.origin !== "subagent";
     }
 
     function applyNotificationCount(count) {

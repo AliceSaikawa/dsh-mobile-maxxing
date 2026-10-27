@@ -2138,7 +2138,7 @@ test("a finished task plays the softer three-note completion sound", () => {
   notice.emitLocalNotices(new Map([["s1", { running: true }]]), new Map([["s1", { running: false }]]), { "s1": { title: "Done" } });
   assert.deepEqual(frequencies, [659.25, 783.99, 987.77]);
   markSend("child");
-  notice.emitLocalNotices(new Map([["child", { running: true }]]), new Map([["child", { running: false }]]), { child: { parentId: "s1" } });
+  notice.emitLocalNotices(new Map([["child", { running: true }]]), new Map([["child", { running: false }]]), { child: { origin: "subagent", parentId: "s1" } });
   notice.emitLocalNotices(new Map([["unknown", { running: true }]]), new Map([["unknown", { running: false }]]), null);
   notice.onWorkerMessage({ data: { type: "dsh-mobile-maxxing:notify", sessionId: "child", kind: "turn-end", title: "Child" } });
   assert.deepEqual(frequencies, [659.25, 783.99, 987.77], "child and unverified completion must stay silent");
@@ -4146,16 +4146,25 @@ test("a finished root turn raises one local banner and push does not stack", () 
 
 test("badge counts only known root sessions, never children or unknowns", () => {
   const { booted, notice } = localNoticeHarness();
-  const statuses = new Map([["root", { completionUnread: true }], ["child", { completionUnread: true }], ["child2", { pendingInteraction: { kind: "question" } }], ["unknown", { completionUnread: true }]]);
-  const byId = { root: { title: "Root" }, child: { origin: "subagent" }, child2: { parentId: "root" } };
-  assert.equal(notice.countSessionStatuses(statuses, notice.rootSessionIds(byId)), 1);
+  const statuses = new Map([["root", { completionUnread: true }], ["forked", { completionUnread: true }], ["child", { completionUnread: true }], ["child2", { pendingInteraction: { kind: "question" } }], ["unknown", { completionUnread: true }]]);
+  const byId = { root: { title: "Root" }, forked: { parentId: "previous-root" }, child: { origin: "subagent" }, child2: { origin: "subagent", parentId: "root" } };
+  assert.equal(notice.countSessionStatuses(statuses, notice.rootSessionIds(byId)), 2);
   assert.equal(notice.countSessionStatuses(statuses, notice.rootSessionIds(null)), 0);
+  booted.disposeAll();
+});
+
+test("a forked root with parentId still emits a completion notice", () => {
+  const { booted, notice, rendered, markSend } = localNoticeHarness();
+  const byId = { root: { parentId: "previous-root", title: "Forked root" } };
+  markSend("root");
+  notice.emitLocalNotices(new Map([["root", { running: true }]]), new Map([["root", { running: false }]]), byId);
+  assert.deepEqual(rendered, ["Forked root — The work finished."]);
   booted.disposeAll();
 });
 
 test("a subagent turn end and a first render raise no local banner", () => {
 	const { booted, notice, rendered } = localNoticeHarness();
-	const byId = { "child-1": { parentId: "root", title: "Child" } };
+	const byId = { "child-1": { origin: "subagent", parentId: "root", title: "Child" } };
 	const running = new Map([["child-1", { running: true }]]);
 	const idle = new Map([["child-1", { running: false }]]);
 

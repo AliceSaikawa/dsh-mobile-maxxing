@@ -4534,15 +4534,14 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     // Store floats once most of the window leaves the screen; keep their content mounted.
     const storedFloats = new Map();
     let floatShelf = null;
-    let tabFloatMenu = null;
+    let floatGuard = null;
 
     function clearFloatShelf() {
       for (const float of storedFloats.keys()) float.removeAttribute("data-rdsh-float-stored");
       storedFloats.clear();
       floatShelf?.remove();
       floatShelf = null;
-      tabFloatMenu?.remove();
-      tabFloatMenu = null;
+      floatGuard = null;
     }
 
     function updateFloatShelf() {
@@ -4631,31 +4630,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       }
     }
 
-    function openTabFloatMenu(tab) {
-      tabFloatMenu?.remove();
-      const menu = document.createElement("div");
-      menu.className = "rdsh-tab-float-menu";
-      const button = document.createElement("button");
-      button.type = "button";
-      button.textContent = t("mux.showWindow");
-      button.addEventListener("click", () => {
-        const service = optionalService("sidebarRight");
-        const id = tab.getAttribute("data-dockkit-tab");
-        if (id && service?.float) {
-          const panel = tab.closest("[data-sidebar-right-panel]")?.getBoundingClientRect() || { left: 0, top: 0 };
-          service.float(id, { x: Math.max(0, 12 - panel.left), y: Math.max(0, 60 - panel.top), width: Math.max(240, window.innerWidth - 24), height: Math.max(200, Math.floor(window.innerHeight / 2)) });
-        }
-        menu.remove();
-        tabFloatMenu = null;
-      });
-      menu.append(button);
-      document.body.append(menu);
-      const rect = tab.getBoundingClientRect();
-      menu.style.left = Math.max(8, Math.min(window.innerWidth - 180, rect.left)) + "px";
-      menu.style.top = Math.max(8, Math.min(window.innerHeight - 60, rect.bottom)) + "px";
-      tabFloatMenu = menu;
-    }
-    /** Remove headings left by a previous client after an in-place update. */
     function removeRightPanelHeading() {
       for (const stale of document.querySelectorAll("[data-rdsh-panel-heading]")) {
         stale.remove();
@@ -9316,7 +9290,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       candidate.held = true;
       candidate.blocking = false;
       candidate.tab.setAttribute("data-rdsh-tab-hold", "");
-      openTabFloatMenu(candidate.tab);
     }
 
 
@@ -9357,9 +9330,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     function onPointerDown(event) {
       if (!phone()) return;
-      if (tabFloatMenu && !tabFloatMenu.contains(event.target)) { tabFloatMenu.remove(); tabFloatMenu = null; }
-      for (const state of TERMINAL_KEY_ROWS.values()) {
-        if (state.menu && !state.menu.contains(event.target) && !state.row.contains(event.target)) { state.menu.remove(); state.menu = null; }
+      const dockTab = event.target?.closest?.("[data-sidebar-right-panel] [data-dockkit-tab]");
+      if (event.isPrimary !== false) {
+        const surface = dockTab?.closest?.("[data-dockkit-surface]");
+        floatGuard = surface && !dockTab.closest("[data-dockkit-float]") ? { surface, pointerId: event.pointerId } : null;
       }
       // A new primary contact starts a new gesture: drop a stale strip pan,
       // a pending tab tap replay and an old tab hold. Secondary fingers must
@@ -9485,7 +9459,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           }
           // Do not write scrollLeft here: the browser owns normal swipes.
         }
-        if (tabMove.held && Math.abs(event.clientX - tabMove.x) + Math.abs(event.clientY - tabMove.y) > TAB_HOLD_SLOP_PX && tabFloatMenu) { tabFloatMenu.remove(); tabFloatMenu = null; }
         if (tabMove.blocking) {
           // Reaches dockkit's window-level pointermove before it can start the
           // 4px drag. The original pointerdown is untouched, so a held finger
@@ -9503,6 +9476,14 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     function onPointerUp(event) {
+      if (floatGuard && (event.pointerId === undefined || event.pointerId === floatGuard.pointerId)) {
+        const rect = floatGuard.surface.getBoundingClientRect();
+        if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) {
+          // Dockkit floats only when a tab is dropped outside its surface; cancel its drag instead.
+          window.dispatchEvent(new PointerEvent("pointercancel", { pointerId: floatGuard.pointerId }));
+        }
+        floatGuard = null;
+      }
       if (phone() && event.target?.closest?.("[data-dockkit-float]")) setTimeout(updateFloatShelf, 100);
       cancelQueuePress();
       cancelLongPress();
@@ -9566,6 +9547,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     function onPointerCancel(event) {
+      if (floatGuard && (event?.pointerId === undefined || event.pointerId === floatGuard.pointerId)) floatGuard = null;
       cancelQueuePress();
       if (stripPanCandidate !== null
         && (event?.pointerId === undefined
@@ -10014,7 +9996,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       { id: "left", textKey: "terminalKeys.left", labelKey: "terminalKeys.arrowLeft" },
       { id: "right", textKey: "terminalKeys.right", labelKey: "terminalKeys.arrowRight" },
       { id: "ctrl", textKey: "terminalKeys.ctrl", labelKey: "terminalKeys.control" },
-      { id: "menu", textKey: "terminalKeys.menu", labelKey: "terminalKeys.menu" },
     ];
 
     /**
@@ -10155,44 +10136,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         setSpecialKeyControl(state, !state.control);
         return;
       }
-      if (key === "menu") {
-        if (state.menu) { state.menu.remove(); state.menu = null; return; }
-        const menu = document.createElement("div");
-        menu.className = "rdsh-terminal-menu";
-        const toggle = document.createElement("button");
-        toggle.type = "button";
-        toggle.textContent = t("terminalKeys.virtualWindow");
-        toggle.setAttribute("aria-pressed", String(state.section.hasAttribute("data-rdsh-terminal-virtual")));
-        const label = document.createElement("label");
-        label.textContent = t("terminalKeys.scale");
-        const slider = document.createElement("input");
-        slider.type = "range";
-        slider.min = "30"; slider.max = "100"; slider.step = "5";
-        slider.value = String(state.scale || 50);
-        slider.setAttribute("aria-label", t("terminalKeys.scale"));
-        const applyScale = () => {
-          const mount = state.section.querySelector(".xterm")?.parentElement;
-          if (!mount) return;
-          const enabled = state.section.hasAttribute("data-rdsh-terminal-virtual");
-          toggle.setAttribute("aria-pressed", String(enabled));
-          slider.disabled = !enabled;
-          if (enabled) { mount.style.zoom = String(state.scale / 100); mount.style.width = "100%"; mount.style.maxWidth = "none"; mount.style.boxSizing = "border-box"; }
-          else { mount.style.removeProperty("zoom"); mount.style.removeProperty("width"); mount.style.removeProperty("max-width"); mount.style.removeProperty("box-sizing"); }
-          scheduleTerminalFit();
-        };
-        state.scale ||= 50;
-        toggle.addEventListener("click", () => { state.section.toggleAttribute("data-rdsh-terminal-virtual"); applyScale(); });
-        slider.addEventListener("input", () => { state.scale = Number(slider.value); applyScale(); });
-        label.append(slider);
-        menu.append(toggle, label);
-        document.body.append(menu);
-        const rect = state.row.getBoundingClientRect();
-        menu.style.left = Math.max(8, Math.min(window.innerWidth - 220, rect.right - 220)) + "px";
-        menu.style.top = Math.max(8, Math.min(window.innerHeight - 120, rect.bottom)) + "px";
-        slider.disabled = !state.section.hasAttribute("data-rdsh-terminal-virtual");
-        state.menu = menu;
-        return;
-      }
       const control = state.control;
       const sequence = terminalKeySequence(key, terminalApplicationCursor(state.section), control);
       sendTerminalBytes(state.section, sequence);
@@ -10211,7 +10154,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (event.button !== undefined && event.button !== 0) return;
       if (event.cancelable) event.preventDefault();
       if (typeof event.stopPropagation === "function") event.stopPropagation();
-      if (button.getAttribute("data-rdsh-terminal-key") !== "menu") focusTerminalInput(state.section);
+      focusTerminalInput(state.section);
       activateSpecialKey(state, button.getAttribute("data-rdsh-terminal-key"));
     }
 
@@ -10331,7 +10274,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       section.removeEventListener("keydown", onSpecialKeyTextKeyDown, true);
       section.removeEventListener("beforeinput", onSpecialKeyBeforeInput, true);
       if (typeof state.disposeAutofocus === "function") state.disposeAutofocus();
-      state.menu?.remove();
       const mount = section.querySelector(".xterm")?.parentElement;
       if (mount && section.hasAttribute("data-rdsh-terminal-virtual")) { mount.style.removeProperty("zoom"); mount.style.removeProperty("width"); mount.style.removeProperty("max-width"); mount.style.removeProperty("box-sizing"); section.removeAttribute("data-rdsh-terminal-virtual"); }
       state.row.remove();
@@ -14573,11 +14515,9 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   [data-rdsh-float-stored] { visibility: hidden !important; pointer-events: none !important; }
   .rdsh-float-shelf { position: fixed; z-index: 2147483000; left: 12px; top: 100px; }
   .rdsh-float-shelf-button { width: 48px; height: 48px; border-radius: 50%; touch-action: none; font-size: 22px; }
-  .rdsh-float-shelf-list, .rdsh-tab-float-menu, .rdsh-terminal-menu { position: fixed; z-index: 2147483001; min-width: 170px; max-width: calc(100vw - 16px); max-height: 50vh; overflow: auto; padding: 6px; border-radius: 10px; background: var(--dsw-alias-bg-l2, #232324); color: var(--dsw-alias-label-primary, #fff); box-shadow: 0 3px 16px #0008; }
+  .rdsh-float-shelf-list { position: fixed; z-index: 2147483001; min-width: 170px; max-width: calc(100vw - 16px); max-height: 50vh; overflow: auto; padding: 6px; border-radius: 10px; background: var(--dsw-alias-bg-l2, #232324); color: var(--dsw-alias-label-primary, #fff); box-shadow: 0 3px 16px #0008; }
   .rdsh-float-shelf-list[hidden] { display: none; }
-  .rdsh-float-shelf-list button, .rdsh-tab-float-menu button, .rdsh-terminal-menu button { display: block; width: 100%; min-height: 40px; border: 0; border-radius: 6px; padding: 8px; text-align: left; background: transparent; color: inherit; font: inherit; }
-  .rdsh-terminal-menu label { display: flex; gap: 8px; align-items: center; padding: 8px; }
-  .rdsh-terminal-menu input { width: 120px; }
+  .rdsh-float-shelf-list button { display: block; width: 100%; min-height: 40px; border: 0; border-radius: 6px; padding: 8px; text-align: left; background: transparent; color: inherit; font: inherit; }
 
   /* Right panel: never wider than the phone, wide tables scroll inside it. */
   [data-rdsh-rightpanel] {

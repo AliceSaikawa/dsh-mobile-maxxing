@@ -107,7 +107,7 @@ export function classifyDevice(nav) {
  * @param {string} [statusBarStyle] - normalized apple status bar style.
  * @returns {string} one `<script>` element carrying the classifier.
  */
-export function earlyModeScript(statusBarStyle = "black-translucent") {
+export function earlyModeScript(statusBarStyle = "default") {
 	const source = classifyDevice.toString();
 	// Our own source, but it lands inside a script element: a body that could
 	// close the element is a broken build, not something to render. The script

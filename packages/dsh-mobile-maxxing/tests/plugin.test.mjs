@@ -405,7 +405,7 @@ test("an old marker without the payload gets copy, probes and lang exactly once"
 	const legacy = INDEX.replace("</head>", [
 		"<!--dsh-mobile-maxxing-->",
 		'<meta name="mobile-web-app-capable" content="yes">',
-		'<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">',
+		'<meta name="apple-mobile-web-app-status-bar-style" content="default">',
 		"</head>",
 	].join(""));
 	const once = decorateIndex(legacy, {});
@@ -461,8 +461,8 @@ test("hostile config values cannot break out of the injected markup", () => {
 		appleStatusBarStyle: '"><script>alert(1)</script>',
 	});
 	assert.ok(!html.includes("alert(1)"), "the rejected value never reaches the document");
-	assert.ok(html.includes('"apple-mobile-web-app-status-bar-style","black-translucent"')
-		|| html.includes('"black-translucent"'), "the default is carried instead");
+	assert.ok(html.includes('"apple-mobile-web-app-status-bar-style","default"')
+		|| html.includes('"default"'), "the default is carried instead");
 	// A hostile value that somehow reached the bootstrap would still be a JSON
 	// string, and the element stays closed exactly once.
 	const hostile = earlyModeScript('"></script><script>alert(1)');

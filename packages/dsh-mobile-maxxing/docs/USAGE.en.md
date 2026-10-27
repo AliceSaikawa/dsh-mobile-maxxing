@@ -448,6 +448,38 @@ for the sidebar, the right panel and settings. This was previously done with a `
 route that stripped the PWA tags for comparison; that route is gone — an unauthenticated
 diagnostic page does not belong in a shipped package.
 
+## The iOS 27 top-edge blur
+
+An iOS 27 home-screen PWA lays a progressive blur over the top edge unless a
+`position: fixed` element sits there. In a standalone iOS (WebKit) app the package mounts one
+11px fixed element at the top (`.dsh-mobile-maxxing-top-edge`). It declares the canvas colour
+as `background-color` and paints nothing, because `background-clip: text` has no text to clip
+to. WebKit reads the colour from the computed style, not from painted pixels, so the check
+passes without a visible change ([reference](https://qiita.com/na-trium-144/items/0add98a80ca2391e3f17)).
+Hiding it with `opacity: 0`, `visibility: hidden` or `display: none` drops it from the check
+and the blur comes back. In a Safari tab the same element turns the toolbar opaque, so it is
+off outside standalone.
+
+WebKit only uses the element when the host app obscures the top edge
+([an article that traces the WebKit source](https://zenn.dev/uakihir0/articles/260920-ios27-pwa-blur)).
+On an iPhone (2026-10-26, iOS 27.2):
+
+- With the default `appleStatusBarStyle: "black-translucent"` the page draws under the clock
+  and the blur stays, element or not.
+- With `appleStatusBarStyle: "default"` in the profile patch, after deleting the home-screen
+  icon and adding it again, the page starts below the clock, the element's colour fills the
+  status bar strip, and the blur is gone.
+- Changing the setting alone does not affect an icon that is already installed; it keeps the
+  style it was added with. Re-adding the icon drops that app's push subscription and its
+  device-local settings (localStorage).
+- With the final, unpainted element the strip took the background colour and there was no
+  blur, in both light and dark mode. The status bar text is black in light mode and white in
+  dark mode. iOS 26 under `"default"` is unverified.
+
+Under `"default"` the page starts below the status bar, so the height it lacks is the status
+bar itself. Treating that as the unpainted bottom strip (`data-rdsh-native-gap`) would put the
+composer under the home indicator, so that check only runs under `black-translucent`.
+
 ## Credits
 
 The package is written by referencing the implementations below. **No code was copied**

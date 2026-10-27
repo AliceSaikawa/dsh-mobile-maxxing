@@ -612,6 +612,28 @@ html[data-dsh-mobile-maxxing="standalone"] { overscroll-behavior-y: none; }
 html[data-dsh-mobile-maxxing="standalone"] body { overscroll-behavior-y: contain; }
 html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-toasts { top: calc(env(safe-area-inset-top, 0px) + 10px); }
 
+/* iOS 27 home-screen apps blur the top edge unless a fixed element covers it.
+   WebKit hit-tests the top centre, takes the topmost fixed box there, and
+   reads its colour from the computed style, not from painted pixels. This
+   empty box declares the canvas colour and paints nothing (background-clip:
+   text with no text). 11px clears WebKit's 10px thin-box cut-off; opacity 0,
+   visibility hidden or display none would drop it as a candidate. Standalone
+   only: in a Safari tab the same element would make the toolbar opaque.
+   WebKit only uses the box where the host covers the edge, so it has no
+   effect under a black-translucent status bar (checked on an iPhone). iOS
+   keeps the style an icon was added with: changing it needs a re-add.
+   https://qiita.com/na-trium-144/items/0add98a80ca2391e3f17 */
+.dsh-mobile-maxxing-top-edge { display: none; }
+@supports (-webkit-touch-callout: none) {
+  html[data-dsh-mobile-maxxing="standalone"] .dsh-mobile-maxxing-top-edge {
+    display: block;
+    position: fixed; top: 0; left: 0; right: 0; height: 11px;
+    z-index: 2147483647; pointer-events: none;
+    background-color: var(--dsw-alias-bg-base, #151517);
+    -webkit-background-clip: text; background-clip: text;
+  }
+}
+
 /* Mobile devices: keep the toast column clear of the 64px sidebar header, and
    hang the install card on the right so the logo (session list) stays tappable.
    This is a device-mode rule, not a width rule: a tablet at 1024px keeps it. */
@@ -1288,6 +1310,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         toastRoot.setAttribute("aria-live", "polite");
         document.body.appendChild(toastRoot);
 
+        // Always mounted; the stylesheet decides where it takes effect.
+        const topEdge = document.createElement("div");
+        topEdge.className = "dsh-mobile-maxxing-top-edge";
+        topEdge.setAttribute("aria-hidden", "true");
+        document.body.appendChild(topEdge);
+
         const applyMode = () => {
           const standalone = isStandalone();
           document.documentElement.setAttribute(ROOT_ATTR, standalone ? "standalone" : "browser");
@@ -1374,6 +1402,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           style.remove();
           toastRoot.remove();
           toastRoot = null;
+          topEdge.remove();
           renderedSignature = "";
           emit({ installDismissed: false });
           for (const media of modeQueries) media.removeEventListener("change", applyMode);
@@ -3263,8 +3292,13 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // than the screen (screen.height - innerHeight), so the unpainted strip is
       // below the web view. The home indicator is in that strip, not inside the
       // page; the inner bottom safe-area padding would only enlarge the blank.
+      // Only a translucent status bar puts the page under the clock. With any
+      // other style the web view starts below the status bar, so the same
+      // shortfall is at the top and the home indicator is inside the page.
       const screenHeight = window.screen && Number.isFinite(window.screen.height) ? window.screen.height : 0;
-      const nativeGap = window.navigator.standalone === true && !keyboardOpen() && screenHeight > 0 && screenHeight - window.innerHeight > 8;
+      const statusBar = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
+      const underStatusBar = statusBar !== null && statusBar.getAttribute("content") === "black-translucent";
+      const nativeGap = window.navigator.standalone === true && underStatusBar && !keyboardOpen() && screenHeight > 0 && screenHeight - window.innerHeight > 8;
       root.toggleAttribute("data-rdsh-native-gap", nativeGap);
       for (const [name, value] of [["top", top], ["bottom", bottom], ["left", left], ["right", right]]) {
         if (value > 0) root.setAttribute(`data-rdsh-safe-${name}`, "");
@@ -7504,6 +7538,28 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     // ---------------------------------------------------------------------
     let fab = null;
     let backdrop = null;
+    let drawerScrollTop = 0;
+
+    function sessionListScroller() {
+      const sidebar = document.querySelector("[data-rdsh-sidebar]");
+      if (sidebar === null) return null;
+      return [...sidebar.querySelectorAll("div")].find((element) => {
+        const overflow = getComputedStyle(element).overflowY;
+        return (overflow === "auto" || overflow === "scroll") && element.scrollHeight > element.clientHeight + 4;
+      }) ?? null;
+    }
+
+    function rememberDrawerScroll() {
+      const scroller = sessionListScroller();
+      if (scroller !== null) drawerScrollTop = scroller.scrollTop;
+    }
+
+    function restoreDrawerScroll() {
+      setTimeout(() => {
+        const scroller = sessionListScroller();
+        if (scroller !== null) scroller.scrollTop = Math.min(drawerScrollTop, Math.max(0, scroller.scrollHeight - scroller.clientHeight));
+      }, 0);
+    }
 
     function toggleDrawer() {
       // Share the decorator's locator so a localised label still opens the
@@ -10812,6 +10868,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     function onClickCapture(event) {
       const target = event.target;
       if (target === null || target.closest === undefined) return;
+      if (target.closest("[data-rdsh-sidebar-toggle]") !== null) {
+        rememberDrawerScroll();
+        restoreDrawerScroll();
+      }
 
       // A header activity chip whose own panel is open closes it on the second
       // tap; any other chip click (including the first one) stays upstream so
@@ -15177,6 +15237,11 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           markMobileSession,
           closeDrawer,
           openDrawer: toggleDrawer,
+          drawerScroll: {
+            remember: rememberDrawerScroll,
+            restore: restoreDrawerScroll,
+            get top() { return drawerScrollTop; },
+          },
           enableNotifications,
           sendTestNotification,
         };

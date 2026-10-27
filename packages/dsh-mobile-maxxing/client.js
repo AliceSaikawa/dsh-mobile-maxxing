@@ -1183,6 +1183,13 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         setBusy(true);
         setMessage("");
         try {
+          // #109: check version first; only update when a newer one exists.
+          const verRes = await fetch("/dsh-mobile-maxxing/plugin-version");
+          const ver = await verRes.json().catch(() => ({}));
+          if (ver.current && ver.latest && ver.current === ver.latest) {
+            setMessage(t("pwa.note.pluginsLatest"));
+            return;
+          }
           const res = await fetch("/dsh-mobile-maxxing/update-plugins", { method: "POST" });
           const data = await res.json().catch(() => ({}));
           if (res.ok && data.ok !== false) setMessage(t("pwa.note.pluginsUpdated"));
@@ -9556,9 +9563,14 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           if (scrolledLeftAncestor(target) !== null) return;
           if (target.closest("input, textarea, [contenteditable=true], .xterm, [class*='xterm']") !== null) return;
         }
-        // The drawer's left-edge zone owns its own gesture; a rightward swipe
-        // from there falls through to the drawer-open path below (#59).
-        const inLeftEdge = !fromRight && touch.clientX <= 36;
+        // #113: a fullscreen panel owns the whole screen, including the left
+        // edge; a rightward swipe from there closes it. Only a docked panel
+        // (landscape) leaves the left edge to the drawer (#59).
+        const isDocked = (() => {
+          const dock = rightPanelNode === null ? null : rightPanelNode.getBoundingClientRect();
+          return dock !== null && dock.width > 0 && dock.width < window.innerWidth * 0.85;
+        })();
+        const inLeftEdge = !fromRight && touch.clientX <= 36 && isDocked;
         if (!inLeftEdge) {
           // #59: a docked panel (landscape) shares the screen with the
           // conversation. Only a swipe that starts on the panel closes it; a

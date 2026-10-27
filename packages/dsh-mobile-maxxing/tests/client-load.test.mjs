@@ -1407,11 +1407,11 @@ test("a rightward swipe closes an open right panel; the left edge opens the draw
 	move(touch(290));
 	assert.equal(closes, 1, "the panel did not close from a non-edge start");
 
-	// At the left edge the same gesture belongs to the drawer (#59): the panel
-	// must not close.
+	// #113: a fullscreen panel (no docked split) owns the left edge too; a
+	// rightward swipe from there closes the panel, not the drawer.
 	start({ touches: [{ clientX: 10, clientY: 200 }], target: {} });
 	move(touch(100));
-	assert.equal(closes, 1, "the left-edge swipe closed the panel instead of opening the drawer");
+	assert.equal(closes, 2, "the left-edge swipe did not close the fullscreen panel");
 	booted.disposeAll();
 });
 

@@ -964,7 +964,7 @@ test("#59 a docked panel closes only under a swipe that starts on it", () => {
 	booted.disposeAll();
 });
 
-test("#59 a left-edge swipe while a panel is open falls through to the drawer", () => {
+test("#113 a left-edge swipe while a fullscreen panel is open closes the panel", () => {
 	const booted = bootGestures({ narrow: true, mode: "mobile", width: 390 });
 	const { root, collapse } = panelFixture(booted.doc);
 	booted.drainFrames();
@@ -976,10 +976,11 @@ test("#59 a left-edge swipe while a panel is open falls through to the drawer", 
 	const body = new FakeElement("div");
 	body._closest = () => null;
 
-	// Left-edge rightward swipe: must NOT be claimed as a panel close.
+	// #113: a fullscreen panel owns the left edge; a rightward swipe from there
+	// closes the panel instead of opening the drawer.
 	start({ touches: [{ clientX: 10, clientY: 200 }], target: body });
 	move(touch(150, 200));
-	assert.equal(collapse.clicks, 0, "the left-edge swipe closed the panel instead of opening the drawer");
+	assert.equal(collapse.clicks, 1, "the left-edge swipe did not close the fullscreen panel");
 	booted.disposeAll();
 });
 

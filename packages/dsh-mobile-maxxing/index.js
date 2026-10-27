@@ -330,7 +330,7 @@ function assetPath(file) {
  */
 function runPluginUpdate() {
 	return new Promise((resolve, reject) => {
-		const child = spawn("dsh", ["plugin", "--profile", "web", "add", "kuraneko1/dsh-mobile-maxxing", "kuraneko1/dsh-locale-ja"], {
+		const child = spawn("dsh", ["plugin", "--profile", "web", "add", "kuraneko1/dsh-mobile-maxxing"], {
 			stdio: ["ignore", "pipe", "pipe"],
 			timeout: 120000,
 		});
@@ -446,8 +446,22 @@ export function apply(ctx, config) {
 			}));
 		}
 
-		// #109: one-tap plugin update from the PWA settings. Runs the profile's
-		// plugin CLI against the live home; a restart makes new bytes visible.
+		// #109: check and update plugin version from the PWA settings.
+		disposes.push(webServer.register({
+			kind: "exact",
+			path: "/dsh-mobile-maxxing/plugin-version",
+			handler: readOnly(async (req, res) => {
+				try {
+					const pkg = JSON.parse(await readFile(new URL("./package.json", import.meta.url), "utf8"));
+					const res2 = await fetch("https://raw.githubusercontent.com/kuraneko1/dsh-mobile-maxxing/main/packages/dsh-mobile-maxxing/package.json");
+					const remote = res2.ok ? JSON.parse(await res2.text()) : {};
+					respond(res, req.method, 200, { "content-type": "application/json; charset=utf-8" }, JSON.stringify({ current: pkg.version || "", latest: remote.version || "" }));
+				} catch (error) {
+					respond(res, req.method, 200, { "content-type": "application/json; charset=utf-8" }, JSON.stringify({ current: "", latest: "", error: String(error && error.message || error) }));
+				}
+			}),
+		}));
+
 		disposes.push(webServer.register({
 			kind: "exact",
 			path: "/dsh-mobile-maxxing/update-plugins",

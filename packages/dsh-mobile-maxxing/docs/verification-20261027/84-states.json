@@ -1,0 +1,356 @@
+{
+  "opened": "open",
+  "injectedCssChars": 612,
+  "before": {
+    "viewport": {
+      "width": 390,
+      "height": 844,
+      "vvWidth": 390,
+      "vvOffsetLeft": 0,
+      "scrollX": 0,
+      "scrollY": 0
+    },
+    "surface": {
+      "rect": [
+        12,
+        124,
+        370,
+        484
+      ],
+      "width": 358,
+      "scrollWidth": 358,
+      "clientWidth": 358,
+      "scrollLeft": 0,
+      "scrollTop": 0,
+      "overflowX": "hidden",
+      "overflowY": "hidden",
+      "touchAction": "auto",
+      "overscrollBehaviorX": "auto"
+    },
+    "groups": {
+      "rect": [
+        16,
+        161,
+        366,
+        480
+      ],
+      "width": 350,
+      "scrollWidth": 456,
+      "clientWidth": 345,
+      "scrollLeft": 0,
+      "scrollTop": 513,
+      "overflowX": "auto",
+      "overflowY": "auto",
+      "touchAction": "auto",
+      "overscrollBehaviorX": "auto"
+    }
+  },
+  "diagonalBefore": {
+    "viewport": {
+      "width": 390,
+      "height": 844,
+      "vvWidth": 390,
+      "vvOffsetLeft": 0,
+      "scrollX": 0,
+      "scrollY": 0
+    },
+    "surface": {
+      "rect": [
+        12,
+        124,
+        370,
+        484
+      ],
+      "width": 358,
+      "scrollWidth": 358,
+      "clientWidth": 358,
+      "scrollLeft": 0,
+      "scrollTop": 0,
+      "overflowX": "hidden",
+      "overflowY": "hidden",
+      "touchAction": "auto",
+      "overscrollBehaviorX": "auto"
+    },
+    "groups": {
+      "rect": [
+        16,
+        161,
+        366,
+        480
+      ],
+      "width": 350,
+      "scrollWidth": 456,
+      "clientWidth": 345,
+      "scrollLeft": 111,
+      "scrollTop": 572,
+      "overflowX": "auto",
+      "overflowY": "auto",
+      "touchAction": "auto",
+      "overscrollBehaviorX": "auto"
+    }
+  },
+  "horizontalBefore": {
+    "viewport": {
+      "width": 390,
+      "height": 844,
+      "vvWidth": 390,
+      "vvOffsetLeft": 0,
+      "scrollX": 0,
+      "scrollY": 0
+    },
+    "surface": {
+      "rect": [
+        12,
+        124,
+        370,
+        484
+      ],
+      "width": 358,
+      "scrollWidth": 358,
+      "clientWidth": 358,
+      "scrollLeft": 0,
+      "scrollTop": 0,
+      "overflowX": "hidden",
+      "overflowY": "hidden",
+      "touchAction": "auto",
+      "overscrollBehaviorX": "auto"
+    },
+    "groups": {
+      "rect": [
+        16,
+        161,
+        366,
+        480
+      ],
+      "width": 350,
+      "scrollWidth": 456,
+      "clientWidth": 345,
+      "scrollLeft": 111,
+      "scrollTop": 0,
+      "overflowX": "auto",
+      "overflowY": "auto",
+      "touchAction": "auto",
+      "overscrollBehaviorX": "auto"
+    }
+  },
+  "verticalBefore": {
+    "viewport": {
+      "width": 390,
+      "height": 844,
+      "vvWidth": 390,
+      "vvOffsetLeft": 0,
+      "scrollX": 0,
+      "scrollY": 0
+    },
+    "surface": {
+      "rect": [
+        12,
+        124,
+        370,
+        484
+      ],
+      "width": 358,
+      "scrollWidth": 358,
+      "clientWidth": 358,
+      "scrollLeft": 0,
+      "scrollTop": 0,
+      "overflowX": "hidden",
+      "overflowY": "hidden",
+      "touchAction": "auto",
+      "overscrollBehaviorX": "auto"
+    },
+    "groups": {
+      "rect": [
+        16,
+        161,
+        366,
+        480
+      ],
+      "width": 350,
+      "scrollWidth": 456,
+      "clientWidth": 345,
+      "scrollLeft": 0,
+      "scrollTop": 177,
+      "overflowX": "auto",
+      "overflowY": "auto",
+      "touchAction": "auto",
+      "overscrollBehaviorX": "auto"
+    }
+  },
+  "after": {
+    "viewport": {
+      "width": 390,
+      "height": 844,
+      "vvWidth": 390,
+      "vvOffsetLeft": 0,
+      "scrollX": 0,
+      "scrollY": 0
+    },
+    "surface": {
+      "rect": [
+        12,
+        124,
+        370,
+        484
+      ],
+      "width": 358,
+      "scrollWidth": 358,
+      "clientWidth": 358,
+      "scrollLeft": 0,
+      "scrollTop": 0,
+      "overflowX": "hidden",
+      "overflowY": "hidden",
+      "touchAction": "auto",
+      "overscrollBehaviorX": "auto"
+    },
+    "groups": {
+      "rect": [
+        16,
+        161,
+        366,
+        480
+      ],
+      "width": 350,
+      "scrollWidth": 345,
+      "clientWidth": 345,
+      "scrollLeft": 0,
+      "scrollTop": 0,
+      "overflowX": "hidden",
+      "overflowY": "auto",
+      "touchAction": "pan-y",
+      "overscrollBehaviorX": "none"
+    }
+  },
+  "diagonalAfter": {
+    "viewport": {
+      "width": 390,
+      "height": 844,
+      "vvWidth": 390,
+      "vvOffsetLeft": 0,
+      "scrollX": 0,
+      "scrollY": 0
+    },
+    "surface": {
+      "rect": [
+        12,
+        124,
+        370,
+        484
+      ],
+      "width": 358,
+      "scrollWidth": 358,
+      "clientWidth": 358,
+      "scrollLeft": 0,
+      "scrollTop": 0,
+      "overflowX": "hidden",
+      "overflowY": "hidden",
+      "touchAction": "auto",
+      "overscrollBehaviorX": "auto"
+    },
+    "groups": {
+      "rect": [
+        16,
+        161,
+        366,
+        480
+      ],
+      "width": 350,
+      "scrollWidth": 345,
+      "clientWidth": 345,
+      "scrollLeft": 0,
+      "scrollTop": 163,
+      "overflowX": "hidden",
+      "overflowY": "auto",
+      "touchAction": "pan-y",
+      "overscrollBehaviorX": "none"
+    }
+  },
+  "horizontalAfter": {
+    "viewport": {
+      "width": 390,
+      "height": 844,
+      "vvWidth": 390,
+      "vvOffsetLeft": 0,
+      "scrollX": 0,
+      "scrollY": 0
+    },
+    "surface": {
+      "rect": [
+        12,
+        124,
+        370,
+        484
+      ],
+      "width": 358,
+      "scrollWidth": 358,
+      "clientWidth": 358,
+      "scrollLeft": 0,
+      "scrollTop": 0,
+      "overflowX": "hidden",
+      "overflowY": "hidden",
+      "touchAction": "auto",
+      "overscrollBehaviorX": "auto"
+    },
+    "groups": {
+      "rect": [
+        16,
+        161,
+        366,
+        480
+      ],
+      "width": 350,
+      "scrollWidth": 345,
+      "clientWidth": 345,
+      "scrollLeft": 0,
+      "scrollTop": 0,
+      "overflowX": "hidden",
+      "overflowY": "auto",
+      "touchAction": "pan-y",
+      "overscrollBehaviorX": "none"
+    }
+  },
+  "verticalAfter": {
+    "viewport": {
+      "width": 390,
+      "height": 844,
+      "vvWidth": 390,
+      "vvOffsetLeft": 0,
+      "scrollX": 0,
+      "scrollY": 0
+    },
+    "surface": {
+      "rect": [
+        12,
+        124,
+        370,
+        484
+      ],
+      "width": 358,
+      "scrollWidth": 358,
+      "clientWidth": 358,
+      "scrollLeft": 0,
+      "scrollTop": 0,
+      "overflowX": "hidden",
+      "overflowY": "hidden",
+      "touchAction": "auto",
+      "overscrollBehaviorX": "auto"
+    },
+    "groups": {
+      "rect": [
+        16,
+        161,
+        366,
+        480
+      ],
+      "width": 350,
+      "scrollWidth": 345,
+      "clientWidth": 345,
+      "scrollLeft": 0,
+      "scrollTop": 177,
+      "overflowX": "hidden",
+      "overflowY": "auto",
+      "touchAction": "pan-y",
+      "overscrollBehaviorX": "none"
+    }
+  }
+}

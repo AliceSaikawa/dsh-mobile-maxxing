@@ -162,6 +162,38 @@ function makeConversation(document, { disabled = false } = {}) {
 	return { document, scroller, column, older, button, row };
 }
 
+/**
+ * Upstream's current layout: the transcript scrolls in a container several
+ * elements above the flow column (the real GUI scrolls
+ * [data-conversation-scroll], while the chat's own wrapper is overflow:visible).
+ */
+function makeNestedConversation(document) {
+	const scroller = new FakeNode(document, "div");
+	scroller.setAttribute("data-conversation-scroll", "");
+	const viewArea = new FakeNode(document, "div");
+	const frame = new FakeNode(document, "div");
+	const root = new FakeNode(document, "div");
+	const scroll = new FakeNode(document, "div");
+	const column = new FakeNode(document, "div");
+	column.setAttribute("data-chat-flow", "");
+	const older = new FakeNode(document, "div");
+	const button = new FakeNode(document, "button");
+	button.onClick = () => {
+		button.disabled = true;
+	};
+	const row = new FakeNode(document, "div");
+	row.setAttribute("data-chat-flow-kind", "user");
+	older.append(button);
+	column.append(older, row);
+	scroll.append(column);
+	root.append(scroll);
+	frame.append(root);
+	viewArea.append(frame);
+	scroller.append(viewArea);
+	document.body.append(scroller);
+	return { scroller, column, older, button, row };
+}
+
 /** A real touch/wheel/key gesture inside the transcript, then a scroll event. */
 function userScroll(run, conversation, scrollTop = 0) {
 	conversation.scroller.scrollTop = scrollTop;
@@ -346,6 +378,39 @@ test("never fights a reader who moves during the fetch", () => {
 	assert.equal(top, 500, "the loader yanked a reader who had moved");
 	assert.equal(writes, 0, "the loader wrote scrollTop while the reader moved");
 	assert.equal(conversation.button.clicks, 1);
+});
+
+test("the flow column may sit below the scrolling container (real upstream layout)", () => {
+	const { document, run, loader } = setup();
+	const conversation = makeNestedConversation(document);
+	loader.install();
+
+	// No gesture: upstream's own follow/anchor pass never loads history.
+	conversation.scroller.scrollTop = 0;
+	document.dispatch("scroll", conversation.scroller);
+	run.runTimers();
+	assert.equal(conversation.button.clicks, 0, "a programmatic scroll loaded history");
+
+	// The reader's gesture is inside the column; the scroll fires on the outer
+	// container. That is how the real GUI reaches the top of a transcript.
+	document.dispatch("pointerdown", conversation.row);
+	document.dispatch("scroll", conversation.scroller);
+	run.runTimers();
+	assert.equal(conversation.button.clicks, 1, "the nested transcript did not load its older page");
+});
+
+test("a scroll from an element that does not hold the gesture's column is ignored", () => {
+	const { document, run, loader } = setup();
+	const conversation = makeNestedConversation(document);
+	const other = new FakeNode(document, "div");
+	document.body.append(other);
+	loader.install();
+
+	document.dispatch("pointerdown", conversation.row);
+	other.scrollTop = 0;
+	document.dispatch("scroll", other);
+	run.runTimers();
+	assert.equal(conversation.button.clicks, 0, "a foreign scroller pressed the control");
 });
 
 test("the loader source has no direct viewport writes", () => {

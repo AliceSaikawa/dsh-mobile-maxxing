@@ -4263,19 +4263,18 @@ async function settleNoticeWork() {
 	for (let index = 0; index < 8; index += 1) await new Promise((resolve) => setImmediate(resolve));
 }
 
-test("a turn this browser did not send raises no local banner", async () => {
+test("a root turn finished while another session is open raises a local banner", async () => {
 	const endpoint = "https://web.push.apple.com/device";
 	const { booted, notice, rendered, ackPosts } = localNoticeHarness({ endpoint });
 	const byId = { "root-pc": { title: "Main" } };
 	const running = new Map([["root-pc", { running: true }]]);
 	const idle = new Map([["root-pc", { running: false }]]);
 
-	// A PC turn: the host (onlyMobileTurns) never notifies it, so a banner here
-	// would invent a notification the user asked not to get.
+	// In-app delivery is independent of which browser started the turn.
 	notice.emitLocalNotices(running, idle, byId);
 	await settleNoticeWork();
-	assert.equal(rendered.length, 0, "a turn from another device raised a local banner");
-	assert.deepEqual(ackPosts, [], "a turn from another device acknowledged a push it never got");
+	assert.equal(rendered.length, 1, "a root turn from another device stayed silent");
+	assert.equal(ackPosts.length, 1, "the visible banner did not acknowledge its event");
 	booted.disposeAll();
 });
 
@@ -4311,7 +4310,7 @@ test("a question from another device still raises a local banner", async () => {
 	booted.disposeAll();
 });
 
-test("a host that notifies every turn keeps the local banner for an unmarked session", async () => {
+test("an unmarked root session keeps its local banner", async () => {
 	const endpoint = "https://web.push.apple.com/device";
 	const { booted, notice, rendered, markSend } = localNoticeHarness({ endpoint, onlyMobileTurns: false });
 	const byId = { "root-pc": { title: "Main" } };

@@ -7618,47 +7618,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     let currentSessionId = null;
 
     /**
-     * Sessions this browser told the host its turn belongs to.
-     *
-     * A local turn-end banner is only right for these: the host's
-     * `onlyMobileTurns` default notifies phone turns alone, so a turn a PC
-     * started in a session this phone merely watches must stay silent. The
-     * memory mirrors the host's own mobile-send window (10 minutes), so a
-     * session reused from a desktop later is not notified either. A reload
-     * forgets it while the host still remembers the send, so that turn falls
-     * back to the host's OS notification instead of the in-app banner: the
-     * local side can lose the banner, never the notice.
-     */
-    const MARKED_SEND_WINDOW_MS = 10 * 60 * 1000;
-    /** A hard cap: a long-lived page cannot grow this without bound. */
-    const MARKED_SEND_MAX = 128;
-    /** sessionId -> the moment its send stops counting, in ms. */
-    const markedSendSessions = new Map();
-
-    /** Remember one send this browser reported to the host. */
-    function rememberMarkedSend(sessionId) {
-      const now = Date.now();
-      markedSendSessions.delete(sessionId);
-      markedSendSessions.set(sessionId, now + MARKED_SEND_WINDOW_MS);
-      while (markedSendSessions.size > MARKED_SEND_MAX) {
-        const oldest = markedSendSessions.keys().next().value;
-        if (oldest === undefined) break;
-        markedSendSessions.delete(oldest);
-      }
-    }
-
-    /** Whether this browser sent in that session recently enough to be routed to. */
-    function markedSendRecent(sessionId) {
-      const until = markedSendSessions.get(sessionId);
-      if (until === undefined) return false;
-      if (until <= Date.now()) {
-        markedSendSessions.delete(sessionId);
-        return false;
-      }
-      return true;
-    }
-
-    /**
      * Tell the push host that the next turn belongs to this device.
      *
      * A phone send is marked automatically. On a desktop that is the #15
@@ -7669,9 +7628,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     function markMobileSession(sessionId = currentSessionId) {
       if (typeof sessionId !== "string" || sessionId === "") return;
       if (!phone() && !notifyDeviceTurns()) return;
-      // Recorded here, with the request: this is the same condition the host
-      // applies, so the local banner follows exactly what the host will send.
-      rememberMarkedSend(sessionId);
       void fetch(`${PUSH_API}/mobile-send`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -11878,16 +11834,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     /**
-     * The host's `onlyMobileTurns`, as its `/config` answer reported it.
-     *
-     * `false` means the host notifies every turn, so a local turn-end banner
-     * is right even for a session this browser never marked. Unknown — before
-     * the answer, or after a failed one — keeps the host default (phone turns
-     * only) and the marked-send gate applies.
-     */
-    let hostNotifiesEveryTurn = false;
-
-    /**
      * Tell the push host which deployed origin this page is.
      *
      * The host delivers each event to one origin only: the app that started
@@ -11902,12 +11848,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     function notePushOrigin() {
       if (pushOriginNoted) return;
       pushOriginNoted = true;
-      void fetch(`${PUSH_API}/config`, { cache: "no-store" }).then(async (response) => {
-        const body = await response.json();
-        if (body?.copy?.onlyMobileTurns === false) hostNotifiesEveryTurn = true;
-      }).catch(() => {
-        // No answer keeps the host default, so the gate stays conservative.
-      });
+      void fetch(`${PUSH_API}/config`, { cache: "no-store" }).catch(() => {});
     }
 
     async function refreshNotificationStatus() {
@@ -12409,10 +12350,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     function emitLocalNotices(previousStatuses, statuses, byId) {
       try {
         for (const notice of localNotices(previousStatuses, statuses, byId, t)) {
-          // A turn-end is notified only when the host will route it here: this
-          // browser's own send, or a host that turned `onlyMobileTurns` off.
-          // Questions always need the user, wherever the turn came from.
-          if (notice.kind === "turn-end" && !hostNotifiesEveryTurn && !markedSendRecent(notice.sessionId)) continue;
           notifyUser({ ...notice, parentVerified: true, onShown: () => acknowledgeLocalNotice(notice) });
         }
       } catch (error) {
@@ -15329,9 +15266,6 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             // the cleanup below.
             live = false;
             scheduled = false;
-            // A teardown forgets which sends this page reported; the next mount
-            // has to learn them from its own sends again.
-            markedSendSessions.clear();
             // One teardown path: every owned attribute/node/listener/style,
             // the original viewport and the upstream palette. It runs even if
             // the window is still narrow, so a live reload starts clean.

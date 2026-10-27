@@ -643,8 +643,6 @@ export const PROBES = {
 	fullscreenExit: ["Exit fullscreen", "全画面表示を終了"],
 	/** The dock's pane-split control, which a phone hides at every width. */
 	split: ["Split", "分割"],
-	/** The Conversation view tab that opens the Trajectory view (#75). */
-	trajectoryTab: ["Trajectory", "軌跡", "轨迹", "トラジェクトリ"],
 	/** The composer's model trigger. The label carries the current model and
 	 *  effort, so only its opening words are stable ("モデルを選択（現在 …）"). */
 	modelTrigger: ["Select model", "选择模型", "モデルを選択"],

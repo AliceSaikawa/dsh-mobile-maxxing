@@ -823,7 +823,7 @@ test("#80 the default hide list matches the committed ja labels", () => {
 });
 
 /* ------------------------------------------------------------------ */
-/* #75: the Trajectory Conversation view tab on a phone                */
+/* #75: the Trajectory Conversation view stays reachable on a phone    */
 /* ------------------------------------------------------------------ */
 
 /** The shipped Conversation tab strip: a marker div with plain tab buttons. */
@@ -873,100 +873,37 @@ function bootConversationTabs({ mode = "mobile", fixture = conversationTabs(), s
 	return { ...fixture, booted, frames };
 }
 
-test("#75 hides the Trajectory conversation tab on a phone and keeps every other tab", () => {
-	const { tabs, booted } = bootConversationTabs();
-	const [chat, trajectory, dashboard] = tabs;
-	assert.equal(trajectory.hasAttribute("data-rdsh-trajectory-tab-hidden"), true, "Trajectory was not hidden");
-	assert.equal(chat.hasAttribute("data-rdsh-trajectory-tab-hidden"), false, "Chat was hidden");
-	assert.equal(dashboard.hasAttribute("data-rdsh-trajectory-tab-hidden"), false, "Dashboard was hidden");
-	assert.equal(chat.clicks + dashboard.clicks, 0, "a non-active Trajectory pass changed the selection");
+// The phone used to hide the Trajectory tab by CSS, but upstream picks the
+// header's "…" fold from its own View list: a tab hidden that way still counts
+// as visible, so it never landed in the menu either and the View became
+// unreachable (#75). Upstream already folds what does not fit by width, so the
+// strip is left alone: the tab shows where the row has room and folds into "…"
+// where it does not. These tests fail if a hide comes back.
+test("#75 leaves every Conversation view tab on a phone", () => {
+	const { tabs, booted } = bootConversationTabs({ fixture: conversationTabs(["Chat", "Trajectory", "Dashboard"], "Trajectory") });
+	for (const tab of tabs) {
+		const hooks = [...tab.attributes.keys()].filter((name) => name.startsWith("data-rdsh-"));
+		assert.deepEqual(hooks, [], `the phone hooked the ${tab.textContent} tab`);
+		assert.equal(tab.clicks, 0, "the phone changed the selection");
+	}
+	assert.equal(tabs[1].getAttribute("aria-selected"), "true", "the active Trajectory view was lost");
 	booted.disposeAll();
 });
 
-test("#75 the hide rule is in the phone sheet and not the desktop one", () => {
-	const phone = CLIENT.match(/const CSS_PHONE = `([\s\S]*?)`;/)[1];
-	const device = CLIENT.match(/const CSS_DEVICE = `([\s\S]*?)`;/)[1];
-	assert.match(
-		phone,
-		/html\[data-rdsh-hide-settings\] \[data-conversation-tabs\] \[data-rdsh-trajectory-tab-hidden\] \{ display: none !important; \}/,
-		"the hidden Trajectory tab has no phone rule",
-	);
-	assert.doesNotMatch(device, /trajectory-tab-hidden/, "the desktop sheet hides a phone tab");
-});
-
-test("#75 falls back to Chat before hiding an active Trajectory tab, and only once", () => {
-	const fixture = conversationTabs(["Chat", "Trajectory", "Dashboard"], "Trajectory");
-	const [chat, trajectory] = fixture.tabs;
-	let hiddenAtClick = null;
-	const click = chat.click;
-	chat.click = () => {
-		hiddenAtClick = trajectory.hasAttribute("data-rdsh-trajectory-tab-hidden");
-		click();
-	};
-	const { booted } = bootConversationTabs({ fixture });
-	assert.equal(chat.clicks, 1, "Chat was not selected");
-	assert.equal(chat.focused, true, "focus did not follow the fallback");
-	assert.equal(hiddenAtClick, false, "Trajectory was hidden before the fallback");
-	assert.equal(chat.getAttribute("aria-selected"), "true", "Chat is not selected");
-	assert.equal(trajectory.hasAttribute("data-rdsh-trajectory-tab-hidden"), true, "Trajectory is visible");
-	booted.sandbox.__RDSH_MOBILE_UX__.decorateNow();
-	assert.equal(chat.clicks, 1, "a second pass stole the selection again");
-	booted.disposeAll();
-});
-
-test("#75 leaves another active view selected while hiding Trajectory", () => {
-	const fixture = conversationTabs(["Chat", "Trajectory", "Dashboard"], "Dashboard");
-	const [chat, trajectory, dashboard] = fixture.tabs;
-	const { booted } = bootConversationTabs({ fixture });
-	assert.equal(trajectory.hasAttribute("data-rdsh-trajectory-tab-hidden"), true, "Trajectory was not hidden");
-	assert.equal(chat.clicks, 0, "Chat was selected over the active Dashboard");
-	assert.equal(dashboard.clicks, 0, "the active Dashboard tab was clicked");
-	assert.equal(dashboard.getAttribute("aria-selected"), "true", "the active Dashboard view was lost");
-	booted.disposeAll();
-});
-
-test("#75 is a no-op on a desktop", () => {
-	const fixture = conversationTabs(["Chat", "Trajectory"], "Trajectory");
-	const { tabs, booted } = bootConversationTabs({ mode: "desktop", fixture });
-	assert.equal(booted.sandbox.__RDSH_MOBILE_UX__, undefined, "the mobile half booted on a desktop");
-	assert.equal(tabs[1].hasAttribute("data-rdsh-trajectory-tab-hidden"), false, "a desktop hid Trajectory");
-	assert.equal(tabs[0].clicks, 0, "a desktop changed the selection");
-	assert.equal(tabs[1].getAttribute("aria-selected"), "true", "a desktop lost its active view");
-	booted.disposeAll();
-});
-
-test("#75 removes the tab hook on dispose", () => {
-	const fixture = conversationTabs();
-	const { tabs, booted } = bootConversationTabs({ fixture });
-	assert.equal(tabs[1].hasAttribute("data-rdsh-trajectory-tab-hidden"), true, "the phone hook is missing before dispose");
-	booted.disposeAll();
-	assert.equal(tabs[1].hasAttribute("data-rdsh-trajectory-tab-hidden"), false, "dispose left the tab hidden");
-});
-
-for (const label of ["Trajectory", "軌跡", "轨迹", "トラジェクトリ"]) {
-	test(`#75 recognizes the ${label} Trajectory label`, () => {
-		const fixture = conversationTabs(["Chat", label, "Dashboard"], "Chat");
-		const { tabs, booted } = bootConversationTabs({ fixture });
-		assert.equal(tabs[1].hasAttribute("data-rdsh-trajectory-tab-hidden"), true, `${label} was not hidden`);
-		assert.equal(tabs[0].hasAttribute("data-rdsh-trajectory-tab-hidden"), false, "Chat was hidden");
-		assert.equal(tabs[2].hasAttribute("data-rdsh-trajectory-tab-hidden"), false, "Dashboard was hidden");
-		booted.disposeAll();
-	});
-}
-
-test("#75 reads the localized label through the stable trajectory slot id", () => {
-	const fixture = conversationTabs(["Chat", "Parcours"], "Chat");
-	const entries = [
-		{ options: { id: "chat", order: 0, label: () => "Chat" } },
-		{ options: { id: "trajectory", order: 10, label: () => "Parcours" } },
+test("#75 no stylesheet rule hides a Conversation view tab", () => {
+	const sheets = [
+		CLIENT.match(/const CSS_PHONE = `([\s\S]*?)`;/)[1],
+		CLIENT.match(/const CSS_DEVICE = `([\s\S]*?)`;/)[1],
+		CLIENT.match(/const CSS = `([\s\S]*?)`;/)[1],
 	];
-	const { tabs, booted } = bootConversationTabs({
-		fixture,
-		slotsEntries: (name) => (name === "conversation.view" ? entries : undefined),
-	});
-	assert.equal(tabs[1].hasAttribute("data-rdsh-trajectory-tab-hidden"), true, "the slot label did not identify Trajectory");
-	assert.equal(tabs[0].hasAttribute("data-rdsh-trajectory-tab-hidden"), false, "Chat was hidden");
-	booted.disposeAll();
+	for (const sheet of sheets) {
+		assert.doesNotMatch(
+			sheet,
+			/\[data-conversation-tabs\][^{}]*\{[^}]*display:\s*none/,
+			"a stylesheet hides a Conversation view tab",
+		);
+	}
+	assert.doesNotMatch(CLIENT, /trajectory-tab-hidden/, "the hidden-tab hook came back");
 });
 
 test("the effect disposer tears down without a ReferenceError or a stale listener", () => {

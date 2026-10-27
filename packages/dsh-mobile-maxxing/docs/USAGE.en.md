@@ -207,8 +207,9 @@ What changes:
   remains: after a real scroll settles at the top, the existing load-earlier control is
   pressed once. A new send that scrolls to the bottom, or any programmatic scroll, does not
   trigger it
-- On a phone, the Trajectory conversation tab is hidden while the standard mobile control
-  hiding is active; if it was the selected view, another tab is selected first
+- On a phone the Trajectory conversation tab stays reachable: upstream folds tabs that do not
+  fit into the header "…" menu, so the view is a tab where the row has room and the first menu
+  row where it does not
 - The workspace file search has a clear button; clearing the field also resets the filter,
   the highlight and the "no matches" state
 - The model picker menu is kept inside the left and right safe area of the visible viewport

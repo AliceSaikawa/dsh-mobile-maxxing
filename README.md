@@ -35,6 +35,16 @@ dsh plugin --profile web add ./dist/dsh-locale-ja-0.1.0.tgz
 不完全な間は `pack-all` が `REFUSED` と表示し、locale の tarball を作りません。
 詳しくは [`packages/dsh-locale-ja/README.md`](packages/dsh-locale-ja/README.md) を参照してください。
 
+### チャットの表を変更する場合（任意）
+
+モバイル本体・表・日本語化を独立した3コンポーネントのまま、1つのインストール用URLから導入できます。PC には表スタイルを適用しません。詳しくは [`packages/dsh-md-rendering/README.md`](packages/dsh-md-rendering/README.md) を参照してください。
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/kuraneko1/dsh-mobile-maxxing/main/scripts/install-mobile-bundle.mjs | node --input-type=module
+```
+
+各コンポーネントは、プラグイン画面で個別に有効・無効を切り替えられます。
+
 ## できること
 
 | 機能 | 内容 |
@@ -124,6 +134,14 @@ dsh plugin --profile web add ./dist/dsh-locale-ja-0.1.0.tgz
 
 While it is incomplete, `pack-all` prints `REFUSED` and produces no locale tarball. See
 [`packages/dsh-locale-ja/README.md`](packages/dsh-locale-ja/README.md) for details.
+
+### Optional chat table styling
+
+One installer URL installs three independent components: mobile UX, Markdown tables, and the Japanese locale. Desktop table styling is a hard no-op, and each component can be toggled separately.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/kuraneko1/dsh-mobile-maxxing/main/scripts/install-mobile-bundle.mjs | node --input-type=module
+```
 
 ## What it does
 

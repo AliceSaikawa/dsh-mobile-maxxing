@@ -1399,10 +1399,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     // disables it while a page is in flight, and its own loadEarlier() retains
     // the paging anchor. This helper only presses that existing control after a
     // real reader scroll settles at the top; it never renders, fetches, writes
-    // scrollTop, or calls scrollTo/scrollBy. The scroller is recognised
-    // structurally as the element whose direct child carries upstream's
-    // data-chat-flow tag, and the older wrapper is the first non-message direct
-    // child with a direct <button>. No class hash or label text is involved.
+    // scrollTop, or calls scrollTo/scrollBy. The transcript is recognised by
+    // upstream's data-chat-flow column and the older wrapper is the first
+    // non-message direct child of that column with a direct <button>. The
+    // scroller is whichever element emitted the scroll, so the column may sit
+    // several wrappers below it (upstream's [data-conversation-scroll]).
+    // No class hash or label text is involved.
     // ---------------------------------------------------------------------
     function createOlderMessageLoader({ doc, win, isPhone }) {
       const SETTLE_MS = 160;
@@ -1415,37 +1417,39 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       let installed = false;
       let armed = true;
       let loading = false;
-      let intentScroller = null;
+      let intentColumn = null;
       let intentAt = 0;
       let pendingScroller = null;
+      let activeColumn = null;
       let activeScroller = null;
       let settleTimer = 0;
       let observer = null;
 
-      function columnOf(scroller) {
-        if (scroller === null || scroller === undefined || scroller.nodeType !== 1) return null;
-        for (const child of scroller.children) {
-          if (child.nodeType === 1 && child.hasAttribute("data-chat-flow")) return child;
+      /** The transcript column at or above a node; upstream tags it data-chat-flow. */
+      function columnOf(node) {
+        let element = node !== null && node !== undefined && node.nodeType === 1 ? node : null;
+        while (element !== null) {
+          if (element.hasAttribute("data-chat-flow")) return element;
+          element = element.parentElement;
         }
         return null;
       }
 
-      /** Walk up from an event target to the transcript scroller, if any. */
-      function scrollerOf(node) {
-        let element = node !== null && node !== undefined && node.nodeType === 1 ? node : null;
+      /** Is this the scrolling element that holds the gesture's column? */
+      function holds(scroller, column) {
+        let element = column;
         while (element !== null) {
-          if (columnOf(element) !== null) return element;
+          if (element === scroller) return true;
           element = element.parentElement;
         }
-        return null;
+        return false;
       }
 
       /**
        * Upstream's older wrapper is the first direct non-message child of the
        * flow column with a direct button; message rows carry data-chat-flow-kind.
        */
-      function controlFor(scroller) {
-        const column = columnOf(scroller);
+      function controlFor(column) {
         if (column === null) return null;
         for (const wrapper of column.children) {
           if (wrapper.nodeType !== 1 || wrapper.hasAttribute("data-chat-flow-kind")) continue;
@@ -1473,19 +1477,21 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       function resetState() {
         armed = true;
         loading = false;
-        intentScroller = null;
+        intentColumn = null;
         intentAt = 0;
         pendingScroller = null;
+        activeColumn = null;
         activeScroller = null;
         clearSettle();
         disconnectObserver();
       }
 
-      /** A different session replaced the scroller; a new gesture is still required. */
-      function adopt(scroller) {
-        if (activeScroller === scroller) return;
+      /** A different session replaced the transcript; a new gesture is still required. */
+      function adopt(column, scroller) {
+        if (activeColumn === column && activeScroller === scroller) return;
         clearSettle();
         disconnectObserver();
+        activeColumn = column;
         activeScroller = scroller;
         armed = true;
         loading = false;
@@ -1504,11 +1510,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
       function onMutations() {
         if (!installed || !loading) return;
-        if (activeScroller === null) {
+        if (activeColumn === null) {
           finish();
           return;
         }
-        const control = controlFor(activeScroller);
+        const control = controlFor(activeColumn);
         if (control === null || control.disabled !== true) finish();
       }
 
@@ -1530,26 +1536,27 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       /** Only input inside the transcript counts as a real reader scroll. */
       function noteIntent(event) {
         if (!installed || !isPhone()) return;
-        const scroller = scrollerOf(event.target);
-        if (scroller === null) return;
-        intentScroller = scroller;
+        const column = columnOf(event.target);
+        if (column === null) return;
+        intentColumn = column;
         intentAt = Date.now();
       }
 
       function onScroll(event) {
         if (!installed || !isPhone()) return;
         const scroller = event.target;
-        if (columnOf(scroller) === null) return;
-        // Programmatic anchor/follow scrolling carries no intent and is ignored.
-        if (intentScroller !== scroller) return;
+        const column = intentColumn;
+        // Programmatic anchor/follow scrolling carries no intent and is ignored;
+        // the gesture's column also proves the scroll belongs to this transcript.
+        if (column === null || !holds(scroller, column)) return;
         if (Date.now() - intentAt > INTENT_MS) {
-          intentScroller = null;
+          intentColumn = null;
           return;
         }
         // This scroll is part of a live gesture: keep the gesture armed while
         // momentum continues.
         intentAt = Date.now();
-        if (activeScroller !== scroller) adopt(scroller);
+        if (activeColumn !== column || activeScroller !== scroller) adopt(column, scroller);
         if (!armed || loading) return;
         pendingScroller = scroller;
         clearSettle();
@@ -1561,18 +1568,16 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         if (!installed || !isPhone()) return;
         const scroller = pendingScroller;
         pendingScroller = null;
-        if (scroller === null || scroller !== activeScroller || intentScroller !== scroller) return;
+        if (scroller === null || scroller !== activeScroller || intentColumn !== activeColumn) return;
         // One load per reader gesture; a new scroll is needed to re-arm.
-        intentScroller = null;
+        intentColumn = null;
         if (!armed || loading) return;
         if (!(scroller.scrollTop <= TOP_PX)) return;
-        const column = columnOf(scroller);
-        if (column === null) return;
-        const control = controlFor(scroller);
+        const control = controlFor(activeColumn);
         if (control === null || control.disabled === true) return;
         armed = false;
         loading = true;
-        observe(column);
+        observe(activeColumn);
         try {
           control.click();
         } catch {
@@ -1603,7 +1608,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         resetState();
       }
 
-      return { install, dispose, scrollerOf, controlFor, state: () => ({ installed, armed, loading }) };
+      return { install, dispose, columnOf, controlFor, state: () => ({ installed, armed, loading }) };
     }
 
     // ---------------------------------------------------------------------

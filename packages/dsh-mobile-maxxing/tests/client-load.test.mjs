@@ -1379,6 +1379,7 @@ test("a rightward swipe closes an open right panel from the left edge too", () =
 	const documentHandlers = [];
 	const collapse = element();
 	const panel = element();
+	panel.setAttribute("data-sidebar-right-open", "");
 	let closes = 0;
 	collapse.getBoundingClientRect = () => ({ width: 24, height: 24, top: 0, left: 0, right: 24, bottom: 24 });
 	collapse.closest = (selector) => (selector === "[data-sidebar-right-panel]" ? panel : null);

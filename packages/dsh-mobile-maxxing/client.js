@@ -9558,7 +9558,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         if (dx < 64) return;
         edgeSwipe = null;
         if (event.cancelable) event.preventDefault();
-        visibleCollapseButton()?.click();
+        // The toggle also opens a closed panel; a close during the gesture must not reopen it.
+        const collapse = visibleCollapseButton();
+        if (collapse?.closest(RIGHT_PANEL_ROOT)?.hasAttribute("data-sidebar-right-open")) collapse.click();
         return;
       }
       if (edgeSwipe.fromRight) {
@@ -10305,7 +10307,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         return;
       }
       const rect = mount.getBoundingClientRect();
-      const visibleBottom = viewport.offsetTop + viewport.height;
+      let visibleBottom = viewport.offsetTop + viewport.height;
+      // #59: in a stacked split, the upper terminal must not cover the lower pane.
+      const pane = mount.closest("[data-dockkit-pane]");
+      if (window.innerWidth < window.innerHeight && pane?.closest("[data-dockkit-split]")) {
+        visibleBottom = Math.min(visibleBottom, pane.getBoundingClientRect().bottom);
+      }
       const height = Math.floor(visibleBottom - rect.top);
       if (!(height >= 24)) {
         clearTerminalFit();
@@ -13425,6 +13432,18 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   }
   [data-sidebar-right-open] [data-dockkit-host] {
     transition: transform var(--rdsh-slide-ms) var(--rdsh-slide-ease) !important;
+  }
+
+  /* #59: a two-column dock created in landscape stays two columns after
+     rotation. Stack its two hosts in portrait without changing the saved layout. */
+  @media (orientation: portrait) and (max-width: 767px) {
+    [data-sidebar-right-panel] [data-dockkit-split]:has(> [data-dockkit-host][data-dockkit-column="1"]) {
+      grid-template-columns: minmax(0, 1fr) !important;
+      grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) !important;
+    }
+    [data-sidebar-right-panel] [data-dockkit-split] > [data-dockkit-host][data-dockkit-column="0"] { grid-area: 1 / 1 !important; }
+    [data-sidebar-right-panel] [data-dockkit-split] > [data-dockkit-host][data-dockkit-column="1"] { grid-area: 2 / 1 !important; }
+    [data-sidebar-right-panel] [data-dockkit-split] > [data-dockkit-divider] { display: none !important; }
   }
 
   /* The drawer floats above the chat; the grid never gives it a column. */

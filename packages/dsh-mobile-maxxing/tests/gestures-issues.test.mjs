@@ -845,6 +845,7 @@ test("a plain tap still switches through the one-shot click replay", () => {
 
 function panelFixture(doc, width = 390) {
 	const root = new FakeElement("div");
+	root.setAttribute("data-sidebar-right-open", "");
 	const panel = new FakeElement("div");
 	const collapse = new FakeElement("button");
 	panel._closest = (selector) => (selector === "[data-sidebar-right-panel]" ? root : null);
@@ -923,6 +924,20 @@ function dockFixture(doc, { viewport = 844, dock = 380 } = {}) {
 	doc.querySelectorAll = (selector) => (selector.includes("data-sidebar-right-toggle") ? [collapse] : []);
 	return { root, panel, collapse };
 }
+
+test("#59 a panel closed during a swipe cannot be reopened by the stale toggle", () => {
+	const booted = bootGestures({ narrow: true });
+	const { root, collapse } = panelFixture(booted.doc);
+	booted.drainFrames();
+	const start = booted.handler("touchstart", "onEdgeSwipeStart");
+	const move = booted.handler("touchmove", "onEdgeSwipeMove");
+	const body = new FakeElement("div");
+	start({ touches: [{ clientX: 20, clientY: 200 }], target: body });
+	root.removeAttribute("data-sidebar-right-open");
+	move({ touches: [{ clientX: 120, clientY: 200 }], cancelable: true, preventDefault() {} });
+	assert.equal(collapse.clicks, 0, "the stale close gesture reopened the panel");
+	booted.disposeAll();
+});
 
 test("#59 a docked panel closes only under a swipe that starts on it", () => {
 	const booted = bootGestures({ narrow: false, mode: "mobile", width: 844 });
@@ -1144,6 +1159,23 @@ test("the terminal mount shrinks to the visual viewport without synthesising inp
 	booted.drainFrames();
 	assert.equal(terminal.screen.style.height, undefined, "closing the keyboard removes the fitted height");
 	assert.equal(terminal.screen.hasAttribute("data-rdsh-terminal-fit"), false, "the fit hook is cleared");
+	booted.disposeAll();
+});
+
+test("#59 a keyboard fit never stretches an upper terminal into the lower split", () => {
+	const booted = bootGestures({ narrow: true });
+	const fixture = panelFixture(booted.doc);
+	const terminal = terminalFixture(booted.doc, fixture);
+	const pane = new FakeElement("section");
+	const split = new FakeElement("div");
+	pane._rect = () => ({ top: 0, bottom: 422, left: 0, right: 390, width: 390, height: 422 });
+	pane._closest = (selector) => selector === "[data-dockkit-split]" ? split : null;
+	terminal.screen._closest = (selector) => selector === "[data-dockkit-pane]" ? pane : null;
+	booted.drainFrames();
+	booted.visualViewport.height = 544;
+	visualViewportHandler(booted)();
+	booted.drainFrames();
+	assert.equal(terminal.screen.style.height, "378px", "the terminal grew through the bottom of its 422px pane");
 	booted.disposeAll();
 });
 

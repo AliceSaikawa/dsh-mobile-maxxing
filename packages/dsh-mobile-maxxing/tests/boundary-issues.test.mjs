@@ -769,6 +769,21 @@ function ipadPanel(booted, { viewportWidth, dockWidth, open = true, label = "Ful
 	return { boundary, panel, fullscreen, clicks: () => clicks };
 }
 
+test("#59 a portrait phone stacks an existing split without changing desktop or landscape", () => {
+	const phone = cssTemplate("CSS_PHONE");
+	const start = phone.indexOf("@media (orientation: portrait) and (max-width: 767px)");
+	assert.notEqual(start, -1);
+	const end = phone.indexOf("/* The drawer floats", start);
+	const rule = phone.slice(start, end);
+	assert.ok(rule.includes('[data-sidebar-right-panel] [data-dockkit-split]:has(> [data-dockkit-host][data-dockkit-column="1"])'));
+	assert.ok(rule.includes("grid-template-columns: minmax(0, 1fr) !important"));
+	assert.ok(rule.includes("grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) !important"));
+	assert.ok(rule.includes('[data-dockkit-column="0"] { grid-area: 1 / 1 !important; }'));
+	assert.ok(rule.includes('[data-dockkit-column="1"] { grid-area: 2 / 1 !important; }'));
+	assert.ok(rule.includes('[data-dockkit-divider] { display: none !important; }'));
+	assert.doesNotMatch(cssTemplate("CSS_DEVICE"), /grid-template-rows: minmax\(0, 1fr\) minmax\(0, 1fr\)/);
+});
+
 test("#72 the tablet tier reserves the measured dock and keeps safe-area padding", () => {
 	const phone = cssTemplate("CSS_PHONE");
 	const tabletStart = phone.indexOf("@media (min-width: 768px)");

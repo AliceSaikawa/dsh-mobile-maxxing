@@ -45,8 +45,13 @@ dsh plugin --profile web add link:/path/to/dsh-mobile-maxxing
 
 **必要なのはこれだけです。** 追加のプラグインも、`web-push` などのライブラリも要りません。
 日本語の共有 UI だけは任意の別パッケージ `dsh-locale-ja` が所有します（この tarball には
-含まれず、自動では有効になりません）。完全な翻訳のローカル tarball から入れる手順は
-[`../dsh-locale-ja/README.md`](../dsh-locale-ja/README.md) にあります。
+含まれず、自動では有効になりません）。
+
+```sh
+dsh plugin --profile web add kuraneko1/dsh-locale-ja
+```
+
+詳細は [dsh-locale-ja リポジトリ](https://github.com/kuraneko1/dsh-locale-ja) を参照。
 
 ## できること
 
@@ -61,7 +66,7 @@ dsh plugin --profile web add link:/path/to/dsh-mobile-maxxing
 | チャット表示（この端末のみ） | 作業の詳細・折りたたみ時機・実行中の Enter・性能表示を、この端末だけ上書き。共有設定は変更しない |
 | モバイル操作の細部 | ターミナルだけダーク、上端で過去ログを自動読み込み、Trajectory タブの到達性、サブエージェント一覧の見出しと「実行中を上に」、ファイル検索のクリア、モデルメニューのセーフエリア、左端スワイプで戻る |
 | CJK 表示の修正（任意） | 別パッケージ `rdsh-markdown-cjk` を入れた場合のみ。このパッケージ本体は PC 側を変えないため、Markdown レンダラを書き換えません |
-| 日本語 UI（任意） | 別パッケージ `dsh-locale-ja` をローカルの tarball から入れた場合のみ。この tarball には含まれず、自動で有効になりません |
+| 日本語 UI（任意） | 別パッケージ `dsh-locale-ja`（`dsh plugin --profile web add kuraneko1/dsh-locale-ja`）を入れた場合のみ。この tarball には含まれず、自動で有効になりません |
 
 ## もっと詳しく
 
@@ -125,7 +130,13 @@ dsh plugin --profile web add link:/path/to/dsh-mobile-maxxing
 
 **That is all.** No companion plugin, no `web-push`, no build step. The shared Japanese UI
 is owned only by the optional separate `dsh-locale-ja` package (not in this tarball, never
-auto-enabled); see [`../dsh-locale-ja/README.md`](../dsh-locale-ja/README.md) for its
+auto-enabled):
+
+```sh
+dsh plugin --profile web add kuraneko1/dsh-locale-ja
+```
+
+See the [dsh-locale-ja repository](https://github.com/kuraneko1/dsh-locale-ja) for details.
 local-tarball install.
 
 ## What it does
@@ -141,7 +152,7 @@ local-tarball install.
 | Chat view (this device) | Work-details verbosity, collapse timing, busy Enter and performance detail overridden for this browser only |
 | Mobile polish | Terminal-only dark, older history at scroll-to-top, Trajectory tab reachability, subagent-list heading with "Running first", file-search clear, model-menu safe area, left-edge swipe back |
 | CJK rendering (optional) | Only with the separate `rdsh-markdown-cjk` package; this package leaves the Markdown renderer stock to avoid changing the PC |
-| Japanese UI (optional) | Only with the separate `dsh-locale-ja` package from its local tarball; it is not in this tarball and is never enabled automatically |
+| Japanese UI (optional) | Only with the separate `dsh-locale-ja` package (`dsh plugin --profile web add kuraneko1/dsh-locale-ja`); it is not in this tarball and is never enabled automatically |
 
 ## More detail
 

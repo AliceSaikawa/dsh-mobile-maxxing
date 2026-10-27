@@ -4521,6 +4521,36 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       }
     }
 
+    /**
+     * #111: a tab long-pressed into a floating panel can spawn entirely off
+     * screen. Clamp every float to the visible viewport on each pass.
+     */
+    function decorateRightPanelFloats() {
+      if (!phone()) return;
+      for (const float of document.querySelectorAll("[data-dockkit-float]")) {
+        if (float.closest("[hidden]") !== null) continue;
+        const rect = float.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) continue;
+        const vw = window.innerWidth;
+        const vh = window.innerHeight;
+        let { left, top } = { left: rect.left, top: rect.top };
+        // The float is absolutely positioned; read its inline offsets.
+        const style = float.style;
+        const inlineLeft = Number.parseFloat(style.left);
+        const inlineTop = Number.parseFloat(style.top);
+        if (Number.isFinite(inlineLeft)) left = inlineLeft;
+        if (Number.isFinite(inlineTop)) top = inlineTop;
+        let nextLeft = left;
+        let nextTop = top;
+        if (left + rect.width > vw) nextLeft = Math.max(0, vw - rect.width);
+        if (left < 0) nextLeft = 0;
+        if (top + rect.height > vh) nextTop = Math.max(0, vh - rect.height);
+        if (top < 0) nextTop = 0;
+        if (nextLeft !== left) style.left = `${nextLeft}px`;
+        if (nextTop !== top) style.top = `${nextTop}px`;
+      }
+    }
+
     /** Remove headings left by a previous client after an in-place update. */
     function removeRightPanelHeading() {
       for (const stale of document.querySelectorAll("[data-rdsh-panel-heading]")) {
@@ -7195,6 +7225,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       decorateLightbox();
       decorateRightPanel();
       decorateRightPanelTabs();
+      decorateRightPanelFloats();
       decorateTerminalKeys();
       decorateWorkspaceFiles();
       decorateCodePreview();

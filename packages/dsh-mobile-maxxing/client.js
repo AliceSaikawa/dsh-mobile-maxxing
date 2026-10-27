@@ -1173,6 +1173,21 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           ? t("pwa.install.accepted")
           : outcome === "dismissed" ? t("pwa.install.dismissed") : t("pwa.install.unavailable"));
       };
+      const updatePlugins = async () => {
+        setBusy(true);
+        setMessage("");
+        try {
+          const res = await fetch("/dsh-mobile-maxxing/update-plugins", { method: "POST" });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && data.ok !== false) setMessage(t("pwa.note.pluginsUpdated"));
+          else setMessage(t("pwa.note.pluginsUpdateFailed", { error: data.error || res.status }));
+        } catch (error) {
+          setMessage(t("pwa.note.pluginsUpdateFailed", { error: String(error && error.message || error) }));
+        } finally {
+          setBusy(false);
+        }
+      };
+
       const check = async () => {
         setBusy(true);
         setMessage("");
@@ -1220,6 +1235,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
             s.installable ? h("button", { type: "button", className: "dsh-mobile-maxxing-primary", onClick: install, disabled: busy }, t("pwa.install.button")) : null,
             s.updateReady ? h("button", { type: "button", className: "dsh-mobile-maxxing-primary", onClick: () => void applyUpdate() }, t("pwa.action.reloadUpdate")) : null,
             h("button", { type: "button", onClick: check, disabled: busy }, busy ? t("pwa.action.checking") : t("pwa.action.check")),
+            h("button", { type: "button", onClick: updatePlugins, disabled: busy }, busy ? t("pwa.action.updatingPlugins") : t("pwa.action.updatePlugins")),
           ),
           message !== "" ? h("p", { className: "dsh-mobile-maxxing-note" }, message) : null,
           s.ios && !s.standalone

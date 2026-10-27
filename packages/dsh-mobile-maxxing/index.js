@@ -36,6 +36,7 @@ import { COPY, PROBES, copyFor, serviceWorkerCopy } from "./lib/copy.js";
 import { copyTable } from "./lib/copy-source.js";
 import { MANIFEST_FILE, MODE_GLOBAL, earlyModeScript } from "./lib/device-mode.js";
 import { readFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
 
 /** Stable Cordis plugin name. */
 export const name = "dsh-mobile-maxxing";
@@ -323,6 +324,27 @@ function assetPath(file) {
 
 
 /**
+ * Run the profile plugin CLI to update the two mobile packages from GitHub.
+ *
+ * @returns {Promise<void>}
+ */
+function runPluginUpdate() {
+	return new Promise((resolve, reject) => {
+		const child = spawn("dsh", ["plugin", "--profile", "web", "add", "kuraneko1/dsh-mobile-maxxing", "kuraneko1/dsh-locale-ja"], {
+			stdio: ["ignore", "pipe", "pipe"],
+			timeout: 120000,
+		});
+		let stderr = "";
+		child.stderr.on("data", (chunk) => { stderr += String(chunk); });
+		child.on("error", reject);
+		child.on("close", (code) => {
+			if (code === 0) resolve();
+			else reject(new Error(stderr.trim() || `exit ${code}`));
+		});
+	});
+}
+
+/**
  * Mount the routes, assets and index decoration.
  * @param {object} ctx - plugin context.
  * @param {object} [config] - profile config for this plugin.
@@ -423,6 +445,26 @@ export function apply(ctx, config) {
 				}),
 			}));
 		}
+
+		// #109: one-tap plugin update from the PWA settings. Runs the profile's
+		// plugin CLI against the live home; a restart makes new bytes visible.
+		disposes.push(webServer.register({
+			kind: "exact",
+			path: "/dsh-mobile-maxxing/update-plugins",
+			handler: async (req, res) => {
+				if (req.method !== "POST") {
+					res.writeHead(405, { allow: "POST" });
+					res.end();
+					return;
+				}
+				try {
+					await runPluginUpdate();
+					respond(res, "POST", 200, { "content-type": "application/json; charset=utf-8" }, JSON.stringify({ ok: true }));
+				} catch (error) {
+					respond(res, "POST", 500, { "content-type": "application/json; charset=utf-8" }, JSON.stringify({ ok: false, error: String(error && error.message || error) }));
+				}
+			},
+		}));
 
 		for (const [route, asset] of ASSETS) {
 			disposes.push(webServer.register({

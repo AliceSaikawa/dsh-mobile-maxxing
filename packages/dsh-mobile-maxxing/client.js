@@ -6308,6 +6308,288 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       syncActivityPoll(runningAny);
     }
 
+    // ---------------------------------------------------------------------
+    // #82: the open activity popover names its kind and sorts on one tap
+    // ---------------------------------------------------------------------
+
+    /** The device-local sort choice; absent keeps upstream's own order. */
+    const ACTIVITY_SORT_KEY = "dsh-mobile-maxxing:activity-sort";
+
+    /** The heading this module put above an open activity popover. */
+    let activityHeadingNode = null;
+    /** The tree being sorted, and the upstream order captured when it started. */
+    let activityPanelTree = null;
+    let activityPanelOrder = null;
+    /** This page's choice, for a browser that refuses to store it. */
+    let activitySortSession = null;
+
+    function readActivitySort() {
+      if (activitySortSession !== null) return activitySortSession;
+      try {
+        return localStorage.getItem(ACTIVITY_SORT_KEY) === "1";
+      } catch (error) {
+        return false;
+      }
+    }
+
+    function writeActivitySort(value) {
+      const next = value === true;
+      // A refused write (private mode, a full quota) must still toggle: the
+      // page keeps the choice, so the button answers until the next reload.
+      activitySortSession = next;
+      try {
+        if (next) localStorage.setItem(ACTIVITY_SORT_KEY, "1");
+        else localStorage.removeItem(ACTIVITY_SORT_KEY);
+      } catch (error) {
+        /* the page-only choice above is the fallback */
+      }
+      scheduleDecorate();
+    }
+
+    /** The open subagent list inside one body child, or null. */
+    function subagentListOf(child) {
+      const tree = child.getAttribute("role") === "tree" ? child : child.querySelector?.('[role="tree"]') ?? null;
+      if (tree === null) return null;
+      const rows = tree.querySelectorAll('[role="treeitem"]');
+      if (rows.length === 0) return null;
+      // Every row of this list carries its activity state on a glyph. A tree of
+      // sessions or settings has no such marker, so it cannot be taken for it.
+      for (const row of rows) if (row.querySelector("[data-state]") === null) return null;
+      return tree;
+    }
+
+    /** The open job list inside one body child, or null. */
+    function shellListOf(child) {
+      // The job panel is the chip's own portal: a menu surface with a list. The
+      // list is taken as it is, because a list whose jobs have all settled (or
+      // whose settled section is collapsed) renders no row with a state glyph,
+      // and the expanded chip has already said which panel is open.
+      if (!child.hasAttribute("data-menu-material")) return null;
+      return child.querySelector("ul");
+    }
+
+    /**
+     * The popover the expanded chip opened, or null.
+     *
+     * The body also holds other trees and menus (a session list, a settings
+     * menu). The kind the chip names decides which shape counts: the subagent
+     * list is a tree of state-carrying rows, the job list is a menu surface of
+     * the same. Both are attributes, never a localised label.
+     */
+    function activityPopover(kind) {
+      for (const child of document.body.children) {
+        if (typeof child.getAttribute !== "function") continue;
+        // The chip's panel is a portal beside the app, never the app frame: the
+        // frame is the one body child that holds the chips. A tree inside it
+        // (search results, a session list) can therefore never be reordered.
+        if (child.querySelector("[data-rdsh-activity-chip]") !== null) continue;
+        if (kind === "subagent") {
+          const tree = subagentListOf(child);
+          if (tree !== null) return { box: tree.parentElement, list: tree };
+          continue;
+        }
+        const list = shellListOf(child);
+        if (list !== null) return { box: child, list };
+      }
+      return null;
+    }
+
+    /** Drop the heading; the sweep covers one an earlier generation left. */
+    function removeActivityHeading() {
+      activityHeadingNode?.remove();
+      activityHeadingNode = null;
+      for (const stale of document.querySelectorAll("[data-rdsh-activity-heading]")) stale.remove();
+    }
+
+    /** Whether a row of the open list is still running, from its glyph. */
+    function activityRowRunning(row) {
+      return row.querySelector('[data-state="ongoing"]') !== null;
+    }
+
+    /**
+     * Show the rows in the order the phone asked for, moving as few nodes as
+     * the change needs.
+     *
+     * The sorted view is a stable partition: running rows first, each group in
+     * upstream's own order. Turning it off replays the order upstream had when
+     * the sort went on. Moving the nodes (rather than a CSS `order`) is what
+     * keeps the keyboard and screen-reader order equal to what the eye sees,
+     * and re-applying it on every pass is what stops a React update from
+     * putting the rows back. A row whose glyph is not the ongoing spinner
+     * counts as not running, so an unknown state leaves upstream's order alone.
+     */
+    function applyActivitySort(tree, sorted) {
+      if (activityPanelTree !== tree) {
+        activityPanelTree = tree;
+        activityPanelOrder = null;
+      }
+      const current = [...tree.children];
+      if (sorted) {
+        if (activityPanelOrder === null) activityPanelOrder = current;
+        else noteActivityAdditions(current);
+        // Partition upstream's own order: a row that changes state moves to the
+        // other group but keeps its place among its group's rows, instead of
+        // keeping whatever slot the sorted view happened to show it in.
+        const saved = activityPanelOrder.filter((row) => current.includes(row));
+        const running = saved.filter(activityRowRunning);
+        const rest = saved.filter((row) => !activityRowRunning(row));
+        orderActivityRows(tree, [...running, ...rest]);
+      } else if (activityPanelOrder !== null) {
+        orderActivityRows(tree, restoreActivityOrder(current));
+        activityPanelOrder = null;
+      }
+      tree.toggleAttribute("data-rdsh-activity-sorted", sorted);
+    }
+
+    /**
+     * Keep the saved upstream order in step with a list that changed while it
+     * was sorted: a row upstream added takes the place its neighbour had, a row
+     * it removed drops out. Without this, turning the sort off would put a row
+     * that arrived meanwhile at the end and leave a gap for a removed one.
+     */
+    function noteActivityAdditions(current) {
+      const saved = activityPanelOrder.filter((row) => current.includes(row));
+      for (let index = 0; index < current.length; index += 1) {
+        const row = current[index];
+        if (saved.includes(row)) continue;
+        // Upstream added this row while the view was sorted. Its next known
+        // neighbour is where upstream put it; with none it is the new last row.
+        // The previous neighbour is wrong: after a sort it is a row that moved
+        // down, so anchoring on it would place the new row above rows upstream
+        // kept earlier.
+        const next = current.slice(index + 1).find((candidate) => saved.includes(candidate)) ?? null;
+        saved.splice(next === null ? saved.length : saved.indexOf(next), 0, row);
+      }
+      activityPanelOrder = saved;
+    }
+
+    /** The order to show with the sort off: the saved one, plus what it lacks. */
+    function restoreActivityOrder(current) {
+      const saved = activityPanelOrder ?? [];
+      return [...saved.filter((row) => current.includes(row)), ...current.filter((row) => !saved.includes(row))];
+    }
+
+    /** Put the rows in `want` order with as few moves as possible. */
+    function orderActivityRows(tree, want) {
+      const active = document.activeElement;
+      for (let index = 0; index < want.length; index += 1) {
+        const at = tree.children[index] ?? null;
+        if (at === want[index]) continue;
+        tree.insertBefore(want[index], at);
+      }
+      // A node moved while it holds the focus can lose it to <body>. Put the
+      // caret back on the row the user was on, without scrolling the list.
+      if (active !== null && active !== undefined && active !== document.body
+        && tree.contains(active) && document.activeElement !== active) {
+        active.focus?.({ preventScroll: true });
+      }
+    }
+
+    /** Forget the open list's sort state; the popover closed. */
+    function clearActivitySort() {
+      activityPanelTree = null;
+      activityPanelOrder = null;
+      clearOwnedAttribute("data-rdsh-activity-sorted");
+    }
+
+    /**
+     * Take down what the open panel owns: teardown, an HMR swap or a dispose
+     * must not leave a heading over a list, nor rows in a sorted order that no
+     * state remembers.
+     */
+    function clearActivityPanel() {
+      if (activityPanelTree !== null && activityPanelOrder !== null) {
+        orderActivityRows(activityPanelTree, restoreActivityOrder([...activityPanelTree.children]));
+      }
+      removeActivityHeading();
+      clearActivitySort();
+      activitySortSession = null;
+    }
+
+    /** The one-tap toggle; its state is `aria-pressed`, its name the action. */
+    function activitySortButton() {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "rdsh-activity-sort";
+      button.setAttribute("data-rdsh-activity-sort", "");
+      button.setAttribute("aria-pressed", "false");
+      button.addEventListener("click", (event) => {
+        event?.preventDefault?.();
+        event?.stopPropagation?.();
+        writeActivitySort(!readActivitySort());
+      });
+      return button;
+    }
+
+    function syncActivitySortButton(button, sorted) {
+      const label = t("activityPanel.sort.running");
+      if (button.textContent !== label) button.textContent = label;
+      const aria = t("activityPanel.sort.running.aria");
+      if (button.getAttribute("aria-label") !== aria) button.setAttribute("aria-label", aria);
+      const pressed = sorted ? "true" : "false";
+      if (button.getAttribute("aria-pressed") !== pressed) button.setAttribute("aria-pressed", pressed);
+    }
+
+    /**
+     * The heading row, built once per popover and kept while it stays open.
+     *
+     * It leads the popover, never the list: a tree role only holds rows, and
+     * the shell list is a <ul>. A node upstream re-rendered away is rebuilt on
+     * the next pass, so the heading cannot be duplicated by a remount either.
+     */
+    function ensureActivityHeading(popover, label, sortable) {
+      let heading = activityHeadingNode;
+      if (heading === null || heading.parentElement !== popover.box) {
+        removeActivityHeading();
+        heading = document.createElement("div");
+        heading.className = "rdsh-activity-heading";
+        heading.setAttribute("data-rdsh-activity-heading", "");
+        heading.setAttribute("role", "heading");
+        heading.setAttribute("aria-level", "2");
+        const title = document.createElement("span");
+        title.className = "rdsh-activity-heading-title";
+        title.setAttribute("data-rdsh-activity-title", "");
+        heading.append(title);
+        popover.box.prepend(heading);
+        activityHeadingNode = heading;
+      }
+      const title = heading.querySelector("[data-rdsh-activity-title]");
+      if (title !== null && title.textContent !== label) title.textContent = label;
+      const button = heading.querySelector("[data-rdsh-activity-sort]");
+      if (sortable && button === null) heading.append(activitySortButton());
+      if (!sortable && button !== null) button.remove();
+      return heading;
+    }
+
+    /**
+     * #82: name the kind of list a header chip opened, above it, and let the
+     * subagent list put its running rows on top with one tap.
+     *
+     * Phone only: the desktop sheet has no heading and no sort, and no stored
+     * choice is read there. The node is rebuilt while the popover is open and
+     * swept when it closes, so nothing is left in a menu the user closed.
+     */
+    function decorateActivityPanel() {
+      const chip = phone() ? document.querySelector('[data-rdsh-activity-chip][aria-expanded="true"]') : null;
+      const kind = chip === null ? null : chip.getAttribute("data-rdsh-activity-chip") === "subagent" ? "subagent" : "terminal";
+      const popover = kind === null ? null : activityPopover(kind);
+      if (popover === null) {
+        removeActivityHeading();
+        clearActivitySort();
+        return;
+      }
+      const heading = ensureActivityHeading(
+        popover,
+        t(kind === "subagent" ? "localDisplay.subagent" : "localDisplay.terminal"),
+        kind === "subagent",
+      );
+      const sorted = kind === "subagent" && readActivitySort();
+      const button = heading.querySelector("[data-rdsh-activity-sort]");
+      if (button !== null) syncActivitySortButton(button, sorted);
+      if (kind === "subagent") applyActivitySort(popover.list, sorted);
+      else clearActivitySort();
+    }
+
     /** Add a Settings row to the sidebar panel list, matching Plugins. */
     function openSettingsViaAccountMenu() {
       const trigger = document.querySelector(ariaLabelSelector("button", "accountMenu", "Account menu"));
@@ -7039,6 +7321,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       decorateWorkspacePicker();
       decorateComposer();
       decorateHeaderActivityChips();
+      decorateActivityPanel();
       decorateSidebarSettingsRow();
       decorateSidebarNavMore();
       decorateSidebarToggle();
@@ -13597,6 +13880,28 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
     [data-rdsh-activity-chip][data-rdsh-activity-running] .rdsh-activity-ring { animation: none; }
   }
 
+  /* #82: the popover a chip opens names its kind above the list, and the
+     subagent list lifts its running rows on one tap. The rows themselves move,
+     so the keyboard and reader order is the order the eye sees. */
+  .rdsh-activity-heading {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 8px; padding: 5px 12px 3px;
+    font-size: 12px; font-weight: 600;
+    color: var(--dsw-alias-label-secondary, #a1a1aa);
+  }
+  .rdsh-activity-sort {
+    /* 36px + the row's 8px putting the tap target on the 44px line. */
+    min-height: 36px; padding: 4px 10px; border: 0; border-radius: 8px;
+    background: transparent; font: inherit; font-size: 12px; font-weight: 500;
+    color: var(--dsw-alias-label-secondary, #a1a1aa);
+    -webkit-tap-highlight-color: transparent; cursor: pointer;
+  }
+  .rdsh-activity-sort[aria-pressed="true"] {
+    color: var(--dsw-alias-label-primary, #f9fafb);
+    background: var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,.1));
+  }
+  .rdsh-activity-sort:active { opacity: .72; }
+
   /* Settings: full screen, stacked navigation, nothing narrowed. */
   /* Close lives on the top row with the Settings title, as a round button. */
   [data-shortcut-modal="settings"] [data-rdsh-settings-close] {
@@ -14655,6 +14960,9 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           applyDeviceTheme,
           readTerminalDark,
           writeTerminalDark,
+          // #82: the device-local "running first" choice the activity panel uses.
+          readActivitySort,
+          writeActivitySort,
           applyTerminalDark,
           // The same entries the device-local display rows use: "System" ("")
           // clears the remembered language, a language id stores it.
@@ -14712,6 +15020,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           try {
             observer.disconnect();
             unwatchActivitySources();
+            clearActivityPanel();
             contextRefreshFor = null;
             document.removeEventListener("pointerdown", onPointerDown, true);
             document.removeEventListener("pointerup", onPointerUp, true);

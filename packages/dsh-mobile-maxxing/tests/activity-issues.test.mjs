@@ -160,6 +160,14 @@ function node(tagName) {
 			element.append(child);
 			return child;
 		},
+		insertBefore(child, before) {
+			const at = children.indexOf(child);
+			if (at !== -1) children.splice(at, 1);
+			const target = before === null || before === undefined ? children.length : children.indexOf(before);
+			children.splice(target === -1 ? children.length : target, 0, child);
+			child.parentElement = element;
+			return child;
+		},
 		removeChild(child) {
 			const index = children.indexOf(child);
 			if (index !== -1) children.splice(index, 1);
@@ -406,6 +414,7 @@ function boot({
 	services = createServices().services,
 	getOverride = null,
 	configureDocument = () => {},
+	storage = null,
 	console: consoleImpl = console,
 } = {}) {
 	let definition;
@@ -432,7 +441,7 @@ function boot({
 		})(),
 		navigator: stub(),
 		location: stub(),
-		localStorage: stub(),
+		localStorage: storage === null ? stub() : memoryStorage(storage),
 		sessionStorage: stub(),
 		matchMedia: (query) => ({
 			get matches() {
@@ -1401,4 +1410,525 @@ test("#41 the desktop window is untouched", () => {
 	const open = chip("2 subagents", { expanded: true });
 	open.setAttribute("data-rdsh-activity-chip", "subagent");
 	assert.equal(open.hasAttribute("data-rdsh-activity-chip"), true, "a desktop stripped the app's chip attribute");
+});
+
+// ---------------------------------------------------------------------------
+// #82 — the open activity popover names its kind and sorts on one tap
+// ---------------------------------------------------------------------------
+
+/** A localStorage that remembers, and records which keys were touched. */
+function memoryStorage(initial = {}) {
+	const map = new Map(Object.entries(initial));
+	const reads = [];
+	const writes = [];
+	return {
+		reads,
+		writes,
+		getItem(key) {
+			reads.push(key);
+			return map.has(key) ? map.get(key) : null;
+		},
+		setItem(key, value) {
+			writes.push(key);
+			map.set(key, String(value));
+		},
+		removeItem(key) {
+			writes.push(key);
+			map.delete(key);
+		},
+		clear: () => map.clear(),
+		key: (index) => [...map.keys()][index] ?? null,
+		get length() {
+			return map.size;
+		},
+	};
+}
+
+/** One row of the subagent catalog, shaped like upstream renders it. */
+function subagentRow(label, state) {
+	const wrapper = node("div");
+	wrapper.className = "ZKlsPq_node";
+	const row = node("div");
+	row.setAttribute("role", "treeitem");
+	row.setAttribute("aria-level", "1");
+	// The real list draws a dot for a finished row and a spinner for a live one;
+	// both carry the state on the glyph, which is what the sort reads.
+	const glyph = node(state === "ongoing" ? "svg" : "span");
+	glyph.setAttribute("data-state", state);
+	const title = node("span");
+	title.textContent = label;
+	row.append(glyph, title);
+	wrapper.append(row);
+	return { wrapper, row, glyph, title };
+}
+
+/** The popover upstream portals to <body> when the subagent chip opens. */
+function subagentPopover(booted, rows = [["質問カード", "done"], ["右パネル", "ongoing"], ["見出し", "ongoing"]]) {
+	const doc = booted.document;
+	const menu = node("div");
+	menu.className = "ZKlsPq_menu";
+	const tree = node("div");
+	tree.setAttribute("role", "tree");
+	const wrappers = rows.map(([label, state]) => {
+		const entry = subagentRow(label, state);
+		tree.append(entry.wrapper);
+		return entry;
+	});
+	menu.append(tree);
+	doc.body.append(menu);
+	return { menu, tree, wrappers };
+}
+
+/**
+ * The job popover: a menu surface with the two section headers upstream draws
+ * (one hidden from assistive tech, the settled one not) and button rows that
+ * carry their own state.
+ */
+function shellPopover(booted) {
+	const doc = booted.document;
+	const surface = node("div");
+	surface.setAttribute("data-menu-material", "");
+	const material = node("div");
+	material.setAttribute("aria-hidden", "true");
+	const list = node("ul");
+	list.setAttribute("aria-label", "background jobs");
+	const runningHeader = node("li");
+	runningHeader.setAttribute("aria-hidden", "true");
+	runningHeader.textContent = "running";
+	// The settled header is a toggle of its own, and carries no state.
+	const settledHeader = node("li");
+	settledHeader.className = "QsffPG_sectionHeader";
+	const settledToggle = node("button");
+	settledToggle.setAttribute("aria-expanded", "true");
+	settledToggle.textContent = "settled 10";
+	settledHeader.append(settledToggle);
+	const jobRow = (state) => {
+		const item = node("li");
+		const button = node("button");
+		button.setAttribute("aria-expanded", "false");
+		const glyph = node("svg");
+		glyph.setAttribute("data-state", state);
+		button.append(glyph);
+		item.append(button);
+		return item;
+	};
+	list.append(runningHeader, jobRow("ongoing"), settledHeader, jobRow("done"));
+	surface.append(material, list);
+	doc.body.append(surface);
+	return { surface, material, list, runningHeader, settledHeader };
+}
+
+/**
+ * The app frame: the header chip, plus an unrelated tree inside the app (the
+ * search results the review caught this code reordering).
+ */
+function appFrame(booted, { label = countLabel("en", "subagent", "count.running.other"), expanded = true } = {}) {
+	const doc = booted.document;
+	const frame = node("div");
+	frame.setAttribute("id", "root");
+	const header = node("header");
+	header.setAttribute("data-window-drag", "");
+	const button = chip(label, { expanded });
+	header.append(button);
+	const search = node("div");
+	search.setAttribute("role", "tree");
+	const result = node("div");
+	result.setAttribute("role", "treeitem");
+	const glyph = node("span");
+	glyph.setAttribute("data-state", "done");
+	result.append(glyph);
+	search.append(result);
+	frame.append(header, search);
+	doc.body.append(frame);
+	doc.headerButtons = [button];
+	return { frame, header, button, search };
+}
+
+/** Run the plugin's own decoration pass with the given chips as header chips. */
+function decorateFrame(booted, chips) {
+	booted.document.headerButtons = chips;
+	booted.api?.decorate?.();
+	booted.runFrames();
+}
+
+function headingOf(booted) {
+	return booted.document.querySelector("[data-rdsh-activity-heading]");
+}
+
+/** The heading's own text span (the row also holds the sort toggle). */
+function headingTitleOf(booted) {
+	return booted.document.querySelector("[data-rdsh-activity-title]");
+}
+
+function sortToggleOf(booted) {
+	return booted.document.querySelector("[data-rdsh-activity-sort]");
+}
+
+/** The row order the list actually has, which is also the focus order. */
+function rowLabels(tree) {
+	return [...tree.children].map((wrapper) => wrapper.querySelector('[role="treeitem"]').children[1].textContent);
+}
+
+test("#82 the open subagent list gets its kind's name above it", () => {
+	const booted = boot();
+	const frame = appFrame(booted);
+	const popover = subagentPopover(booted);
+	decorateFrame(booted, [frame.button]);
+
+	const heading = headingOf(booted);
+	assert.notEqual(heading, null, "the open list got no heading");
+	assert.equal(headingTitleOf(booted).textContent, "Subagent");
+	assert.equal(heading.getAttribute("role"), "heading", "the heading has no semantic role");
+	assert.equal(heading.getAttribute("aria-level"), "2");
+	assert.equal(heading.parentElement, popover.menu, "the heading is not in the popover");
+	assert.equal(popover.menu.children[0], heading, "the heading does not lead the list");
+	assert.equal(popover.tree.contains(heading), false, "the heading sits inside the tree the rows fill");
+
+	// A second pass reuses the node instead of adding one.
+	decorateFrame(booted, [frame.button]);
+	assert.equal(booted.document.querySelectorAll("[data-rdsh-activity-heading]").length, 1, "a second pass duplicated the heading");
+	assert.equal(headingOf(booted), heading, "a second pass rebuilt the heading");
+});
+
+test("#82 the heading follows the display language", () => {
+	const booted = boot({
+		configureDocument(doc) {
+			doc.documentElement.lang = "ja";
+		},
+	});
+	const frame = appFrame(booted, { label: countLabel("ja", "subagent", "count.running.other") });
+	const subagent = subagentPopover(booted);
+	decorateFrame(booted, [frame.button]);
+	assert.equal(headingTitleOf(booted).textContent, "サブエージェント", "an en heading appeared in a ja shell");
+	assert.equal(sortToggleOf(booted).textContent, "実行中を上に");
+	assert.equal(sortToggleOf(booted).getAttribute("aria-label"), "実行中を上に並べ替え");
+
+	// A shell list is named by its own kind, and it has nothing to sort. Opening
+	// its chip closes the subagent list, as upstream does.
+	frame.button.setAttribute("aria-expanded", "false");
+	subagent.menu.remove();
+	const shell = shellPopover(booted);
+	const jobsChip = chip(countLabel("ja", "job", "count.live.other"), { expanded: true });
+	frame.header.append(jobsChip);
+	decorateFrame(booted, [jobsChip]);
+	assert.equal(headingTitleOf(booted).textContent, "ターミナル");
+	assert.equal(headingOf(booted).parentElement, shell.surface, "the shell heading left its own surface");
+	assert.equal(sortToggleOf(booted), null, "the shell list got a sort toggle");
+});
+
+test("#82 one tap puts the running rows first and a second restores upstream order", () => {
+	const booted = boot({ storage: {} });
+	const frame = appFrame(booted);
+	const popover = subagentPopover(booted, [["done-1", "done"], ["run-1", "ongoing"], ["done-2", "done"], ["run-2", "ongoing"]]);
+	decorateFrame(booted, [frame.button]);
+
+	const toggle = sortToggleOf(booted);
+	assert.notEqual(toggle, null, "the heading row has no sort toggle");
+	assert.equal(toggle.getAttribute("aria-pressed"), "false", "the default is not upstream's order");
+	assert.equal(toggle.textContent, "Running first");
+	assert.equal(popover.tree.hasAttribute("data-rdsh-activity-sorted"), false);
+	assert.deepEqual(rowLabels(popover.tree), ["done-1", "run-1", "done-2", "run-2"]);
+
+	toggle.click();
+	booted.runFrames();
+	assert.equal(booted.sandbox.localStorage.getItem("dsh-mobile-maxxing:activity-sort"), "1", "the choice was not stored on this device");
+	assert.equal(popover.tree.hasAttribute("data-rdsh-activity-sorted"), true);
+	assert.equal(toggle.getAttribute("aria-pressed"), "true");
+	// The rows themselves moved, as a stable partition: running first, each
+	// group in upstream's order. The focus and reader order is therefore the
+	// order the phone draws, unlike a CSS-only reorder.
+	assert.deepEqual(rowLabels(popover.tree), ["run-1", "run-2", "done-1", "done-2"]);
+
+	toggle.click();
+	booted.runFrames();
+	assert.equal(booted.sandbox.localStorage.getItem("dsh-mobile-maxxing:activity-sort"), null, "turning the sort off left the stored choice");
+	assert.equal(popover.tree.hasAttribute("data-rdsh-activity-sorted"), false);
+	assert.equal(toggle.getAttribute("aria-pressed"), "false");
+	assert.deepEqual(rowLabels(popover.tree), ["done-1", "run-1", "done-2", "run-2"], "the upstream order was not restored");
+});
+
+test("#82 a row that finishes while sorted falls back into the finished group", () => {
+	const booted = boot({ storage: { "dsh-mobile-maxxing:activity-sort": "1" } });
+	const frame = appFrame(booted);
+	const popover = subagentPopover(booted, [["done-1", "done"], ["run-1", "ongoing"], ["run-2", "ongoing"]]);
+	decorateFrame(booted, [frame.button]);
+	assert.deepEqual(rowLabels(popover.tree), ["run-1", "run-2", "done-1"]);
+
+	// The projection updates the row's glyph; the next pass re-partitions
+	// upstream's own order, so the finished row sits with the finished rows in
+	// the order upstream has them (done-1 before run-1), not in the slot the
+	// sorted view happened to give it.
+	popover.wrappers[1].glyph.setAttribute("data-state", "done");
+	decorateFrame(booted, [frame.button]);
+	assert.deepEqual(rowLabels(popover.tree), ["run-2", "done-1", "run-1"]);
+});
+
+test("#82 a row added while sorted keeps its upstream place when the sort goes", () => {
+	const booted = boot({ storage: { "dsh-mobile-maxxing:activity-sort": "1" } });
+	const frame = appFrame(booted);
+	const popover = subagentPopover(booted, [["done-1", "done"], ["run-1", "ongoing"]]);
+	decorateFrame(booted, [frame.button]);
+	assert.deepEqual(rowLabels(popover.tree), ["run-1", "done-1"]);
+
+	// Upstream appends a new running session while the view is sorted.
+	const added = subagentRow("run-2", "ongoing");
+	popover.tree.append(added.wrapper);
+	decorateFrame(booted, [frame.button]);
+	assert.deepEqual(rowLabels(popover.tree), ["run-1", "run-2", "done-1"]);
+
+	// A row upstream removes drops out of the saved order too.
+	popover.wrappers[1].wrapper.remove();
+	decorateFrame(booted, [frame.button]);
+	assert.deepEqual(rowLabels(popover.tree), ["run-2", "done-1"]);
+
+	// Turning the sort off now gives the order upstream has: the added row
+	// where upstream put it, the removed one gone.
+	sortToggleOf(booted).click();
+	booted.runFrames();
+	assert.deepEqual(rowLabels(popover.tree), ["done-1", "run-2"]);
+});
+
+test("#82 a row added while sorted goes last on restore, not before its neighbour", () => {
+	// The reported case: upstream [done-1, run-1] sorts to [run-1, done-1]; a
+	// running row appended meanwhile must come back last, not between them.
+	const booted = boot({ storage: { "dsh-mobile-maxxing:activity-sort": "1" } });
+	const frame = appFrame(booted);
+	const popover = subagentPopover(booted, [["done-1", "done"], ["run-1", "ongoing"]]);
+	decorateFrame(booted, [frame.button]);
+	assert.deepEqual(rowLabels(popover.tree), ["run-1", "done-1"]);
+
+	const added = subagentRow("run-2", "ongoing");
+	popover.tree.append(added.wrapper);
+	decorateFrame(booted, [frame.button]);
+	assert.deepEqual(rowLabels(popover.tree), ["run-1", "run-2", "done-1"]);
+
+	sortToggleOf(booted).click();
+	booted.runFrames();
+	assert.deepEqual(rowLabels(popover.tree), ["done-1", "run-1", "run-2"], "the added row was restored before its neighbour");
+});
+
+test("#82 turning the sort off restores the upstream order after adds and removals", () => {
+	const booted = boot({ storage: { "dsh-mobile-maxxing:activity-sort": "1" } });
+	const frame = appFrame(booted);
+	const popover = subagentPopover(booted, [["done-1", "done"], ["run-1", "ongoing"], ["done-2", "done"]]);
+	decorateFrame(booted, [frame.button]);
+	assert.deepEqual(rowLabels(popover.tree), ["run-1", "done-1", "done-2"]);
+
+	// Upstream appends a finished row, then removes the first one.
+	const added = subagentRow("done-3", "done");
+	popover.tree.append(added.wrapper);
+	decorateFrame(booted, [frame.button]);
+	popover.wrappers[0].wrapper.remove();
+	decorateFrame(booted, [frame.button]);
+	assert.deepEqual(rowLabels(popover.tree), ["run-1", "done-2", "done-3"]);
+
+	sortToggleOf(booted).click();
+	booted.runFrames();
+	assert.deepEqual(rowLabels(popover.tree), ["run-1", "done-2", "done-3"], "the saved order was not restored");
+});
+
+test("#82 a row that keeps the focus keeps it when the sort moves it", () => {
+	const booted = boot({ storage: {} });
+	const frame = appFrame(booted);
+	const popover = subagentPopover(booted, [["done-1", "done"], ["run-1", "ongoing"]]);
+	decorateFrame(booted, [frame.button]);
+
+	const doc = booted.document;
+	// The row the sort will move: the running one.
+	const focused = popover.wrappers[1].row;
+	let focusCalls = 0;
+	focused.focus = () => {
+		focusCalls += 1;
+		doc.activeElement = focused;
+	};
+	focused.focus();
+	assert.equal(doc.activeElement, focused);
+
+	// Model the browser that drops the focus when a focused node is moved.
+	const insertBefore = popover.tree.insertBefore;
+	popover.tree.insertBefore = (child, before) => {
+		// Moving the wrapper takes its subtree with it, so a focused row inside
+		// loses the focus to <body> in a real browser.
+		if (doc.activeElement !== null && child.contains(doc.activeElement)) doc.activeElement = doc.body;
+		return insertBefore.call(popover.tree, child, before);
+	};
+	// The stored choice turns the sort on for the next pass, without the click
+	// path (which touches the focus of its own).
+	booted.sandbox.localStorage.setItem("dsh-mobile-maxxing:activity-sort", "1");
+	booted.api.decorateNow();
+	popover.tree.insertBefore = insertBefore;
+
+	assert.deepEqual(rowLabels(popover.tree), ["run-1", "done-1"]);
+	assert.equal(doc.activeElement, focused, "moving the focused row dropped the focus to <body>");
+	assert.ok(focusCalls >= 2, "the guard did not put the focus back");
+});
+
+test("#82 a stored choice comes back on the next open and orders the rows again", () => {
+	const booted = boot({ storage: { "dsh-mobile-maxxing:activity-sort": "1" } });
+	const frame = appFrame(booted);
+	const popover = subagentPopover(booted);
+	decorateFrame(booted, [frame.button]);
+	assert.equal(sortToggleOf(booted).getAttribute("aria-pressed"), "true", "the saved choice was not read back");
+	assert.equal(popover.tree.hasAttribute("data-rdsh-activity-sorted"), true);
+	assert.deepEqual(rowLabels(popover.tree), ["右パネル", "見出し", "質問カード"]);
+});
+
+test("#82 closing the popover leaves no heading or marker, but keeps the choice", () => {
+	const booted = boot({ storage: { "dsh-mobile-maxxing:activity-sort": "1" } });
+	const frame = appFrame(booted);
+	const popover = subagentPopover(booted);
+	decorateFrame(booted, [frame.button]);
+	assert.notEqual(headingOf(booted), null);
+
+	popover.menu.remove();
+	frame.button.setAttribute("aria-expanded", "false");
+	decorateFrame(booted, [frame.button]);
+	assert.equal(headingOf(booted), null, "a closed popover kept its heading");
+	assert.equal(booted.document.querySelectorAll("[data-rdsh-activity-sorted]").length, 0, "a closed popover kept the sort marker");
+	assert.equal(booted.sandbox.localStorage.getItem("dsh-mobile-maxxing:activity-sort"), "1", "closing the panel forgot this device's choice");
+});
+
+test("#82 a teardown takes the heading and the sorted order with it", () => {
+	const booted = boot({ storage: { "dsh-mobile-maxxing:activity-sort": "1" } });
+	const frame = appFrame(booted);
+	const popover = subagentPopover(booted, [["done-1", "done"], ["run-1", "ongoing"]]);
+	decorateFrame(booted, [frame.button]);
+	assert.deepEqual(rowLabels(popover.tree), ["run-1", "done-1"]);
+
+	booted.dispose();
+	assert.equal(headingOf(booted), null, "a teardown left the heading over a closed list");
+	assert.equal(booted.document.querySelectorAll("[data-rdsh-activity-sorted]").length, 0, "a teardown left the sort marker");
+	assert.deepEqual(rowLabels(popover.tree), ["done-1", "run-1"], "a teardown left the rows in the sorted order");
+});
+
+test("#82 another tree inside the app, or another menu, is never touched", () => {
+	const booted = boot();
+	const frame = appFrame(booted);
+	// The search tree lives inside the app frame, not in the chip's portal.
+	const before = [...frame.search.children];
+	// A settings menu is a body-level menu surface, but its items are not jobs.
+	const settingsMenu = node("div");
+	settingsMenu.setAttribute("data-menu-material", "");
+	const settingsList = node("ul");
+	const settingsItem = node("li");
+	const settingsButton = node("button");
+	settingsButton.textContent = "setting";
+	settingsItem.append(settingsButton);
+	settingsList.append(settingsItem);
+	settingsMenu.append(settingsList);
+	booted.document.body.append(settingsMenu);
+
+	decorateFrame(booted, [frame.button]);
+	assert.equal(headingOf(booted), null, "an app tree got a heading");
+	assert.equal(sortToggleOf(booted), null, "an app tree got a sort toggle");
+	assert.deepEqual([...frame.search.children], before, "the app's search tree was reordered");
+	assert.equal(frame.search.hasAttribute("data-rdsh-activity-sorted"), false);
+
+	// A body-level menu surface is not the subagent chip's panel either: the
+	// kind the chip names decides, so the job list is only adopted by the job
+	// chip (there is one open panel, and the chip says which one).
+	decorateFrame(booted, [frame.button]);
+	assert.equal(settingsMenu.querySelector("[data-rdsh-activity-heading]"), null, "a settings menu got a heading");
+	assert.equal(settingsMenu.hasAttribute("data-rdsh-activity-sorted"), false);
+});
+
+test("#82 the terminal list is found under its section headers", () => {
+	const booted = boot();
+	const frame = appFrame(booted, { label: countLabel("en", "job", "count.live.other") });
+	const shell = shellPopover(booted);
+	decorateFrame(booted, [frame.button]);
+	assert.notEqual(headingOf(booted), null, "the job list was not found under its section headers");
+	assert.equal(headingTitleOf(booted).textContent, "Terminal");
+	assert.equal(headingOf(booted).parentElement, shell.surface);
+	assert.equal(sortToggleOf(booted), null, "the job list got a sort toggle");
+	assert.deepEqual([...shell.list.children].slice(0, 2), [shell.runningHeader, shell.list.children[1]], "the job list was reordered");
+});
+
+test("#82 the terminal list is named when every job has settled and the section is collapsed", () => {
+	const booted = boot();
+	const frame = appFrame(booted, { label: countLabel("en", "job", "count.live.other") });
+	const surface = node("div");
+	surface.setAttribute("data-menu-material", "");
+	const list = node("ul");
+	// Only the settled header is rendered: the running group is empty and the
+	// settled group is collapsed, so not one row carries a state glyph.
+	const settledHeader = node("li");
+	const settledToggle = node("button");
+	settledToggle.setAttribute("aria-expanded", "false");
+	settledToggle.textContent = "settled 10";
+	settledHeader.append(settledToggle);
+	list.append(settledHeader);
+	surface.append(list);
+	booted.document.body.append(surface);
+
+	decorateFrame(booted, [frame.button]);
+	assert.notEqual(headingOf(booted), null, "a collapsed, all-settled job list got no heading");
+	assert.equal(headingTitleOf(booted).textContent, "Terminal");
+	assert.equal(headingOf(booted).parentElement, surface);
+});
+
+test("#82 a browser that refuses storage still toggles for this page", () => {
+	const booted = boot({ storage: null });
+	// Private mode, a full quota, or a policy that denies localStorage: the read
+	// and the write both throw, and the button still has to work.
+	booted.sandbox.localStorage = {
+		getItem() {
+			throw new Error("denied");
+		},
+		setItem() {
+			throw new Error("denied");
+		},
+		removeItem() {
+			throw new Error("denied");
+		},
+	};
+	const frame = appFrame(booted);
+	const popover = subagentPopover(booted);
+	decorateFrame(booted, [frame.button]);
+	const toggle = sortToggleOf(booted);
+	assert.equal(toggle.getAttribute("aria-pressed"), "false");
+
+	toggle.click();
+	booted.runFrames();
+	assert.equal(toggle.getAttribute("aria-pressed"), "true", "a refused write left the toggle dead");
+	assert.deepEqual(rowLabels(popover.tree), ["右パネル", "見出し", "質問カード"]);
+
+	// A later pass reads the page's own choice, not the store it cannot reach.
+	decorateFrame(booted, [frame.button]);
+	assert.equal(sortToggleOf(booted).getAttribute("aria-pressed"), "true", "the page choice was forgotten between passes");
+});
+
+test("#82 a desktop builds no heading or toggle and never reads the choice", () => {
+	const booted = boot({ mode: "desktop", narrow: true, storage: { "dsh-mobile-maxxing:activity-sort": "1" } });
+	// The fixtures exist so the only reason for silence is the desktop gate.
+	appFrame(booted);
+	subagentPopover(booted);
+	assert.equal(booted.api, undefined, "a desktop booted the activity half");
+	assert.equal(headingOf(booted), null, "a desktop got a heading");
+	assert.equal(sortToggleOf(booted), null, "a desktop got a sort toggle");
+	assert.equal(booted.document.querySelectorAll("[data-rdsh-activity-sorted]").length, 0);
+	assert.equal(booted.sandbox.localStorage.reads.includes("dsh-mobile-maxxing:activity-sort"), false, "a desktop read the device-local choice");
+});
+
+test("#82 the sort moves the rows themselves and lives in the phone sheet", () => {
+	const tick = String.fromCharCode(96);
+	const phoneStart = CLIENT.indexOf("const CSS_PHONE = " + tick);
+	const phone = CLIENT.slice(phoneStart, CLIENT.indexOf(tick + ";", phoneStart));
+	const deviceStart = CLIENT.indexOf("const CSS_DEVICE = " + tick);
+	const device = CLIENT.slice(deviceStart, CLIENT.indexOf(tick + ";", deviceStart));
+	assert.match(phone, /\.rdsh-activity-heading \{/, "the heading row has no phone style");
+	assert.doesNotMatch(phone, /\[data-rdsh-activity-sorted\][^{]*\{[^}]*order:/, "the sort is a CSS order, so focus and reader order would not follow it");
+	assert.doesNotMatch(device, /data-rdsh-activity-heading|rdsh-activity-sort/, "a desktop sheet carries the phone rules");
+
+	// The rows are reordered in the document, and the running state comes from
+	// the glyph, never from a localised label.
+	const apply = CLIENT.slice(CLIENT.indexOf("function activityRowRunning("), CLIENT.indexOf("function clearActivitySort("));
+	assert.match(apply, /tree\.insertBefore\(/, "the rows are not moved in the document");
+	assert.match(apply, /\[data-state="ongoing"\]/, "the running rows are not detected by their state attribute");
+	assert.doesNotMatch(apply, /aria-label/, "a row is classified by a localised label");
+	const lookup = CLIENT.slice(CLIENT.indexOf("function subagentListOf("), CLIENT.indexOf("function activityPopover("));
+	assert.match(lookup, /\[data-state\]/, "the list is not recognised by its state glyphs");
+	assert.doesNotMatch(lookup, /aria-label/, "the popover is found by a localised label");
+	// The portal never holds the chips, so the app frame is never the popover.
+	assert.match(CLIENT, /if \(child\.querySelector\("\[data-rdsh-activity-chip\]"\) !== null\) continue;/, "the app frame can be taken for the popover");
 });

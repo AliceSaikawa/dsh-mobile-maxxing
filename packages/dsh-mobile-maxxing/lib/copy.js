@@ -50,6 +50,10 @@ export const COPY = {
 		"localDisplay.reason.localeShape": "The locale service does not expose a mutable locale.",
 		"localDisplay.reason.noLocales": "No display language is registered.",
 
+		// --- activity popover (#82) -----------------------------------------
+		"activityPanel.sort.running": "Running first",
+		"activityPanel.sort.running.aria": "Sort running first",
+
 		// --- terminal key row ----------------------------------------------
 		"terminalKeys.label": "Terminal keys",
 		"terminalKeys.esc": "Esc",
@@ -330,6 +334,10 @@ export const COPY = {
 		"localDisplay.reason.localeMissing": "ロケールサービスがありません。",
 		"localDisplay.reason.localeShape": "ロケールサービスが表示言語の変更に対応していません。",
 		"localDisplay.reason.noLocales": "表示言語が登録されていません。",
+
+		// --- activity popover (#82) -----------------------------------------
+		"activityPanel.sort.running": "実行中を上に",
+		"activityPanel.sort.running.aria": "実行中を上に並べ替え",
 
 		// --- terminal key row ----------------------------------------------
 		"terminalKeys.label": "ターミナルキー",

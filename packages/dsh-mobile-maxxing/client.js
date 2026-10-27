@@ -601,6 +601,10 @@ window.__ModuleLoader__.load({
     }
 
     const CSS = `
+.rdsh-update-launch { display: inline-flex; width: 100%; min-height: 48px; align-items: center; justify-content: center; gap: 10px; padding: 10px 16px; box-sizing: border-box; border: 1px solid var(--dsw-alias-border-l2, #777); border-radius: 12px; background: var(--dsw-alias-bg-layer-2, #26262a); color: var(--dsw-alias-label-primary, #f9fafb); font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; }
+.rdsh-update-launch:active { opacity: .75; }
+.rdsh-update-launch:focus-visible { outline: 2px solid var(--dsw-alias-link, #4d6bfe); outline-offset: 2px; }
+.rdsh-update-launch svg { width: 19px; height: 19px; flex: none; }
 .rdsh-update-overlay { position: fixed; inset: 0; z-index: 2147483000; display: grid; place-items: center; padding: 20px; background: var(--dsw-alias-mask, rgba(0,0,0,.72)); }
 .rdsh-update-dialog { box-sizing: border-box; width: min(100%, 420px); padding: 28px; border-radius: 18px; background: var(--dsw-alias-bg-layer-2, #26262a); color: var(--dsw-alias-label-primary, #fff); text-align: center; box-shadow: 0 12px 40px #0008; overflow-wrap: anywhere; }
 .rdsh-update-dialog h2 { font-size: 19px; line-height: 1.4; }
@@ -1282,7 +1286,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       return h("section", { className: "dsh-mobile-maxxing-section" },
         h("div", { className: "dsh-mobile-maxxing-cardbox" },
           h("h3", { className: "dsh-mobile-maxxing-title" }, t("tab.update")),
-          h("button", { type: "button", onClick: () => setPhase("confirm") }, t("pwa.action.check"))),
+          h("button", { type: "button", className: "rdsh-update-launch", onClick: () => setPhase("confirm") },
+            h("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" },
+              h("path", { d: "M20 7v5h-5M4 17v-5h5" }),
+              h("path", { d: "M5.6 9A7 7 0 0 1 18 6l2 1M4 17l2 1a7 7 0 0 0 12.4-3" })),
+            t("pwa.action.check"))),
         phase !== "" ? createPortal(h("div", { className: "rdsh-update-overlay", role: "dialog", "aria-modal": "true", "aria-labelledby": "rdsh-update-heading", onKeyDown: (event) => { if (event.key === "Escape" && !busy) setPhase(""); if (event.key === "Tab") { const nodes = [...event.currentTarget.querySelectorAll("a[href], button:not([disabled])")]; if (!nodes.length) { event.preventDefault(); return; } const first = nodes[0]; const last = nodes[nodes.length - 1]; if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); } else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); } } } },
           h("div", { className: "rdsh-update-dialog" },
             (phase === "latest" || phase === "ahead" || phase === "done") ? h("svg", { className: "rdsh-update-check", viewBox: "0 0 64 64", fill: "none", "aria-hidden": "true" },

@@ -32,6 +32,13 @@ function arrayLiteral(name) {
 }
 
 
+test("the update action has a labelled, touch-sized control", () => {
+	const body = functionBody("UpdateSettingsSection");
+	assert.match(body, /className: "rdsh-update-launch"/);
+	assert.match(body, /t\("pwa.action.check"\)/);
+	assert.match(CLIENT, /\.rdsh-update-launch \{[^}]*min-height: 48px/);
+});
+
 test("hiding follows the device mode, not the window width", () => {
 	const body = functionBody("applyHideList");
 	assert.match(body, /const hideOnThisDevice = !disabled && phone\(\);/, "the hide decision ignores the mode");

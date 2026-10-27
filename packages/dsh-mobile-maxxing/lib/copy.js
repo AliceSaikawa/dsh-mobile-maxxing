@@ -58,6 +58,7 @@ export const COPY = {
 		// --- local display -------------------------------------------------
 		"localDisplay.title": "Display",
 		"localDisplay.desc": "Text, code and terminal sizes, plus a terminal-only dark palette, for this device. These choices stay in this browser.",
+		"localDisplay.resetFonts": "Reset font sizes to default",
 		"localDisplay.text": "Body text",
 		"localDisplay.code": "Code",
 		"localDisplay.terminal": "Terminal",
@@ -378,6 +379,7 @@ export const COPY = {
 		// --- local display -------------------------------------------------
 		"localDisplay.title": "表示",
 		"localDisplay.desc": "この端末の本文・コード・ターミナルの文字サイズと、ターミナルだけのダーク配色です。設定はこのブラウザだけに保存されます。",
+		"localDisplay.resetFonts": "文字サイズをデフォルトに戻す",
 		"localDisplay.text": "本文",
 		"localDisplay.code": "コード",
 		"localDisplay.terminal": "ターミナル",

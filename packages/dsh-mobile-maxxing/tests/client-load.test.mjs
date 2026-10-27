@@ -3862,6 +3862,14 @@ test("#80 a catalog publish leaves the device font projection untouched", async 
 		"",
 		"a font step invented a language choice",
 	);
+	api.resetFonts();
+	assert.equal(theme.snapshot.fontSizes.text, 14);
+	assert.equal(theme.snapshot.fontSizes.code, 11);
+	assert.equal(theme.snapshot.fontSizes.terminal, 13);
+	const saved = JSON.parse(booted.sandbox.localStorage.getItem("rdsh-mobile-ux:local-display"));
+	assert.deepEqual(saved.fonts, { text: 14, code: 11, terminal: 13 });
+	assert.equal(saved.language, "");
+	assert.equal(docEl.hasAttribute("data-rdsh-terminal-dark"), true);
 	api.writeTerminalDark(false);
 	booted.disposeAll();
 	assert.equal(theme.snapshot, hostTheme);

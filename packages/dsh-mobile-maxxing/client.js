@@ -2602,6 +2602,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       localDisplayRuntime?.applyTheme();
     }
 
+    function resetLocalDisplayFonts() {
+      if (state.localDisplay.available.fonts === false || !state.localDisplay.fonts) return;
+      for (const role of LOCAL_FONT_ROLES) setLocalDisplayFont(role, LOCAL_FONT_SPECS[role].default - state.localDisplay.fonts[role]);
+    }
+
     /** Select a supported locale for this browser only; "" follows the Host. */
     function setLocalDisplayLanguage(id) {
       const display = state.localDisplay;
@@ -13092,6 +13097,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
               ),
             );
           }),
+          h("div", { className: "rdsh-mux-actions" },
+            h("button", { type: "button", disabled: available.fonts === false, onClick: resetLocalDisplayFonts }, t("localDisplay.resetFonts"))),
           available.fonts === false
             ? h("p", { className: "rdsh-mux-note" }, t("localDisplay.unavailable", { reason: reasonText("fonts") }))
             : null,
@@ -13210,6 +13217,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
   display: flex; align-items: center; gap: 10px; margin: 0 0 8px;
   font-size: 13px; color: var(--dsw-alias-label-secondary, #cfd3d6);
 }
+.rdsh-mux-slider:has(> select) { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 120px), 1fr)); }
+.rdsh-mux-slider > select { width: 100%; min-height: 44px; }
 .rdsh-mux-slider input[type="range"] { flex: 1 1 auto; min-width: 0; accent-color: var(--dsw-alias-link, #4d6bfe); }
 .rdsh-mux-slider-value {
   flex: 0 0 auto; min-width: 42px; text-align: right;
@@ -13234,7 +13243,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
   color: var(--dsw-alias-label-primary, #f9fafb);
   background: var(--dsw-alias-bg-layer-2, #26262a);
   border: .5px solid var(--dsw-alias-border-l3, rgba(255,255,255,.16));
-  -webkit-appearance: none; appearance: none;
+  -webkit-appearance: auto; appearance: auto;
 }
 .rdsh-mux-actions button.rdsh-mux-primary {
   border-color: transparent;
@@ -15190,6 +15199,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           // clears the remembered language, a language id stores it.
           setLanguage: setLocalDisplayLanguage,
           setFont: setLocalDisplayFont,
+          resetFonts: resetLocalDisplayFonts,
           build: BUILD,
           lang: currentLang(),
           autoSettings: true,

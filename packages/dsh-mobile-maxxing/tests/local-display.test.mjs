@@ -24,6 +24,7 @@ function block(start, end) {
 
 test("local display copy exists in both shipped packs", () => {
 	const keys = [
+		"localDisplay.resetFonts",
 		"localDisplay.title",
 		"localDisplay.desc",
 		"localDisplay.text",

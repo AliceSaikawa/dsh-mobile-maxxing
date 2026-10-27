@@ -51,10 +51,12 @@ test('mobile registers a stylesheet only inside the mobile chat', () => {
   assert.match(style.children[0], /overflow-x: auto/);
 });
 
-test('the mobile URL carries the table style without a second dependency', () => {
-  const mobile = readFileSync(new URL('../../dsh-mobile-maxxing/client.js', import.meta.url), 'utf8');
-  assert.match(mobile, /phoneStyle.textContent = CSS_PHONE \+ MD_TABLE_CSS/);
-  assert.match(mobile, /html\[data-rdsh-device-mode="mobile"\] \[data-chat-flow-kind="assistant-step"\] div > table th/);
+test('one installer URL installs three independent components', () => {
+  const installer = readFileSync(new URL('../../../scripts/install-mobile-bundle.mjs', import.meta.url), 'utf8');
+  assert.match(installer, /dsh-mobile-maxxing-0\.7\.0\.tgz/);
+  assert.match(installer, /dsh-md-rendering-0\.1\.2\.tgz/);
+  assert.match(installer, /github:kuraneko1\/dsh-locale-ja/);
+  assert.match(installer, /\["plugin", "--profile", profile, "add", \.\.\.packages\]/);
 });
 
 test('bundle exports its client and distribution resources', () => {

@@ -37,7 +37,13 @@ dsh plugin --profile web add ./dist/dsh-locale-ja-0.1.0.tgz
 
 ### チャットの表を変更する場合（任意）
 
-上記の `dsh-mobile-maxxing` のURL 1つに、モバイル表示専用の表スタイル `dsh-md-rendering` も同梱しています。PC にはスタイルを適用しません。独立パッケージとして個別に導入・削除することもできます。詳しくは [`packages/dsh-md-rendering/README.md`](packages/dsh-md-rendering/README.md) を参照してください。
+モバイル本体・表・日本語化を独立した3コンポーネントのまま、1つのインストール用URLから導入できます。PC には表スタイルを適用しません。詳しくは [`packages/dsh-md-rendering/README.md`](packages/dsh-md-rendering/README.md) を参照してください。
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/kuraneko1/dsh-mobile-maxxing/main/scripts/install-mobile-bundle.mjs | node --input-type=module
+```
+
+各コンポーネントは、プラグイン画面で個別に有効・無効を切り替えられます。
 
 ## できること
 
@@ -131,7 +137,11 @@ While it is incomplete, `pack-all` prints `REFUSED` and produces no locale tarba
 
 ### Optional chat table styling
 
-The same `dsh-mobile-maxxing` URL also bundles [`dsh-md-rendering`](packages/dsh-md-rendering/README.md) for Project Hub style chat tables on mobile only. Desktop is a hard no-op. It remains available as a separate optional package too.
+One installer URL installs three independent components: mobile UX, Markdown tables, and the Japanese locale. Desktop table styling is a hard no-op, and each component can be toggled separately.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/kuraneko1/dsh-mobile-maxxing/main/scripts/install-mobile-bundle.mjs | node --input-type=module
+```
 
 ## What it does
 

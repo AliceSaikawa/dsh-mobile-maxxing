@@ -10094,6 +10094,24 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       section.insertBefore(row, mount);
       section.addEventListener("keydown", onSpecialKeyTextKeyDown, true);
       section.addEventListener("beforeinput", onSpecialKeyBeforeInput, true);
+      // #108: the upstream terminal auto-focuses on open (visible && writable),
+      // popping the keyboard. Only a deliberate tap should focus.
+      let lastUserInteraction = 0;
+      const onUserInteract = () => { lastUserInteraction = Date.now(); };
+      const onFocusIn = (event) => {
+        if (Date.now() - lastUserInteraction > 500) {
+          const target = event.target;
+          if (target && typeof target.blur === "function") target.blur();
+        }
+      };
+      section.addEventListener("pointerdown", onUserInteract, true);
+      section.addEventListener("touchstart", onUserInteract, true);
+      section.addEventListener("focusin", onFocusIn);
+      state.disposeAutofocus = () => {
+        section.removeEventListener("pointerdown", onUserInteract, true);
+        section.removeEventListener("touchstart", onUserInteract, true);
+        section.removeEventListener("focusin", onFocusIn);
+      };
       return true;
     }
 
@@ -10103,6 +10121,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       TERMINAL_KEY_ROWS.delete(section);
       section.removeEventListener("keydown", onSpecialKeyTextKeyDown, true);
       section.removeEventListener("beforeinput", onSpecialKeyBeforeInput, true);
+      if (typeof state.disposeAutofocus === "function") state.disposeAutofocus();
       state.row.remove();
       return true;
     }

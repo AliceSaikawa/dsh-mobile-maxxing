@@ -13810,6 +13810,17 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   [data-rdsh-model-menu] { max-width: calc(100vw - 24px); box-sizing: border-box !important; }
   [data-rdsh-model-menu] [class*="_cell"] { min-width: 0 !important; gap: 8px !important; }
   [data-rdsh-model-menu] [class*="_cell"] > span:last-of-type { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* #84: a local model's absolute path gives its row a 422px min-content width
+     inside the 345px list. Upstream's row is a button, whose auto width is
+     shrink-to-fit, so the row grew to 456px and the list scrolled sideways on
+     any slightly diagonal vertical swipe. Cap the row at the list and lock the
+     list to the vertical axis (iOS Safari otherwise pans it both ways). */
+  [data-rdsh-model-menu] [class*="_option"] { max-width: 100% !important; }
+  [data-rdsh-model-menu] [class*="_groups"] {
+    overflow-x: hidden !important;
+    touch-action: pan-y;
+    overscroll-behavior-x: none;
+  }
   [data-rdsh-model-search]:disabled { opacity: 1 !important; cursor: text; }
 
   /* Agent question / plan review card: use the same 16px gutter and 349px

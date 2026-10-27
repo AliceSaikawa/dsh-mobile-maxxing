@@ -455,7 +455,12 @@ export function apply(ctx, config) {
 					const pkg = JSON.parse(await readFile(new URL("./package.json", import.meta.url), "utf8"));
 					const res2 = await fetch("https://raw.githubusercontent.com/kuraneko1/dsh-mobile-maxxing/main/packages/dsh-mobile-maxxing/package.json");
 					const remote = res2.ok ? JSON.parse(await res2.text()) : {};
-					respond(res, req.method, 200, { "content-type": "application/json; charset=utf-8" }, JSON.stringify({ current: pkg.version || "", latest: remote.version || "" }));
+					const localeRes = await fetch("https://raw.githubusercontent.com/kuraneko1/dsh-locale-ja/main/package.json");
+					const localeRemote = localeRes.ok ? JSON.parse(await localeRes.text()) : {};
+					const localePkgPath = new URL("../dsh-locale-ja/package.json", import.meta.url);
+					let localeCurrent = "";
+					try { localeCurrent = JSON.parse(await readFile(localePkgPath, "utf8")).version || ""; } catch {}
+					respond(res, req.method, 200, { "content-type": "application/json; charset=utf-8" }, JSON.stringify({ current: pkg.version || "", latest: remote.version || "", localeCurrent, localeLatest: localeRemote.version || "" }));
 				} catch (error) {
 					respond(res, req.method, 200, { "content-type": "application/json; charset=utf-8" }, JSON.stringify({ current: "", latest: "", error: String(error && error.message || error) }));
 				}

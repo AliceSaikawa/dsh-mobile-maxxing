@@ -1186,7 +1186,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           // #109: check version first; only update when a newer one exists.
           const verRes = await fetch("/dsh-mobile-maxxing/plugin-version");
           const ver = await verRes.json().catch(() => ({}));
-          if (ver.current && ver.latest && ver.current === ver.latest) {
+          const upToDate = ver.current && ver.latest && ver.current === ver.latest
+            && (!ver.localeCurrent || !ver.localeLatest || ver.localeCurrent === ver.localeLatest);
+          if (upToDate) {
             setMessage(t("pwa.note.pluginsLatest"));
             return;
           }

@@ -1375,7 +1375,7 @@ test("a folder menu is claimed by portal structure once and leaves other menus a
 	booted.disposeAll();
 });
 
-test("a rightward swipe closes an open right panel from the left edge too", () => {
+test("a rightward swipe closes an open right panel; the left edge opens the drawer instead", () => {
 	const documentHandlers = [];
 	const collapse = element();
 	const panel = element();
@@ -1402,11 +1402,16 @@ test("a rightward swipe closes an open right panel from the left edge too", () =
 	const start = handler("touchstart", "onEdgeSwipeStart");
 	const move = handler("touchmove", "onEdgeSwipeMove");
 	const touch = (x) => ({ cancelable: true, preventDefault() {}, touches: [{ clientX: x, clientY: 200 }] });
-	for (const from of [10, 200]) {
-		start({ touches: [{ clientX: from, clientY: 200 }], target: {} });
-		move(touch(from + 90));
-	}
-	assert.equal(closes, 2, "the panel did not close from one of the start positions");
+	// Away from the left edge, a rightward swipe closes the open panel.
+	start({ touches: [{ clientX: 200, clientY: 200 }], target: {} });
+	move(touch(290));
+	assert.equal(closes, 1, "the panel did not close from a non-edge start");
+
+	// At the left edge the same gesture belongs to the drawer (#59): the panel
+	// must not close.
+	start({ touches: [{ clientX: 10, clientY: 200 }], target: {} });
+	move(touch(100));
+	assert.equal(closes, 1, "the left-edge swipe closed the panel instead of opening the drawer");
 	booted.disposeAll();
 });
 

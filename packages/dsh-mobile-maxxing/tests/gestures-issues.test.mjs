@@ -964,6 +964,25 @@ test("#59 a docked panel closes only under a swipe that starts on it", () => {
 	booted.disposeAll();
 });
 
+test("#59 a left-edge swipe while a panel is open falls through to the drawer", () => {
+	const booted = bootGestures({ narrow: true, mode: "mobile", width: 390 });
+	const { root, collapse } = panelFixture(booted.doc);
+	booted.drainFrames();
+	assert.equal(booted.doc.documentElement.hasAttribute("data-rdsh-rightpanel-open"), true, "the panel is not open");
+
+	const start = booted.handler("touchstart", "onEdgeSwipeStart");
+	const move = booted.handler("touchmove", "onEdgeSwipeMove");
+	const touch = (x, y = 200) => ({ cancelable: true, prevented: 0, preventDefault() { this.prevented += 1; }, touches: [{ clientX: x, clientY: y }] });
+	const body = new FakeElement("div");
+	body._closest = () => null;
+
+	// Left-edge rightward swipe: must NOT be claimed as a panel close.
+	start({ touches: [{ clientX: 10, clientY: 200 }], target: body });
+	move(touch(150, 200));
+	assert.equal(collapse.clicks, 0, "the left-edge swipe closed the panel instead of opening the drawer");
+	booted.disposeAll();
+});
+
 /** A phone panel with dockkit's fullscreen control and its once-marker. */
 function promoteFixture(doc, { viewport = 390, fired = "1" } = {}) {
 	const root = new FakeElement("div");

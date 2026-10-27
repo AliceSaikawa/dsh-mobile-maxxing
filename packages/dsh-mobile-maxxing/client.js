@@ -3783,6 +3783,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         open = host.closest("[hidden]") === null
           && getComputedStyle(panel).visibility !== "hidden"
           && panel.getBoundingClientRect().width > 0;
+        // When the hook is the panel root itself (a split panel), its own box
+        // stays measurable after close; the upstream open attribute is the truth.
+        if (panel === host) open = open && host.hasAttribute("data-sidebar-right-open");
       }
       document.documentElement.toggleAttribute("data-rdsh-rightpanel-open", open);
       // Remove headings left behind by older client generations.
@@ -4430,6 +4433,22 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // panel is expanded; the root owns the measured dock width the tablet
       // stylesheet reserves.
       if (!narrow()) {
+        if (!boundary.hasAttribute("data-sidebar-right-open")) {
+          if (rightPanelNode !== null) forgetRightPanel();
+          return;
+        }
+        for (const stale of document.querySelectorAll("[data-rdsh-rightpanel]")) {
+          if (stale !== boundary) stale.removeAttribute("data-rdsh-rightpanel");
+        }
+        boundary.setAttribute("data-rdsh-rightpanel", "");
+        watchRightPanel(boundary);
+        return;
+      }
+      // #59: a portrait-stacked split makes each pane half the screen height,
+      // so the 85%/50% ancestor walk can stop on a pane (data-dockkit-pane).
+      // Tag the panel root instead, and only while it says it is open: the pane
+      // is not the surface the stylesheet and the swipe logic expect.
+      if (boundary.querySelectorAll("[data-dockkit-host]").length > 1) {
         if (!boundary.hasAttribute("data-sidebar-right-open")) {
           if (rightPanelNode !== null) forgetRightPanel();
           return;
@@ -9484,14 +9503,20 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           if (scrolledLeftAncestor(target) !== null) return;
           if (target.closest("input, textarea, [contenteditable=true], .xterm, [class*='xterm']") !== null) return;
         }
-        // #59: a docked panel (landscape) shares the screen with the
-        // conversation. Only a swipe that starts on the panel closes it; a
-        // swipe on the chat keeps the chat's own gesture instead of reaching
-        // across the split and collapsing the column under the finger.
-        const dock = rightPanelNode === null ? null : rightPanelNode.getBoundingClientRect();
-        if (dock !== null && dock.width > 0 && dock.width < window.innerWidth * 0.85 && touch.clientX < dock.left) return;
-        edgeSwipe = { x: touch.clientX, y: touch.clientY, fromRight: false, closesPanel: true };
-        return;
+        // The drawer's left-edge zone owns its own gesture; a rightward swipe
+        // from there falls through to the drawer-open path below (#59).
+        const inLeftEdge = !fromRight && touch.clientX <= 36;
+        if (!inLeftEdge) {
+          // #59: a docked panel (landscape) shares the screen with the
+          // conversation. Only a swipe that starts on the panel closes it; a
+          // swipe on the chat keeps the chat's own gesture instead of reaching
+          // across the split and collapsing the column under the finger.
+          const dock = rightPanelNode === null ? null : rightPanelNode.getBoundingClientRect();
+          if (!(dock !== null && dock.width > 0 && dock.width < window.innerWidth * 0.85 && touch.clientX < dock.left)) {
+            edgeSwipe = { x: touch.clientX, y: touch.clientY, fromRight: false, closesPanel: true };
+            return;
+          }
+        }
       }
       if (drawerOpen) {
         // The drawer owns the screen while it is open, so a leftward swipe

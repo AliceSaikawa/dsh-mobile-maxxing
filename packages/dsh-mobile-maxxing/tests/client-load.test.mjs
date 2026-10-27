@@ -520,6 +520,27 @@ function drawerClosedAfterTapping(label, { narrow = true, mode = "mobile" } = {}
 	return collapsePresses === 1;
 }
 
+test("the session list keeps its scroll position across drawer changes", () => {
+	const timers = [];
+	const booted = bootClient({ mode: "mobile", narrow: true, schedule: (callback) => { timers.push(callback); return 0; } });
+	const scroller = { scrollTop: 500, scrollHeight: 1000, clientHeight: 400 };
+	const sidebar = { querySelectorAll: () => [scroller] };
+	booted.sandbox.document.querySelector = (selector) => selector === "[data-rdsh-sidebar]" ? sidebar : null;
+	booted.sandbox.getComputedStyle = () => ({ overflowY: "auto" });
+	const drawer = booted.sandbox.__RDSH_MOBILE_UX__.drawerScroll;
+	drawer.remember();
+	scroller.scrollTop = 0;
+	drawer.restore();
+	for (const callback of timers) callback();
+	assert.equal(scroller.scrollTop, 500);
+	scroller.scrollHeight = 700;
+	scroller.scrollTop = 0;
+	drawer.restore();
+	for (const callback of timers) callback();
+	assert.equal(scroller.scrollTop, 300, "the restored position is clamped to the shorter list");
+	booted.disposeAll();
+});
+
 test("tapping a New session button on a phone closes the drawer", () => {
 	assert.equal(drawerClosedAfterTapping("New session"), true, "sidebar button");
 	assert.equal(drawerClosedAfterTapping("New session in my-repo"), true, "workspace button");

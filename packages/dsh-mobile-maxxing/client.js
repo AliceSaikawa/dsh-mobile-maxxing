@@ -7504,6 +7504,28 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     // ---------------------------------------------------------------------
     let fab = null;
     let backdrop = null;
+    let drawerScrollTop = 0;
+
+    function sessionListScroller() {
+      const sidebar = document.querySelector("[data-rdsh-sidebar]");
+      if (sidebar === null) return null;
+      return [...sidebar.querySelectorAll("div")].find((element) => {
+        const overflow = getComputedStyle(element).overflowY;
+        return (overflow === "auto" || overflow === "scroll") && element.scrollHeight > element.clientHeight + 4;
+      }) ?? null;
+    }
+
+    function rememberDrawerScroll() {
+      const scroller = sessionListScroller();
+      if (scroller !== null) drawerScrollTop = scroller.scrollTop;
+    }
+
+    function restoreDrawerScroll() {
+      setTimeout(() => {
+        const scroller = sessionListScroller();
+        if (scroller !== null) scroller.scrollTop = Math.min(drawerScrollTop, Math.max(0, scroller.scrollHeight - scroller.clientHeight));
+      }, 0);
+    }
 
     function toggleDrawer() {
       // Share the decorator's locator so a localised label still opens the
@@ -10812,6 +10834,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     function onClickCapture(event) {
       const target = event.target;
       if (target === null || target.closest === undefined) return;
+      if (target.closest("[data-rdsh-sidebar-toggle]") !== null) {
+        rememberDrawerScroll();
+        restoreDrawerScroll();
+      }
 
       // A header activity chip whose own panel is open closes it on the second
       // tap; any other chip click (including the first one) stays upstream so
@@ -15177,6 +15203,11 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           markMobileSession,
           closeDrawer,
           openDrawer: toggleDrawer,
+          drawerScroll: {
+            remember: rememberDrawerScroll,
+            restore: restoreDrawerScroll,
+            get top() { return drawerScrollTop; },
+          },
           enableNotifications,
           sendTestNotification,
         };

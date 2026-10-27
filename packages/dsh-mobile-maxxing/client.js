@@ -4528,11 +4528,36 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       }
     }
 
+    /** The one reset-floats button, rebuilt when the panel changes. */
+    let resetFloatsButton = null;
+
+    function ensureResetFloatsButton() {
+      if (!phone()) return;
+      const panel = document.querySelector("[data-sidebar-right-panel]");
+      if (panel === null || panel === undefined) return;
+      const collapse = panel.querySelector("[data-sidebar-right-toggle]");
+      if (collapse === null || collapse === undefined) return;
+      if (resetFloatsButton !== null && resetFloatsButton.isConnected && resetFloatsButton.parentElement === collapse.parentElement) return;
+      if (resetFloatsButton !== null) resetFloatsButton.remove();
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "rdsh-mux-reset-floats";
+      button.setAttribute("aria-label", t("mux.resetFloats"));
+      button.textContent = "⌖";
+      button.addEventListener("click", () => resetFloatingPanels());
+      if (collapse.parentElement && typeof collapse.parentElement.insertBefore === "function") {
+        collapse.parentElement.insertBefore(button, collapse.nextSibling ?? null);
+      } else {
+        collapse.parentElement?.append?.(button);
+      }
+      resetFloatsButton = button;
+    }
+
     /**
-     * #111: a tab long-pressed into a floating panel can spawn entirely off
-     * screen. Clamp every float to the visible viewport on each pass.
+     * #111: bring every floating panel back inside the viewport. Called by a
+     * button in the panel chrome instead of running on every pass.
      */
-    function decorateRightPanelFloats() {
+    function resetFloatingPanels() {
       if (!phone()) return;
       for (const float of document.querySelectorAll("[data-dockkit-float]")) {
         if (float.closest("[hidden]") !== null) continue;
@@ -4540,8 +4565,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         if (rect.width <= 0 || rect.height <= 0) continue;
         const vw = window.innerWidth;
         const vh = window.innerHeight;
-        let { left, top } = { left: rect.left, top: rect.top };
-        // The float is absolutely positioned; read its inline offsets.
+        let left = rect.left;
+        let top = rect.top;
         const style = float.style;
         const inlineLeft = Number.parseFloat(style.left);
         const inlineTop = Number.parseFloat(style.top);
@@ -7232,7 +7257,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       decorateLightbox();
       decorateRightPanel();
       decorateRightPanelTabs();
-      decorateRightPanelFloats();
+      ensureResetFloatsButton();
+
       decorateTerminalKeys();
       decorateWorkspaceFiles();
       decorateCodePreview();
@@ -14464,6 +14490,12 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   /* #97: the panel toggle's label is localised, so the stable upstream
      attribute carries the glyph swap; the English label stays for an older
      shell that does not emit it. */
+  .rdsh-mux-reset-floats {
+    width: 28px; height: 28px; padding: 0; border: 0; border-radius: 6px;
+    background: transparent; color: var(--dsw-alias-label-secondary, #a1a1aa);
+    font-size: 16px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+  }
+  .rdsh-mux-reset-floats:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,.08)); }
   [data-rdsh-rightpanel] [data-sidebar-right-toggle] svg,
   [data-sidebar-right-toggle] svg,
   [aria-label="Collapse right sidebar"] svg { display: none !important; }

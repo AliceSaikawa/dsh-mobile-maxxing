@@ -70,6 +70,7 @@ export const COPY = {
 		"terminalKeys.ctrl": "Ctrl",
 		"terminalKeys.control": "Control",
 		"terminalKeys.wide": "Wide",
+		"mux.resetFloats": "Bring floating panels back",
 
 		// --- PWA section ----------------------------------------------------
 		"pwa.install.promptable": "Install DSH as an app",
@@ -361,6 +362,7 @@ export const COPY = {
 		"terminalKeys.ctrl": "Ctrl",
 		"terminalKeys.control": "コントロール",
 		"terminalKeys.wide": "広域",
+		"mux.resetFloats": "フローティングパネルを戻す",
 
 		// --- PWA section ----------------------------------------------------
 		"pwa.install.promptable": "DSH をアプリとしてインストールできます",

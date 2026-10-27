@@ -667,17 +667,23 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 .dsh-mobile-maxxing-foot:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,.08)); }
 .dsh-mobile-maxxing-foot svg { flex: none; }
 
-.dsh-mobile-maxxing-section { display: flex; flex-direction: column; gap: 12px; color: var(--dsw-alias-label-primary, #f9fafb); }
+.dsh-mobile-maxxing-section { display: flex; flex-direction: column; gap: 16px; color: var(--dsw-alias-label-primary, #f9fafb); }
 .dsh-mobile-maxxing-cardbox {
   border: .5px solid var(--dsw-alias-settings-card-stroke, var(--dsw-alias-border-l3, rgba(255,255,255,.12)));
   background: var(--dsw-alias-settings-card-fill, transparent);
-  border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px;
+  border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 12px;
 }
-.dsh-mobile-maxxing-title { margin: 0; font-size: 16px; font-weight: 500; }
-.dsh-mobile-maxxing-desc { margin: 0; font-size: 13px; line-height: 1.6; color: var(--dsw-alias-label-tertiary, #adb2b8); }
-.dsh-mobile-maxxing-rows { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 14px; margin: 0; font-size: 13px; }
-.dsh-mobile-maxxing-rows dt { color: var(--dsw-alias-label-secondary, #cfd3d6); }
+.dsh-mobile-maxxing-title { margin: 0; font-size: 17px; font-weight: 600; }
+.dsh-mobile-maxxing-desc { margin: 0; font-size: 14px; line-height: 1.7; color: var(--dsw-alias-label-tertiary, #adb2b8); }
+.dsh-mobile-maxxing-rows { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 16px; margin: 0; font-size: 14px; line-height: 1.5; }
+.dsh-mobile-maxxing-rows dt { color: var(--dsw-alias-label-secondary, #cfd3d6); font-weight: 500; }
 .dsh-mobile-maxxing-rows dd { margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 480px) {
+  .dsh-mobile-maxxing-rows { grid-template-columns: 1fr; gap: 2px; }
+  .dsh-mobile-maxxing-rows dt { padding-top: 6px; }
+  .dsh-mobile-maxxing-rows dd { padding-bottom: 6px; border-bottom: .5px solid var(--dsw-alias-border-l4, rgba(255,255,255,.06)); }
+  .dsh-mobile-maxxing-rows dd:last-child { border-bottom: 0; padding-bottom: 0; }
+}
 .dsh-mobile-maxxing-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .dsh-mobile-maxxing-actions button {
   font: inherit; font-size: 13px; min-height: 34px; padding: 0 14px; border-radius: 9px; cursor: pointer;

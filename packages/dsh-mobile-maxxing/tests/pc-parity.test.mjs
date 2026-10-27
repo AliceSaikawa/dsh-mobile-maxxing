@@ -257,6 +257,8 @@ test("the route detail's back affordance lives in the mobile stylesheet only", (
 		/\[data-testid="task-manager-page"\] \{ box-sizing: border-box; padding-top: 56px !important; \}/,
 		"the Automation route keeps no clearance below the drawer button",
 	);
+	assert.ok(phone.includes('[data-testid="task-manager-page"][data-rdsh-route-detail="back"] { padding-top: 0 !important; }'), "the detail still wastes the back button row");
+	assert.ok(phone.includes('[data-testid="task-manager-page"][data-rdsh-route-detail="back"] [class*="_detailTabsBar"] {\n    min-height: 48px; height: auto; padding-left: 64px;'), "the detail tabs do not clear the back button");
 	assert.match(phone, /\.rdsh-mux-route-back\[data-visible\] \{ display: flex; \}/, "the back button has no visible state");
 	// #59: the button sits in the drawer button's corner, so a landscape notch
 	// must move it exactly like the FAB.

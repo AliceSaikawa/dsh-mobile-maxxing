@@ -175,7 +175,9 @@ test("no data attribute is styled without ever being written", () => {
 		const prefix = attribute.split("-").slice(0, -1).join("-");
 		const templated = new RegExp(`(?:setAttribute|toggleAttribute)\\(\\s*\`${prefix}-\\$\\{`).test(CLIENT);
 		const quoted = new RegExp("[\"'`]" + attribute + "[\"'`]").test(CLIENT.replace(/\[(data-rdsh-[a-z0-9-]+)\]/g, ""));
-		if (!exact && !templated && !quoted) missing.push(attribute);
+		// A selector used solely to remove a node left by an older version is not a CSS hook.
+		const legacyCleanup = attribute === "data-rdsh-panel-heading" && /querySelectorAll\("\[data-rdsh-panel-heading\]"\)[\s\S]{0,80}stale\.remove\(\)/.test(CLIENT);
+		if (!exact && !templated && !quoted && !legacyCleanup) missing.push(attribute);
 	}
 	assert.deepEqual(missing, [], "styled but never written");
 });

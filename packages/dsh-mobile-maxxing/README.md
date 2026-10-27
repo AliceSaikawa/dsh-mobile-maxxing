@@ -59,7 +59,7 @@ dsh plugin --profile web add link:/path/to/dsh-mobile-maxxing
 | コードレビュー | 折り返しを既定でON。右端の操作は「…」に集約し、PC で開く系は非表示 |
 | テーマ（ライト／ダーク） | 上流のトークンに追従。PC と別に「この端末だけ」の配色を選べる |
 | チャット表示（この端末のみ） | 作業の詳細・折りたたみ時機・実行中の Enter・性能表示を、この端末だけ上書き。共有設定は変更しない |
-| モバイル操作の細部 | ターミナルだけダーク、上端で過去ログを自動読み込み、Trajectory タブの到達性、右パネル見出し、サブエージェント一覧の見出しと「実行中を上に」、ファイル検索のクリア、モデルメニューのセーフエリア、左端スワイプで戻る |
+| モバイル操作の細部 | ターミナルだけダーク、上端で過去ログを自動読み込み、Trajectory タブの到達性、サブエージェント一覧の見出しと「実行中を上に」、ファイル検索のクリア、モデルメニューのセーフエリア、左端スワイプで戻る |
 | CJK 表示の修正（任意） | 別パッケージ `rdsh-markdown-cjk` を入れた場合のみ。このパッケージ本体は PC 側を変えないため、Markdown レンダラを書き換えません |
 | 日本語 UI（任意） | 別パッケージ `dsh-locale-ja` をローカルの tarball から入れた場合のみ。この tarball には含まれず、自動で有効になりません |
 
@@ -139,7 +139,7 @@ local-tarball install.
 | Code review | Wrap is on by default; header actions collapse into a "…" menu; native open-in-app buttons are hidden |
 | Light / dark theme | Follows the host tokens; a per-device palette can differ from the PC |
 | Chat view (this device) | Work-details verbosity, collapse timing, busy Enter and performance detail overridden for this browser only |
-| Mobile polish | Terminal-only dark, older history at scroll-to-top, Trajectory tab reachability, right-panel heading, subagent-list heading with "Running first", file-search clear, model-menu safe area, left-edge swipe back |
+| Mobile polish | Terminal-only dark, older history at scroll-to-top, Trajectory tab reachability, subagent-list heading with "Running first", file-search clear, model-menu safe area, left-edge swipe back |
 | CJK rendering (optional) | Only with the separate `rdsh-markdown-cjk` package; this package leaves the Markdown renderer stock to avoid changing the PC |
 | Japanese UI (optional) | Only with the separate `dsh-locale-ja` package from its local tarball; it is not in this tarball and is never enabled automatically |
 

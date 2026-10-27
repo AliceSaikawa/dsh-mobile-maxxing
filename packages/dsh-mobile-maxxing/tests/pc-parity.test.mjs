@@ -91,25 +91,25 @@ test("the hide list no longer guesses native open-in-app labels", () => {
 test("the mobile tab inlines the other sections by mode, not by width", () => {
 	const body = functionBody("MobileSection");
 	assert.match(body, /const onPhone = s\.phone === true;/, "the section still keys off the device");
-	assert.match(body, /onPhone \? h\(InputSection\) : null/, "InputSection is not inlined in mobile mode");
+	assert.match(body, /h\(InputSection\)/, "InputSection is not available in mobile mode");
 	assert.match(
 		body,
-		/onPhone && typeof globalThis\.__RDSH_PWA_SETTINGS_SECTION__ === "function"/,
+		/typeof globalThis\.__RDSH_PWA_SETTINGS_SECTION__ === "function"/,
 		"the PWA section is not inlined in mobile mode",
 	);
 	assert.doesNotMatch(body, /s\.narrow && onPhone/, "the inline decision is still width-gated");
 	// One Settings tab: the separate App/Input registrations are gone, and the
 	// single mobile-ux row keeps the label key.
 	const registrations = [...CLIENT.matchAll(/name: "settings\.section",\s*\n\s*id: "([^"]+)"/g)].map((match) => match[1]);
-	assert.deepEqual(registrations, ["mobile-ux"], "a separate App/Input Settings tab is registered again");
+	assert.deepEqual(registrations, ["mobile-ux", "mobile-update"], "the mobile and update tabs must be registered");
 	assert.doesNotMatch(CLIENT, /id: "pwa",/, "the App tab is back");
 	assert.doesNotMatch(CLIENT, /id: "mobile-ux-input",/, "the Input tab is back");
 });
 
 test("the mobile-only settings cards follow the device mode", () => {
 	const body = functionBody("MobileSection");
-	assert.match(body, /onPhone \? t\("mux\.section\.desc"\) : t\("mux\.section\.desc\.desktop"\)/, "the desktop description is missing");
-	assert.match(body, /onPhone \? h\("p", \{ className: "rdsh-mux-note" \}, t\("mux\.section\.plusNote"\)\) : null/, "the + note is shown on a desktop");
+	assert.match(body, /onPhone \? h\(LocalLanguageSection\) : null/, "language must remain mobile-only");
+	assert.doesNotMatch(body, /mux\.section\.plusNote/, "the unrelated attachment explanation is back");
 	// The hidden-controls and diagnostics cards were removed by the user.
 	assert.doesNotMatch(body, /t\("mux\.hidden\.title"\)/, "the removed hidden-controls card is back");
 	assert.doesNotMatch(body, /mux\.diag\./, "the removed diagnostics cards are back");

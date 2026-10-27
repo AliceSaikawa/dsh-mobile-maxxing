@@ -6,10 +6,12 @@
  */
 
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { runInNewContext } from "node:vm";
-import { apply, buildManifest, decorateIndex, normalizeConfig } from "../index.js";
+import { apply, buildManifest, decorateIndex, normalizeConfig, compareReleaseVersions, fetchLatestRelease } from "../index.js";
 import { buildTurnEndPayload } from "../notify/host.js";
 import { COPY, PROBES, copyFor } from "../lib/copy.js";
 import { MANIFEST_FILE, MODE_ATTRIBUTE, MODE_GLOBAL, earlyModeScript } from "../lib/device-mode.js";
@@ -47,6 +49,7 @@ function mount(config, overrides = {}) {
 		webServer,
 		agents,
 		connection: { requestRejection: () => undefined },
+		profileContext: { name: "test" },
 		sessions: undefined,
 		...overrides,
 	};
@@ -67,6 +70,7 @@ function mount(config, overrides = {}) {
 	};
 	const listeners = [];
 	const ctx = {
+		profileContext: { name: "test" },
 		inject(deps, callback) {
 			injections.push([...deps]);
 			return callback(scope);
@@ -90,7 +94,7 @@ function mount(config, overrides = {}) {
 }
 
 /** Invoke one registered route with a fake request/response pair. */
-async function call(route, method = "GET", url = route.path) {
+async function call(route, method = "GET", url = route.path, requestHeaders = {}) {
 	const chunks = [];
 	let status;
 	let headers;
@@ -103,7 +107,7 @@ async function call(route, method = "GET", url = route.path) {
 			if (body !== undefined) chunks.push(Buffer.isBuffer(body) ? body : Buffer.from(body));
 		},
 	};
-	await route.handler({ method, url }, res);
+	await route.handler({ method, url, headers: requestHeaders }, res);
 	return { status, headers, body: Buffer.concat(chunks), text: Buffer.concat(chunks).toString("utf8") };
 }
 
@@ -643,6 +647,63 @@ test("notification copy defaults to the package language and keeps an explicit o
 	assert.equal((await previewOf({ lang: "en" })).copy.lang, "en", "an en package keeps English notifications");
 	assert.equal((await previewOf({ notifications: { lang: "en" } })).copy.lang, "en",
 		"notifications.lang still wins over the package default");
+});
+
+test("release check validates GitHub response and compares numeric versions", async () => {
+  assert.equal(compareReleaseVersions("0.6.1", "v0.10.0"), -1);
+  assert.equal(compareReleaseVersions("0.6.1", "v0.6.1"), 0);
+  assert.equal(compareReleaseVersions("0.7.0", "v0.6.1"), 1);
+  assert.throws(() => compareReleaseVersions("unknown", "v0.6.1"));
+  assert.equal(await fetchLatestRelease(async () => ({ ok: true, json: async () => ({ tag_name: "v0.8.0" }) })), "v0.8.0");
+  await assert.rejects(fetchLatestRelease(async () => ({ ok: false, status: 503 })), /503/);
+  await assert.rejects(fetchLatestRelease(async () => ({ ok: true, json: async () => ({ tag_name: "../../evil" }) })), /Invalid release/);
+  await assert.rejects(fetchLatestRelease(async () => ({ ok: true, json: async () => ({ tag_name: "v0.8.0", prerelease: true }) })), /Invalid release/);
+});
+
+test("update routes require authentication and a confirmed release", async () => {
+  const denied = mount({}, { connection: { requestRejection: () => 403 } });
+  assert.equal((await call(denied.routes.get("/dsh-mobile-maxxing/plugin-version"))).status, 403);
+  assert.equal((await call(denied.routes.get("/dsh-mobile-maxxing/update-plugins"), "POST")).status, 403);
+  const allowed = mount({});
+  assert.equal((await call(allowed.routes.get("/dsh-mobile-maxxing/update-plugins"), "POST")).status, 409);
+});
+
+test("confirmed update installs only the checked release in the active profile", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "dsh-update-test-"));
+  const output = join(dir, "args");
+  await writeFile(join(dir, "dsh"), '#!/bin/sh\nprintf "%s\\n" "$@" > "$TEST_UPDATE_ARGS"\n', { mode: 0o755 });
+  const originalFetch = globalThis.fetch, oldPath = process.env.PATH, oldOutput = process.env.TEST_UPDATE_ARGS;
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({ tag_name: "v0.8.0" }) });
+  process.env.PATH = dir + ":" + oldPath;
+  process.env.TEST_UPDATE_ARGS = output;
+  try {
+    const { routes } = mount({});
+    const check = await call(routes.get("/dsh-mobile-maxxing/plugin-version"));
+    assert.equal(check.status, 200);
+    assert.equal(JSON.parse(check.text).available, true);
+    const rootManifest = JSON.parse(await readFile(new URL("../../../package.json", import.meta.url), "utf8"));
+    assert.equal(JSON.parse(check.text).current, rootManifest.version);
+    assert.equal((await call(routes.get("/dsh-mobile-maxxing/update-plugins"), "POST", undefined, { "x-dsh-release": "v9.9.9" })).status, 409);
+    const result = await call(routes.get("/dsh-mobile-maxxing/update-plugins"), "POST", undefined, { "x-dsh-release": "v0.8.0" });
+    assert.equal(result.status, 200);
+    assert.deepEqual(JSON.parse(result.text), { ok: true, version: "v0.8.0" });
+    assert.deepEqual((await readFile(output, "utf8")).trim().split("\n"), ["plugin", "--profile", "test", "add", "github:kuraneko1/dsh-mobile-maxxing#v0.8.0"]);
+    assert.equal((await call(routes.get("/dsh-mobile-maxxing/update-plugins"), "POST", undefined, { "x-dsh-release": "v0.8.0" })).status, 409);
+  } finally {
+    globalThis.fetch = originalFetch;
+    process.env.PATH = oldPath;
+    if (oldOutput === undefined) delete process.env.TEST_UPDATE_ARGS; else process.env.TEST_UPDATE_ARGS = oldOutput;
+  }
+});
+
+test("a failed release fetch is an error, not latest", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: false, status: 503 });
+  try {
+    const { routes } = mount({});
+    assert.equal((await call(routes.get("/dsh-mobile-maxxing/plugin-version"))).status, 502);
+    assert.equal((await call(routes.get("/dsh-mobile-maxxing/update-plugins"), "POST", undefined, { "x-dsh-release": "v0.8.0" })).status, 409);
+  } finally { globalThis.fetch = originalFetch; }
 });
 
 test("routes reject methods they do not own", async () => {

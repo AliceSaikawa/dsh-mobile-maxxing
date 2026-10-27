@@ -50,8 +50,8 @@ test("local display copy exists in both shipped packs", () => {
 
 test("the Mobile section owns the independent LocalDisplaySettingsSection", () => {
 	const body = block("function MobileSection(", "function InputSection(");
-	assert.match(body, /onPhone \? h\(LocalDisplaySettingsSection\) : null/);
-	assert.match(body, /onPhone \? h\(InputSection\) : null/,
+	assert.match(body, /onPhone \? h\("details"[\s\S]*h\(LocalDisplaySettingsSection\)/);
+	assert.match(body, /onPhone \? h\("details"[\s\S]*h\(InputSection\)/,
 		"the existing Input section was displaced");
 	assert.match(CLIENT, /function LocalDisplaySettingsSection\(\)/, "the independent component is gone");
 	assert.match(CLIENT, /function setLocalDisplayFont\(role, delta\)/);

@@ -2124,6 +2124,22 @@ test("a notification hand-off from the current or old worker name renders one ba
 	}
 });
 
+test("a finished task plays the softer three-note completion sound", () => {
+  const { booted, notice, markSend } = localNoticeHarness({ storage: { getItem: () => null, setItem() {}, removeItem() {} } });
+  const frequencies = [];
+  booted.sandbox.AudioContext = class {
+    currentTime = 0;
+    state = "running";
+    destination = {};
+    createOscillator() { return { type: "", frequency: { setValueAtTime(value) { frequencies.push(value); } }, connect() {}, start() {}, stop() {} }; }
+    createGain() { return { gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {} }; }
+  };
+  markSend("s1");
+  notice.emitLocalNotices(new Map([["s1", { running: true }]]), new Map([["s1", { running: false }]]), { "s1": { title: "Done" } });
+  assert.deepEqual(frequencies, [659.25, 783.99, 987.77]);
+  booted.disposeAll();
+});
+
 test("a hidden page takes no hand-off and logs the skip once", () => {
 	for (const type of ["dsh-mobile-maxxing:notify", "rdsh-pwa:notify"]) {
 		const booted = bootWorkerMessages({ visible: false });

@@ -601,6 +601,16 @@ window.__ModuleLoader__.load({
     }
 
     const CSS = `
+.rdsh-update-overlay { position: fixed; inset: 0; z-index: 2147483000; display: grid; place-items: center; padding: 20px; background: var(--dsw-alias-mask, rgba(0,0,0,.72)); }
+.rdsh-update-dialog { box-sizing: border-box; width: min(100%, 420px); padding: 28px; border-radius: 18px; background: var(--dsw-alias-bg-layer-2, #26262a); color: var(--dsw-alias-label-primary, #fff); text-align: center; box-shadow: 0 12px 40px #0008; overflow-wrap: anywhere; }
+.rdsh-update-dialog h2 { font-size: 19px; line-height: 1.4; }
+.rdsh-update-dialog a { color: var(--dsw-alias-link, #8ca6ff); }
+.rdsh-update-check { width: 64px; height: 64px; color: var(--dsw-alias-label-positive, #59c88d); }
+.rdsh-update-actions { display: flex; gap: 12px; justify-content: center; margin-top: 24px; }
+.rdsh-update-actions button { min-height: 44px; min-width: 100px; border: 1px solid var(--dsw-alias-border-l2, #777); border-radius: 10px; font: inherit; color: inherit; background: transparent; }
+.rdsh-update-actions button:last-child { border-color: currentColor; font-weight: 700; }
+.rdsh-update-spinner { margin: 24px auto 0; width: 32px; height: 32px; border: 3px solid var(--dsw-alias-border-l2, #7775); border-top-color: currentColor; border-radius: 50%; animation: rdsh-update-spin .8s linear infinite; }
+@keyframes rdsh-update-spin { to { transform: rotate(360deg); } }
 html[data-dsh-mobile-maxxing="standalone"] #root {
   box-sizing: border-box;
   padding-top: env(safe-area-inset-top, 0px);
@@ -1193,7 +1203,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     function PwaSettingsSection() {
       const s = useStore();
       const [message, setMessage] = useState("");
-      const [busy, setBusy] = useState(false);
 
       const install = async () => {
         const outcome = await promptInstall();
@@ -1201,50 +1210,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           ? t("pwa.install.accepted")
           : outcome === "dismissed" ? t("pwa.install.dismissed") : t("pwa.install.unavailable"));
       };
-      const updatePlugins = async () => {
-        setBusy(true);
-        setMessage("");
-        try {
-          // #109: check version first; only update when a newer one exists.
-          const verRes = await fetch("/dsh-mobile-maxxing/plugin-version");
-          const ver = await verRes.json().catch(() => ({}));
-          const upToDate = ver.current && ver.latest && ver.current === ver.latest
-            && (!ver.localeCurrent || !ver.localeLatest || ver.localeCurrent === ver.localeLatest);
-          if (upToDate) {
-            setMessage(t("pwa.note.pluginsLatest"));
-            return;
-          }
-          const res = await fetch("/dsh-mobile-maxxing/update-plugins", { method: "POST" });
-          const data = await res.json().catch(() => ({}));
-          if (res.ok && data.ok !== false) setMessage(t("pwa.note.pluginsUpdated"));
-          else setMessage(t("pwa.note.pluginsUpdateFailed", { error: data.error || res.status }));
-        } catch (error) {
-          setMessage(t("pwa.note.pluginsUpdateFailed", { error: String(error && error.message || error) }));
-        } finally {
-          setBusy(false);
-        }
-      };
 
-      const check = async () => {
-        setBusy(true);
-        setMessage("");
-        try {
-          const reg = registration ?? (await navigator.serviceWorker.getRegistration());
-          if (reg === null || reg === undefined) {
-            setMessage(t("pwa.check.noWorker"));
-          } else {
-            await reg.update();
-            const waiting = reg.waiting !== null;
-            emit({ updateReady: waiting && navigator.serviceWorker.controller !== null });
-            setMessage(waiting ? t("pwa.check.available") : t("pwa.check.latest"));
-          }
-        } catch {
-          setMessage(t("pwa.check.failed"));
-        } finally {
-          setBusy(false);
-          void pingWorker();
-        }
-      };
 
       return h(
         "section",
@@ -1269,10 +1235,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           h(
             "div",
             { className: "dsh-mobile-maxxing-actions" },
-            s.installable ? h("button", { type: "button", className: "dsh-mobile-maxxing-primary", onClick: install, disabled: busy }, t("pwa.install.button")) : null,
+            s.installable ? h("button", { type: "button", className: "dsh-mobile-maxxing-primary", onClick: install }, t("pwa.install.button")) : null,
             s.updateReady ? h("button", { type: "button", className: "dsh-mobile-maxxing-primary", onClick: () => void applyUpdate() }, t("pwa.action.reloadUpdate")) : null,
-            h("button", { type: "button", onClick: check, disabled: busy }, busy ? t("pwa.action.checking") : t("pwa.action.check")),
-            h("button", { type: "button", onClick: updatePlugins, disabled: busy }, busy ? t("pwa.action.updatingPlugins") : t("pwa.action.updatePlugins")),
           ),
           message !== "" ? h("p", { className: "dsh-mobile-maxxing-note" }, message) : null,
           s.ios && !s.standalone
@@ -1288,6 +1252,56 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     // The mobile settings tab merges this section instead of showing the
     // separate "アプリ" tab.
     globalThis.__RDSH_PWA_SETTINGS_SECTION__ = PwaSettingsSection;
+
+    function UpdateSettingsSection() {
+      const [phase, setPhase] = useState("");
+      const { createPortal } = require("react-dom");
+      const [release, setRelease] = useState("");
+      const [error, setError] = useState("");
+      const repository = "https://github.com/kuraneko1/dsh-mobile-maxxing/releases";
+      const checkRelease = async () => {
+        setPhase("checking"); setError("");
+        try {
+          const response = await fetch("/dsh-mobile-maxxing/plugin-version", { cache: "no-store" });
+          const data = await response.json();
+          if (!response.ok || typeof data.latest !== "string" || typeof data.available !== "boolean") throw new Error(data.error || response.status);
+          setRelease(data.ahead && typeof data.current === "string" ? data.current : data.latest);
+          setPhase(data.available ? "available" : data.ahead ? "ahead" : "latest");
+        } catch (reason) { setError(String(reason?.message || reason)); setPhase("error"); }
+      };
+      const installRelease = async () => {
+        setPhase("installing"); setError("");
+        try {
+          const response = await fetch("/dsh-mobile-maxxing/update-plugins", { method: "POST", headers: { "x-dsh-release": release } });
+          const data = await response.json();
+          if (!response.ok || data.ok !== true || data.version !== release) throw new Error(data.error || response.status);
+          setPhase("done");
+        } catch (reason) { setError(String(reason?.message || reason)); setPhase("install-error"); }
+      };
+      const busy = phase === "checking" || phase === "installing";
+      return h("section", { className: "dsh-mobile-maxxing-section" },
+        h("div", { className: "dsh-mobile-maxxing-cardbox" },
+          h("h3", { className: "dsh-mobile-maxxing-title" }, t("tab.update")),
+          h("button", { type: "button", onClick: () => setPhase("confirm") }, t("pwa.action.check"))),
+        phase !== "" ? createPortal(h("div", { className: "rdsh-update-overlay", role: "dialog", "aria-modal": "true", "aria-labelledby": "rdsh-update-heading", onKeyDown: (event) => { if (event.key === "Escape" && !busy) setPhase(""); if (event.key === "Tab") { const nodes = [...event.currentTarget.querySelectorAll("a[href], button:not([disabled])")]; if (!nodes.length) { event.preventDefault(); return; } const first = nodes[0]; const last = nodes[nodes.length - 1]; if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); } else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); } } } },
+          h("div", { className: "rdsh-update-dialog" },
+            (phase === "latest" || phase === "ahead" || phase === "done") ? h("svg", { className: "rdsh-update-check", viewBox: "0 0 64 64", fill: "none", "aria-hidden": "true" },
+              h("circle", { cx: 32, cy: 32, r: 29, stroke: "currentColor", strokeWidth: 3 }),
+              h("path", { d: "M17 33l10 10 20-22", stroke: "currentColor", strokeWidth: 4, strokeLinecap: "round", strokeLinejoin: "round" })) : null,
+            h("h2", { id: "rdsh-update-heading" }, t({ confirm: "update.confirm", checking: "update.checking", latest: "update.latest", ahead: "update.ahead", available: "update.available", installing: "update.installing", done: "update.done", error: "update.failed", "install-error": "update.installFailed" }[phase])),
+            phase === "confirm" ? h("a", { href: repository, target: "_blank", rel: "noopener noreferrer" }, repository) : null,
+            ["latest", "ahead", "available", "installing", "done"].includes(phase) ? h("p", null, t("update.release", { version: release })) : null,
+            phase === "done" ? h("p", null, t("update.restart")) : null,
+            error ? h("p", { role: "alert" }, error) : null,
+            busy ? h("div", { className: "rdsh-update-spinner", role: "status", "aria-label": t(phase === "checking" ? "update.checking" : "update.installing") }) : null,
+            !busy ? h("div", { className: "rdsh-update-actions" },
+              phase === "confirm" ? h("button", { type: "button", onClick: () => setPhase("") }, t("update.no")) : null,
+              phase === "confirm" ? h("button", { type: "button", autoFocus: true, onClick: () => void checkRelease() }, t("update.yes")) : null,
+              phase === "available" ? h("button", { type: "button", onClick: () => setPhase("") }, t("update.cancel")) : null,
+              phase === "available" ? h("button", { type: "button", autoFocus: true, onClick: () => void installRelease() }, t("update.install")) : null,
+              !["confirm", "available"].includes(phase) ? h("button", { type: "button", autoFocus: true, onClick: () => setPhase("") }, t("update.close")) : null) : null)), document.body) : null);
+    }
+    globalThis.__RDSH_PWA_UPDATE_SECTION__ = UpdateSettingsSection;
 
     // ---------------------------------------------------------------------
     // Wiring
@@ -12127,7 +12141,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     const SOUND_PRESETS = {
       none: { label: t("mux.sound.none"), notes: [[0, 0, 0]] },
       // A short two-note rise: the "something finished" shape.
-      chime: { label: t("mux.sound.chime"), notes: [[880, 0.09, 0.5], [1320, 0.16, 0.16]] },
+      chime: { label: t("mux.sound.chime"), notes: [[659.25, 0.22, 0], [783.99, 0.30, 0.12], [987.77, 0.42, 0.24]] },
       // One soft blip, for questions that should not startle.
       pop: { label: t("mux.sound.pop"), notes: [[660, 0.05, 0.35]] },
       // Three descending notes: distinct without being loud.
@@ -12727,8 +12741,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       return h(
         "div",
         { className: "rdsh-mux-card" },
-        h("h3", { className: "rdsh-mux-title" }, t("localPermission.title")),
-        h("p", { className: "rdsh-mux-desc" }, t("localPermission.desc")),
+        h("h3", { className: "rdsh-mux-title" }, t("mobile.access")),
+        h("p", { className: "rdsh-mux-note" }, t("mobile.accessScope")),
         h(
           "label",
           { className: "rdsh-mux-slider" },
@@ -12750,7 +12764,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         shared === ""
           ? null
           : h("p", { className: "rdsh-mux-note" }, t("localPermission.shared", { preset: sharedLabel })),
-        h("p", { className: "rdsh-mux-note" }, t("localPermission.hostNote")),
         s.permissionError === "" ? null : h("p", { className: "rdsh-mux-note" }, s.permissionError),
         message === "" ? null : h("p", { className: "rdsh-mux-note" }, message),
       );
@@ -12841,11 +12854,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       return h(
         "section",
         { className: "rdsh-mux-section" },
+        onPhone ? h(LocalLanguageSection) : null,
         h(
           "div",
           { className: "rdsh-mux-card" },
           h("h3", { className: "rdsh-mux-title" }, t("mux.deviceTheme.title")),
-          h("p", { className: "rdsh-mux-desc" }, t("mux.deviceTheme.desc")),
           h(
             "label",
             { className: "rdsh-mux-slider" },
@@ -12860,7 +12873,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
               Object.entries(DEVICE_THEME_KEYS).map(([id, key]) => h("option", { key: id, value: id }, t(key))),
             ),
           ),
-          h("p", { className: "rdsh-mux-note" }, t("mux.deviceTheme.note")),
           s.deviceThemeNote === "custom"
             ? h("p", { className: "rdsh-mux-note" }, t("mux.deviceTheme.custom"))
             : null,
@@ -12868,16 +12880,14 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
             ? h("p", { className: "rdsh-mux-note" }, t("mux.deviceTheme.unsupported"))
             : null,
         ),
-        onPhone ? h(LocalPermissionSection) : null,
         h(
           "div",
           { className: "rdsh-mux-card" },
-          h("h3", { className: "rdsh-mux-title" }, t("mux.section.title")),
+          h("h3", { className: "rdsh-mux-title" }, t("mobile.notifications")),
+          h("p", { className: "rdsh-mux-note", role: "status" }, t(!s.notifications.supported ? "mobile.unsupported" : s.notifications.permission === "granted" && s.notifications.subscribed ? "mobile.enabled" : "mobile.disabled")),
           // #15: on a desktop this card must not describe a layout it is not
           // running, and the layout row is a phone/window fact. The
           // notification controls below stay: they are useful everywhere.
-          h("p", { className: "rdsh-mux-desc" }, onPhone ? t("mux.section.desc") : t("mux.section.desc.desktop")),
-          onPhone ? h("p", { className: "rdsh-mux-note" }, t("mux.section.plusNote")) : null,
           h(
             "div",
             { className: "rdsh-mux-actions" },
@@ -12904,7 +12914,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
             ? h("p", { className: "rdsh-mux-note" }, t("mux.note.blocked"))
             : null,
           h("h4", { className: "rdsh-mux-subtitle" }, t("mux.sound.title")),
-          h("p", { className: "rdsh-mux-desc" }, t("mux.sound.desc")),
+          h("p", { className: "rdsh-mux-note" }, t("mobile.soundScope")),
           h(
             "div",
             { className: "rdsh-mux-sound-row" },
@@ -12969,19 +12979,15 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
             }),
             t("mux.notify.deviceTurns"),
           ),
-          h("p", { className: "rdsh-mux-note" }, t("mux.notify.deviceTurns.note")),
-          h("p", { className: "rdsh-mux-note" }, t("mux.note.notifyScope")),
           message !== "" ? h("p", { className: "rdsh-mux-note" }, message) : null,
         ),
-        // Chat view preferences are device-local, so they only exist here.
-        onPhone ? h(LocalChatSettingsSection) : null,
-        // One Mobile tab carries both sections inline; the separate tabs are
-        // no longer registered.
-        onPhone ? h(LocalDisplaySettingsSection) : null,
-        onPhone ? h(InputSection) : null,
-        onPhone && typeof globalThis.__RDSH_PWA_SETTINGS_SECTION__ === "function"
-          ? h(globalThis.__RDSH_PWA_SETTINGS_SECTION__)
-          : null,
+        onPhone ? h(LocalPermissionSection) : null,
+        onPhone ? h("details", { className: "rdsh-mux-more-settings" },
+          h("summary", null, t("mobile.other")),
+          h(LocalChatSettingsSection),
+          h(LocalDisplaySettingsSection),
+          h(InputSection),
+          typeof globalThis.__RDSH_PWA_SETTINGS_SECTION__ === "function" ? h(globalThis.__RDSH_PWA_SETTINGS_SECTION__) : null) : null,
         s.bootError !== "" ? h("p", { className: "rdsh-mux-note" }, t("mux.bootError", { error: s.bootError })) : null,
       );
     }
@@ -13021,11 +13027,21 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * to localStorage and the local projections above; no Host setting is
      * touched.
      */
+    function LocalLanguageSection() {
+      const display = useStore().localDisplay;
+      const available = display.available?.language !== false;
+      return h("div", { className: "rdsh-mux-card" },
+        h("label", { className: "rdsh-mux-slider" }, h("span", null, t("localDisplay.language")),
+          h("select", { className: "rdsh-mux-select", value: display.language, disabled: !available, onChange: (event) => setLocalDisplayLanguage(event.target.value) },
+            h("option", { value: "" }, t("localDisplay.language.system")),
+            (display.languages ?? []).map((entry) => h("option", { key: entry.id, value: entry.id }, entry.label)))),
+        !available ? h("p", { className: "rdsh-mux-note" }, t("localDisplay.reason.localeMissing")) : null);
+    }
+
     function LocalDisplaySettingsSection() {
       const s = useStore();
       const display = s.localDisplay;
       const fonts = display.fonts ?? { text: 14, code: 11, terminal: 13 };
-      const languages = display.languages ?? [];
       const available = display.available ?? { fonts: true, language: true };
       const reasons = display.reason ?? {};
       const reasonText = (kind) => {
@@ -13090,26 +13106,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
             t("localDisplay.terminalDark"),
           ),
           h("p", { className: "rdsh-mux-note" }, t("localDisplay.terminalDark.note")),
-          h(
-            "label",
-            { className: "rdsh-mux-slider" },
-            h("span", null, t("localDisplay.language")),
-            h(
-              "select",
-              {
-                className: "rdsh-mux-select",
-                value: display.language,
-                disabled: available.language === false,
-                onChange: (event) => setLocalDisplayLanguage(event.target.value),
-              },
-              h("option", { value: "" }, t("localDisplay.language.system")),
-              languages.map((entry) => h("option", { key: entry.id, value: entry.id }, entry.label)),
-            ),
-          ),
-          available.language === false
-            ? h("p", { className: "rdsh-mux-note" }, t("localDisplay.unavailable", { reason: reasonText("language") }))
-            : h("p", { className: "rdsh-mux-note" }, t("localDisplay.language.note")),
-          h("p", { className: "rdsh-mux-note" }, t("localDisplay.note")),
         ),
       );
     }
@@ -13193,6 +13189,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
 
 .rdsh-mux-section { display: flex; flex-direction: column; gap: 12px; color: var(--dsw-alias-label-primary, #f9fafb); }
+.rdsh-mux-more-settings > summary { cursor: pointer; min-height: 44px; padding: 12px; box-sizing: border-box; }
+.rdsh-mux-more-settings > *:not(summary) { margin-top: 12px; }
 .rdsh-mux-card {
   border: .5px solid var(--dsw-alias-settings-card-stroke, var(--dsw-alias-border-l3, rgba(255,255,255,.12)));
   background: var(--dsw-alias-settings-card-fill, transparent);
@@ -15452,6 +15450,12 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           order: -1,
           label: () => t("tab.mobile"),
         }, MobileSection));
+        if (phone()) ctx.slots.inject("settings.section", () => ctx.slots.register({
+          name: "settings.section",
+          id: "mobile-update",
+          order: 0,
+          label: () => t("tab.update"),
+        }, globalThis.__RDSH_PWA_UPDATE_SECTION__));
       },
     };
     }

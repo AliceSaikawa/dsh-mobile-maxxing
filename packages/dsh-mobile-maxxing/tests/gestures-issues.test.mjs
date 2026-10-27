@@ -40,6 +40,7 @@ class FakeEvent {
 		this.type = type;
 		this.bubbles = init.bubbles === true;
 		this.cancelable = init.cancelable === true;
+		this.pointerId = init.pointerId;
 		this.defaultPrevented = false;
 		this.propagationStopped = false;
 	}
@@ -1846,7 +1847,7 @@ test("#78 the mobile terminal gets one labelled, ordered key row above xterm", (
 	assert.ok(terminal.section.children.indexOf(row) < terminal.section.children.indexOf(terminal.screen), "the row is not above the xterm mount");
 	assert.equal(row.getAttribute("role"), "group");
 	assert.equal(row.getAttribute("aria-label"), COPY.en["terminalKeys.label"]);
-	assert.deepEqual(row.children.map((button) => button.getAttribute("data-rdsh-terminal-key")), ["escape", "tab", "up", "down", "left", "right", "ctrl", "menu"]);
+	assert.deepEqual(row.children.map((button) => button.getAttribute("data-rdsh-terminal-key")), ["escape", "tab", "up", "down", "left", "right", "ctrl"]);
 	assert.equal(terminalKeyButton(row, "escape").textContent, "Esc");
 	assert.equal(terminalKeyButton(row, "tab").textContent, "Tab");
 	assert.equal(terminalKeyButton(row, "up").getAttribute("aria-label"), "Arrow up");
@@ -1861,32 +1862,7 @@ test("#78 the mobile terminal gets one labelled, ordered key row above xterm", (
 	booted.disposeAll();
 });
 
-test("terminal menu scales the xterm surface without focusing the keyboard", () => {
-	const booted = bootGestures({ narrow: true });
-	const terminal = terminalFixture(booted.doc, panelFixture(booted.doc), keyEmulator());
-	booted.drainFrames();
-	const row = terminalKeyRow(terminal);
-	pressTerminalKey(row, "menu");
-	const menu = booted.doc.body.children.find((node) => node.className === "rdsh-terminal-menu");
-	assert.ok(menu);
-	assert.equal(terminal.textarea.focusCount, 0);
-	const [toggle, label] = menu.children;
-	const slider = label.children[0];
-	assert.equal(slider.disabled, true);
-	toggle.dispatchEvent(new FakeEvent("click"));
-	assert.equal(terminal.screen.style.zoom, "0.5");
-	assert.equal(terminal.screen.style.width, "100%");
-	assert.equal(slider.disabled, false);
-	slider.value = "40";
-	slider.dispatchEvent(new FakeEvent("input"));
-	assert.equal(terminal.screen.style.zoom, "0.4");
-	assert.equal(terminal.screen.style.width, "100%");
-	toggle.dispatchEvent(new FakeEvent("click"));
-	assert.equal(terminal.section.hasAttribute("data-rdsh-terminal-virtual"), false);
-	booted.disposeAll();
-});
-
-test("off-screen floats are stored and restored through the session store", () => {
+test("existing off-screen floats remain recoverable", () => {
 	const booted = bootGestures({ narrow: true });
 	const float = new FakeElement("div");
 	float.setAttribute("data-dockkit-float", "pane-1");
@@ -1915,17 +1891,25 @@ test("off-screen floats are stored and restored through the session store", () =
 	booted.disposeAll();
 });
 
-test("holding a tab without dragging opens its window menu", () => {
+test("dropping a dock tab outside cancels floating, while in-panel drops remain", () => {
 	const booted = bootGestures({ narrow: true });
-	booted.drainFrames();
-	const { tab, target } = tabFixture();
-	tab.setAttribute("data-dockkit-tab", "tab-1");
-	booted.handler("pointerdown", "onPointerDown")(pointerEvent(target, 100, 50));
-	booted.runTimers(450);
-	const menu = booted.doc.body.children.find((node) => node.className === "rdsh-tab-float-menu");
-	assert.ok(menu);
-	assert.equal(menu.children[0].textContent, COPY.en["mux.showWindow"]);
-	booted.handler("pointerup", "onPointerUp")(pointerEvent(target, 100, 50));
+	const cancel = [];
+	booted.sandbox.window.dispatchEvent = (event) => cancel.push(event);
+	const surface = new FakeElement("div");
+	surface._rect = () => ({left: 0, top: 50, right: 390, bottom: 800});
+	const tab = new FakeElement("div");
+	tab._closest = (selector) => selector === "[data-dockkit-surface]" ? surface : null;
+	const target = new FakeElement("div");
+	target._closest = (selector) => selector === "[data-sidebar-right-panel] [data-dockkit-tab]" ? tab : null;
+	const down = booted.handler("pointerdown", "onPointerDown");
+	const up = booted.handler("pointerup", "onPointerUp");
+	down(pointerEvent(target, 100, 100));
+	up(pointerEvent(target, 100, 200));
+	assert.equal(cancel.length, 0, "in-panel reordering and splitting remain available");
+	down(pointerEvent(target, 100, 100));
+	up(pointerEvent(target, 100, 30));
+	assert.equal(cancel.length, 1, "outside drop must cancel the upstream drag");
+	assert.equal(cancel[0].type, "pointercancel");
 	booted.disposeAll();
 });
 

@@ -330,7 +330,7 @@ function assetPath(file) {
  */
 function runPluginUpdate() {
 	return new Promise((resolve, reject) => {
-		const child = spawn("dsh", ["plugin", "--profile", "web", "add", "kuraneko1/dsh-mobile-maxxing"], {
+		const child = spawn("dsh", ["plugin", "--profile", "web", "add", "kuraneko1/dsh-mobile-maxxing", "kuraneko1/dsh-locale-ja"], {
 			stdio: ["ignore", "pipe", "pipe"],
 			timeout: 120000,
 		});

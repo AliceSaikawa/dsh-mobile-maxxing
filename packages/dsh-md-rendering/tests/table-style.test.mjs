@@ -53,8 +53,7 @@ test('mobile registers a stylesheet only inside the mobile chat', () => {
 
 test('the mobile URL carries the table style without a second dependency', () => {
   const mobile = readFileSync(new URL('../../dsh-mobile-maxxing/client.js', import.meta.url), 'utf8');
-  assert.match(mobile, /data-dsh-md-rendering/);
-  assert.match(mobile, /id: "dsh-md-rendering-table-styles"/);
+  assert.match(mobile, /phoneStyle.textContent = CSS_PHONE \+ MD_TABLE_CSS/);
   assert.match(mobile, /html\[data-rdsh-device-mode="mobile"\] \[data-chat-flow-kind="assistant-step"\] div > table th/);
 });
 

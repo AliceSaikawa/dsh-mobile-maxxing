@@ -12745,10 +12745,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         font-family: "SF Mono", "Fira Code", "Cascadia Code", "JetBrains Mono", Menlo, monospace;
       }
     `;
-    function MarkdownTableStyles() {
-      return h("style", { "data-dsh-md-rendering": "" }, MD_TABLE_CSS);
-    }
-
     function MobileSection() {
       const s = useStore();
       // The rows this section keeps are decided by the device, not the window
@@ -14852,7 +14848,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         if (phone()) {
           phoneStyle = document.createElement("style");
           phoneStyle.setAttribute("data-rdsh-mux-style", "phone");
-          phoneStyle.textContent = CSS_PHONE;
+          phoneStyle.textContent = CSS_PHONE + MD_TABLE_CSS;
           document.head.append(phoneStyle);
         }
 
@@ -15342,11 +15338,6 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           id: "rdsh-mobile-ux-notifications",
           order: 92,
         }, NotificationWatcher));
-        ctx.slots.inject("shell.overlay", () => ctx.slots.register({
-          name: "shell.overlay",
-          id: "dsh-md-rendering-table-styles",
-          order: 93,
-        }, MarkdownTableStyles));
         ctx.slots.inject("conversation.composer.dock", () => ctx.slots.register({
           name: "conversation.composer.dock",
           id: "rdsh-mobile-ux-live-speed",

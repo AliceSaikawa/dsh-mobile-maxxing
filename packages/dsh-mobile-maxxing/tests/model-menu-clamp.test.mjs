@@ -20,8 +20,9 @@ import vm from "node:vm";
 
 const source = readFileSync(new URL("../client.js", import.meta.url), "utf8");
 const block = source.match(/    let modelSearchState = null;[\s\S]*?\n    function decorateModelSearch\(\) \{[\s\S]*?\n    \}/)[0];
-const MENU_SELECTOR = '[class*="_7KE1Ra_menu"]';
-const ROW_SELECTOR = '[class*="_7KE1Ra_searchRow"]';
+// #97: matched by class suffix and menu role instead of a literal hash.
+const MENU_SELECTOR = '[class*="_menu"][role="menu"], [class*="_menu"][role="group"]';
+const ROW_SELECTOR = '[class*="_searchRow"]';
 
 /** The inline-style surface the menu and this module share. */
 function styleSheet(initial = {}) {
@@ -116,7 +117,17 @@ function fixture({ mobile = true, width = 390, visualWidth = width, insetLeft = 
 	let menu = null;
 	const frames = [];
 	const observers = [];
-	const state = { mobile };
+	const state = { mobile, insetLeft, insetRight, visualWidth, viewportLeft };
+	const bandListeners = { window: [], viewport: [] };
+	const listen = (target) => ({
+		addEventListener(type, handler) {
+			bandListeners[target].push({ type, handler });
+		},
+		removeEventListener(type, handler) {
+			const at = bandListeners[target].findIndex((entry) => entry.type === type && entry.handler === handler);
+			if (at !== -1) bandListeners[target].splice(at, 1);
+		},
+	});
 	class FakeMutationObserver {
 		constructor(callback) {
 			this.callback = callback;
@@ -145,9 +156,21 @@ function fixture({ mobile = true, width = 390, visualWidth = width, insetLeft = 
 		document,
 		window: {
 			innerWidth: width,
-			visualViewport: { width: visualWidth, offsetLeft: viewportLeft },
+			...listen("window"),
+			visualViewport: {
+				...listen("viewport"),
+				get width() {
+					return state.visualWidth;
+				},
+				get offsetLeft() {
+					return state.viewportLeft;
+				},
+			},
 		},
-		safeInset: (edge) => (edge === "left" ? insetLeft : edge === "right" ? insetRight : 0),
+		safeInset: (edge) => (edge === "left" ? state.insetLeft : edge === "right" ? state.insetRight : 0),
+		// The block's structural menu lookup reads these from the module scope.
+		modelTrigger: () => null,
+		clearOwnedAttribute: () => {},
 		MutationObserver: FakeMutationObserver,
 		requestAnimationFrame(callback) {
 			frames.push(callback);
@@ -174,6 +197,16 @@ function fixture({ mobile = true, width = 390, visualWidth = width, insetLeft = 
 		},
 		flushFrames: () => {
 			for (const callback of frames.splice(0)) callback();
+		},
+		band: {
+			count: (target) => bandListeners[target].length,
+			fire: (type) => {
+				for (const target of ["window", "viewport"]) {
+					for (const entry of [...bandListeners[target]]) {
+						if (entry.type === type) entry.handler();
+					}
+				}
+			},
 		},
 	};
 }
@@ -239,6 +272,34 @@ test("#84 dispose disconnects the style observer and drops the width cap", () =>
 	picker.menu.style.left = "12px";
 	observer.trigger();
 	assert.equal(picker.menu.style.left, "12px", "the disconnected observer still wrote the menu");
+});
+
+test("#84 a band change re-clamps without upstream rewriting left", () => {
+	const f = fixture({ width: 390 });
+	const picker = f.open({ left: "12px", width: 300 });
+	f.decorate();
+	assert.equal(picker.menu.style.left, "12px", "setup moved a menu inside the band");
+	// The phone rotates: the notch moves to the left edge. Nothing writes the
+	// menu's inline left, so only the band listener can re-run the clamp.
+	f.state.insetLeft = 59;
+	f.band.fire("resize");
+	assert.equal(picker.menu.style.left, "67px", "the band change did not re-run the clamp");
+	// A keyboard pan reports through the visual viewport's own scroll event.
+	f.state.insetLeft = 0;
+	f.state.visualWidth = 240;
+	f.band.fire("scroll");
+	assert.equal(picker.menu.style.left, "8px", "the visual viewport scroll was not watched");
+});
+
+test("#84 dispose removes the band listeners", () => {
+	const f = fixture({ width: 390 });
+	f.open({ left: "12px", width: 300 });
+	f.decorate();
+	assert.equal(f.band.count("window"), 2, "the window band listeners were not installed");
+	assert.equal(f.band.count("viewport"), 2, "the visual viewport band listeners were not installed");
+	f.clear();
+	assert.equal(f.band.count("window"), 0, "dispose kept the window band listeners");
+	assert.equal(f.band.count("viewport"), 0, "dispose kept the visual viewport band listeners");
 });
 
 test("#84 the root pane is clamped even though it has no search field", () => {

@@ -849,11 +849,14 @@ function panelFixture(doc, width = 390) {
 	const collapse = new FakeElement("button");
 	panel._closest = (selector) => (selector === "[data-sidebar-right-panel]" ? root : null);
 	panel._rect = () => ({ x: 0, y: 0, top: 0, left: 0, right: width, bottom: 800, width, height: 800 });
+	// #97: upstream marks the toggle with a stable data attribute; the label is
+	// localised and only a fallback.
+	collapse.setAttribute("data-sidebar-right-toggle", "");
 	collapse.setAttribute("aria-label", "Collapse right sidebar");
 	collapse._closest = (selector) => (selector === "[data-sidebar-right-panel]" ? root : null);
 	collapse._rect = () => ({ x: width - 90, y: 10, top: 10, left: width - 90, right: width - 66, bottom: 34, width: 24, height: 24 });
 	collapse.parentElement = panel;
-	doc.querySelectorAll = (selector) => (selector === '[aria-label="Collapse right sidebar"]' ? [collapse] : []);
+	doc.querySelectorAll = (selector) => (selector.includes("data-sidebar-right-toggle") ? [collapse] : []);
 	return { root, panel, collapse };
 }
 
@@ -895,6 +898,105 @@ test("a swipe that starts on the tab strip or header does not close the panel", 
 	// The ✕ itself is a plain button click, not a swipe.
 	collapse.click();
 	assert.equal(collapse.clicks, 2, "the collapse button still closes");
+	booted.disposeAll();
+});
+
+/* ---------------------------------------------------------------------- */
+/* #59: docked panel swipes and the rotation reset                        */
+/* ---------------------------------------------------------------------- */
+
+/** A landscape dock: the panel owns the right column, the chat the rest. */
+function dockFixture(doc, { viewport = 844, dock = 380 } = {}) {
+	const root = new FakeElement("div");
+	const panel = new FakeElement("div");
+	const collapse = new FakeElement("button");
+	root.setAttribute("data-sidebar-right-open", "");
+	for (const node of [root, panel]) {
+		node._closest = (selector) => (selector === "[data-sidebar-right-panel]" ? root : null);
+	}
+	root._rect = () => ({ x: viewport - dock, y: 0, top: 0, left: viewport - dock, right: viewport, bottom: 390, width: dock, height: 390 });
+	panel._rect = root._rect;
+	collapse.setAttribute("data-sidebar-right-toggle", "");
+	collapse._closest = (selector) => (selector === "[data-sidebar-right-panel]" ? root : null);
+	collapse._rect = () => ({ x: viewport - 34, y: 10, top: 10, left: viewport - 34, right: viewport - 6, bottom: 38, width: 28, height: 28 });
+	collapse.parentElement = panel;
+	doc.querySelectorAll = (selector) => (selector.includes("data-sidebar-right-toggle") ? [collapse] : []);
+	return { root, panel, collapse };
+}
+
+test("#59 a docked panel closes only under a swipe that starts on it", () => {
+	const booted = bootGestures({ narrow: false, mode: "mobile", width: 844 });
+	const { collapse } = dockFixture(booted.doc);
+	booted.drainFrames();
+	assert.equal(booted.doc.documentElement.hasAttribute("data-rdsh-rightpanel-open"), true, "the dock is not open");
+
+	const start = booted.handler("touchstart", "onEdgeSwipeStart");
+	const move = booted.handler("touchmove", "onEdgeSwipeMove");
+	const touch = (x, y = 200) => ({ cancelable: true, prevented: 0, preventDefault() { this.prevented += 1; }, touches: [{ clientX: x, clientY: y }] });
+	const body = new FakeElement("div");
+	body._closest = () => null;
+
+	// The conversation column keeps its own gesture: it does not reach across
+	// the split and collapse the dock under the finger.
+	start({ touches: [{ clientX: 200, clientY: 200 }], target: body });
+	move(touch(320, 200));
+	assert.equal(collapse.clicks, 0, "a swipe on the chat closed the docked panel");
+
+	// A swipe that starts on the panel still closes it.
+	start({ touches: [{ clientX: 600, clientY: 200 }], target: body });
+	move(touch(720, 200));
+	assert.equal(collapse.clicks, 1, "the panel's own swipe no longer closes it");
+	booted.disposeAll();
+});
+
+/** A phone panel with dockkit's fullscreen control and its once-marker. */
+function promoteFixture(doc, { viewport = 390, fired = "1" } = {}) {
+	const root = new FakeElement("div");
+	const panel = new FakeElement("div");
+	const collapse = new FakeElement("button");
+	const fullscreen = new FakeElement("button");
+	root.setAttribute("data-sidebar-right-open", "");
+	for (const node of [root, panel, collapse, fullscreen]) {
+		node._closest = (selector) => (selector === "[data-sidebar-right-panel]" ? root : null);
+	}
+	root._rect = () => ({ x: 0, y: 0, top: 0, left: 0, right: viewport, bottom: 844, width: viewport, height: 844 });
+	panel._rect = root._rect;
+	collapse.setAttribute("data-sidebar-right-toggle", "");
+	collapse._rect = () => ({ x: viewport - 34, y: 10, top: 10, left: viewport - 34, right: viewport - 6, bottom: 38, width: 28, height: 28 });
+	collapse.parentElement = panel;
+	fullscreen.setAttribute("aria-label", "Fullscreen");
+	if (fired !== null) fullscreen.setAttribute("data-rdsh-auto-fired", fired);
+	fullscreen._rect = () => ({ x: viewport - 70, y: 10, top: 10, left: viewport - 70, right: viewport - 42, bottom: 38, width: 28, height: 28 });
+	fullscreen.parentElement = panel;
+	doc.querySelectorAll = (selector) => {
+		if (selector.includes("data-sidebar-right-toggle")) return [collapse];
+		if (selector.includes("Fullscreen") || selector.includes("全画面表示")) return [fullscreen];
+		if (selector === "[data-rdsh-auto-fired]") return [fullscreen];
+		return [];
+	};
+	return { root, panel, collapse, fullscreen };
+}
+
+test("#59 a rotation re-arms the panel's fullscreen promotion", async () => {
+	const booted = bootGestures({ narrow: true });
+	const { fullscreen } = promoteFixture(booted.doc);
+	booted.drainFrames();
+	assert.equal(fullscreen.clicks, 0, "the once-marker did not suppress the second click");
+	// The slow decorate pass is rate-limited by wall-clock time.
+	await new Promise((resolve) => setTimeout(resolve, 950));
+
+	// A width change is what a rotation reports: the panel that was docked in
+	// landscape must be promoted again so the upright phone never shows it as a
+	// narrow column.
+	booted.sandbox.window.innerWidth = 844;
+	const resize = booted.windowHandlers.filter(([type]) => type === "resize").at(-1)?.[1];
+	assert.equal(typeof resize, "function", "the resize handler is missing");
+	resize();
+	assert.equal(fullscreen.hasAttribute("data-rdsh-auto-fired"), false, "the rotation kept the promotion disarmed");
+	booted.drainFrames();
+	booted.runTimers(350);
+	booted.drainFrames();
+	assert.equal(fullscreen.clicks, 1, "the upright phone did not promote the docked panel");
 	booted.disposeAll();
 });
 
@@ -989,7 +1091,7 @@ function terminalFixture(doc, collapseFixture, emulator = null) {
 	doc.querySelectorAll = (selector) => {
 		if (selector === "[data-sidebar-terminal]") return [section];
 		if (selector === "[data-rdsh-terminal-fit]") return screen.hasAttribute("data-rdsh-terminal-fit") ? [screen] : [];
-		if (selector === '[aria-label="Collapse right sidebar"]') return [collapseFixture.collapse];
+		if (selector.includes("data-sidebar-right-toggle")) return [collapseFixture.collapse];
 		if (selector === "[data-rdsh-rightpanel]") return [];
 		return [];
 	};

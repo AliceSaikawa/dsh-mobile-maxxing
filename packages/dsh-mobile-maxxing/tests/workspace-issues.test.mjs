@@ -1264,6 +1264,33 @@ test("#83 the clear button sits beside search, starts hidden and shows while typ
 	assert.equal(tree.readme.hasAttribute("data-rdsh-files-hidden"), false, "typing filtered without a submit");
 });
 
+test("#83 the clear button is visible while the field is focused, before the first keystroke", () => {
+	const run = boot();
+	run.reset();
+	const tree = filesTree(run.document);
+	run.tools.decorateWorkspaceFiles();
+	const search = tree.root.querySelector("[data-rdsh-files-search]");
+	const input = search.querySelector("input");
+	const clear = search.querySelector("[data-rdsh-files-search-clear]");
+	assert.equal(clear.hidden, true, "the clear button started visible on an empty field");
+
+	// Tapping the field is the state the user is in while typing on a phone;
+	// the reveal used to wait for the soft keyboard's `input` event.
+	run.document.activeElement = input;
+	input.dispatchEvent(event("focus", input));
+	assert.equal(clear.hidden, false, "focusing the field did not reveal the clear button");
+
+	run.document.activeElement = run.document.body;
+	input.dispatchEvent(event("blur", input));
+	assert.equal(clear.hidden, true, "an empty field kept the clear button after blur");
+
+	// WebKit's native cancel can emit only `search`; the state follows it too.
+	input.value = "app";
+	input.dispatchEvent(event("search", input));
+	assert.equal(clear.hidden, false, "the native search event did not reveal the clear button");
+	assert.equal(input.value, "app", "the search event filtered without a submit");
+});
+
 test("#83 clear drops hiding, highlight and the no-hit row, then focuses the field", () => {
 	const run = boot();
 	run.reset();

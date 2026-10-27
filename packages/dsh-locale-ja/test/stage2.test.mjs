@@ -60,7 +60,7 @@ function seedHash(dictionarySet) {
 }
 
 function temporaryDirectory(t) {
-	const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'rdsh-locale-ja-stage2-'));
+	const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-locale-ja-stage2-'));
 	t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
 	return directory;
 }
@@ -173,7 +173,7 @@ test('the client registers through the DSH browser module loader, not an ES modu
 	// accepted shape is window.__ModuleLoader__.load({ id, factory }). Raw ESM
 	// exports fail to parse there ("Unexpected token 'export'") and register
 	// nothing, which the loader reports as "loaded without registering".
-	assert.deepEqual(browserClient.registration.id, 'rdsh-locale-ja');
+	assert.deepEqual(browserClient.registration.id, 'dsh-locale-ja');
 	assert.deepEqual(Object.keys(browserClient.registration).sort(), ['factory', 'id']);
 	assert.equal(typeof browserClient.registration.factory, 'function');
 	assert.equal(typeof browserClient.exports.apply, 'function');
@@ -187,7 +187,7 @@ test('the client registers through the DSH browser module loader, not an ES modu
 	assert.doesNotMatch(clientSource, /^import\s/mu, 'the client bundle must not use ES module imports');
 });
 
-test('single ownership: rdsh-locale-ja is the only ja owner', () => {
+test('single ownership: dsh-locale-ja is the only ja owner', () => {
 	const source = fs.readFileSync(path.join(packageDir, 'client.js'), 'utf8');
 	assert.equal((source.match(/\.addLanguage\(/gu) ?? []).length, 1, 'client.js must own exactly one addLanguage call');
 	assert.equal((source.match(/\.register\(/gu) ?? []).length, EXPECTED_NAMESPACES, 'client.js must register every namespace');
@@ -635,8 +635,8 @@ test('work/ is gitignored and is not part of the shipped package files', () => {
 	assert.equal(manifest.files.some((file) => file === 'work' || file.startsWith('work/')), false);
 	assert.equal(Object.keys(manifest.exports).some((key) => key.includes('work')), false);
 	for (const file of manifest.files) assert.equal(file.includes('work'), false, 'work must not be shipped: ' + file);
-	const ignored = spawnSync('git', ['check-ignore', '-q', path.join('packages', 'rdsh-locale-ja', 'work', 'out', 'probe.json')], { cwd: path.resolve(packageDir, '..', '..') });
+	const ignored = spawnSync('git', ['check-ignore', '-q', path.join('packages', 'dsh-locale-ja', 'work', 'out', 'probe.json')], { cwd: path.resolve(packageDir, '..', '..') });
 	assert.equal(ignored.status, 0, 'work/out/probe.json must be ignored by git');
-	const tracked = execFileSync('git', ['ls-files', 'packages/rdsh-locale-ja/work'], { cwd: path.resolve(packageDir, '..', '..'), encoding: 'utf8' });
+	const tracked = execFileSync('git', ['ls-files', 'packages/dsh-locale-ja/work'], { cwd: path.resolve(packageDir, '..', '..'), encoding: 'utf8' });
 	assert.equal(tracked.trim(), '');
 });

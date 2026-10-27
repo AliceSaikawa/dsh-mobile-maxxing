@@ -41,7 +41,7 @@ export const COPY = {
 		"localDisplay.terminalDark.note": "Keeps the terminal dark while the surrounding UI and the shared theme stay unchanged. Saved in this browser only.",
 		"localDisplay.language": "Display language",
 		"localDisplay.language.system": "System",
-		"localDisplay.language.note": "Changes the DSH UI language on this device only. It does not change the shared Host setting.",
+		"localDisplay.language.note": "System follows this device's language when DSH has a pack for it, and the shared Host language otherwise. The choice stays on this device and never changes the shared Host setting.",
 		"localDisplay.note": "Saved only in this browser. Other devices keep their own display choices.",
 		"localDisplay.unavailable": "Not adjustable here ({reason})",
 		"localDisplay.reason.themeMissing": "The theme service is not available.",
@@ -210,7 +210,7 @@ export const COPY = {
 
 		// --- session frame palette ------------------------------------------
 		"frame.menu": "Color frame",
-		"frame.paletteAria": "Session frame color",
+		"frame.paletteAria": "Frame color",
 		"frame.paletteTitle": "Frame color",
 		"frame.color.blue": "Blue",
 		"frame.color.green": "Green",
@@ -245,6 +245,7 @@ export const COPY = {
 		"notify.testBody": "This banner is how it arrives while the app is open.",
 		"notify.testLocalBody": "Notifications are on. Agent questions will arrive here.",
 		"notify.noWorker": "No service worker is registered",
+		"notify.notSubscribed": "Notifications are not enabled on this device",
 		"notify.open": "Open",
 		"notify.permission.unsupported": "Not supported in this browser",
 		"notify.permission.granted": "On (subscribed)",
@@ -264,12 +265,12 @@ export const COPY = {
 		"notify.previewQuestion": "Continue as is?",
 		"notify.testPayloadBody": "Tap to open this session.",
 
+		// --- agent question card ---------------------------------------------
+		"question.selectRequired": "Select at least one option to continue.",
+
 		// --- composer / session menu ----------------------------------------
 		"add.label": "Add image or file",
 		"add.stock": "Add files or run commands",
-		"sessionId.label": "Copy Session ID to clipboard",
-		"sessionId.copied": "Session ID copied",
-		"sessionId.manualPrompt": "Session ID (copy it manually)",
 
 		// --- workspace picker / right-panel files ---------------------------
 		"workspace.search.placeholder": "Search workspaces",
@@ -321,7 +322,7 @@ export const COPY = {
 		"localDisplay.terminalDark.note": "周囲の画面と共有テーマは変えず、ターミナルだけを暗い配色にします。このブラウザにだけ保存されます。",
 		"localDisplay.language": "表示言語",
 		"localDisplay.language.system": "システム",
-		"localDisplay.language.note": "この端末の DSH UI の表示言語だけを変更します。共有のホスト設定は変更しません。",
+		"localDisplay.language.note": "「システム」は、対応する言語パックがある場合はこの端末の言語に従います。無ければ共有のホスト言語に従います。設定はこの端末にだけ保存され、共有のホスト設定は変更しません。",
 		"localDisplay.note": "このブラウザだけに保存されます。他の端末の表示設定は変わりません。",
 		"localDisplay.unavailable": "ここでは変更できません（{reason}）",
 		"localDisplay.reason.themeMissing": "テーマサービスがありません。",
@@ -490,7 +491,7 @@ export const COPY = {
 
 		// --- session frame palette ------------------------------------------
 		"frame.menu": "色枠",
-		"frame.paletteAria": "セッションの枠色",
+		"frame.paletteAria": "枠の色",
 		"frame.paletteTitle": "枠の色",
 		"frame.color.blue": "ブルー",
 		"frame.color.green": "グリーン",
@@ -525,6 +526,7 @@ export const COPY = {
 		"notify.testBody": "アプリを開いているときは、このバナーで届きます。",
 		"notify.testLocalBody": "通知が有効です。エージェントが質問したときにここへ届きます。",
 		"notify.noWorker": "サービスワーカーが未登録です",
+		"notify.notSubscribed": "この端末では通知が有効になっていません",
 		"notify.open": "開く",
 		"notify.permission.unsupported": "このブラウザは非対応",
 		"notify.permission.granted": "有効（購読済み）",
@@ -544,12 +546,12 @@ export const COPY = {
 		"notify.previewQuestion": "このまま進めますか？",
 		"notify.testPayloadBody": "タップするとこのセッションが開きます。",
 
+		// --- agent question card ---------------------------------------------
+		"question.selectRequired": "選択肢を1つ以上選んでください。",
+
 		// --- composer / session menu ----------------------------------------
 		"add.label": "画像やファイルを追加",
 		"add.stock": "ファイルを追加またはコマンドを実行",
-		"sessionId.label": "セッションIDをコピー",
-		"sessionId.copied": "セッションIDをコピーしました",
-		"sessionId.manualPrompt": "セッションID（手動でコピーしてください）",
 
 		// --- workspace picker / right-panel files ---------------------------
 		"workspace.search.placeholder": "ワークスペースを検索",
@@ -643,6 +645,22 @@ export const PROBES = {
 	split: ["Split", "分割"],
 	/** The Conversation view tab that opens the Trajectory view (#75). */
 	trajectoryTab: ["Trajectory", "軌跡", "轨迹", "トラジェクトリ"],
+	/** The composer's model trigger. The label carries the current model and
+	 *  effort, so only its opening words are stable ("モデルを選択（現在 …）"). */
+	modelTrigger: ["Select model", "选择模型", "モデルを選択"],
+	/** The breadcrumb navigation above the chat (#97). */
+	sessionHierarchy: ["Session hierarchy", "会话层级", "セッション階層"],
+	/** A session row's "..." trigger: en puts it first, zh/ja attach it to the
+	 *  session name ("{name} のセッション操作"). */
+	sessionActions: ["Session actions", "的操作", "のセッション操作"],
+	/** The edit summary card's headline, with {count} as the file count. */
+	editedFiles: ["Edited {count} files", "已编辑 {count} 个文件", "{count} ファイルを編集しました"],
+	/** The left drawer's toggle, in both states. */
+	sidebarOpen: ["Open sidebar", "打开侧边栏", "サイドバーを開く"],
+	sidebarCollapse: ["Collapse sidebar", "收起侧边栏", "サイドバーを折りたたむ"],
+	/** The right panel's toggle, in both states. */
+	rightPanelOpen: ["Open right sidebar", "打开右侧边栏", "右サイドバーを開く"],
+	rightPanelCollapse: ["Collapse right sidebar", "收起右侧边栏", "右サイドバーを折りたたむ"],
 };
 
 /** Keys the service worker needs, picked out of {@link COPY}. */

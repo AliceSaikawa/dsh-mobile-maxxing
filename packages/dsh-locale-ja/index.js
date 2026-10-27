@@ -1,5 +1,5 @@
 /**
- * rdsh-locale-ja — generated host entry. Do not edit by hand.
+ * dsh-locale-ja — generated host entry. Do not edit by hand.
  *
  * The host half is intentionally empty: this is a pure browser plugin. The
  * locale dictionaries and addLanguage/register calls live in ./client.js,

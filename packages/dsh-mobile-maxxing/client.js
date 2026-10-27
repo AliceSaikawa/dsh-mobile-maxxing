@@ -3,8 +3,8 @@ window.__ModuleLoader__.load({
   factory(require) {
     // dsh-mobile-maxxing — browser half.
     //
-    // One module carries three behaviours that used to be separate plugins:
-    // the PWA shell, the mobile-device UX, and the session-id copy row.
+    // One module carries two behaviours that used to be separate plugins:
+    // the PWA shell and the mobile-device UX.
     // They ship together because the client module system maps one package to
     // one browser module: a package cannot register several.
     //
@@ -48,6 +48,11 @@ window.__ModuleLoader__.load({
     let localDisplayStoredLanguage = "";
     /** The shared DSH locale, tracked so "System" copy follows the shell. */
     let localDisplayHostLanguage = "";
+    /**
+     * The language "System" projects on this device (#103), or "" when the
+     * device offers no supported language and the shared Host applies.
+     */
+    let localDisplaySystemLanguage = "";
 
     /**
      * The language host injected for this page, then the document language,
@@ -68,8 +73,13 @@ window.__ModuleLoader__.load({
       const local = knownLang(localDisplayLanguage);
       if (local !== "") return local;
       if (localDisplayLanguage !== "") return "en";
-      // With a locale service, "System" means the shared DSH UI language, not
-      // the host's independent ja-by-default copy global.
+      // "System" follows this device's language when a pack exists for it
+      // (#103); the shared Host language is only the fallback.
+      const system = knownLang(localDisplaySystemLanguage);
+      if (system !== "") return system;
+      if (localDisplaySystemLanguage !== "") return "en";
+      // With a locale service, the fallback is the shared DSH UI language,
+      // not the host's independent ja-by-default copy global.
       const host = knownLang(localDisplayHostLanguage);
       if (host !== "") return host;
       if (localDisplayHostLanguage !== "") return "en";
@@ -457,13 +467,12 @@ window.__ModuleLoader__.load({
 
     // Shared clipboard + toast
     //
-    // Two surfaces copy text: the session menu (its id) and the right-panel
-    // file tree (a path or a name). Both use the same secure-context path and
-    // the same fallback, so there is one place where a failed clipboard is
-    // handled.
+    // The right-panel file tree copies a path or a name. The secure-context
+    // path and the selection fallback stay in one place, so another copy
+    // surface can share the same failure handling.
     // ---------------------------------------------------------------------
-    const TOAST_HOST_ID = "rdsh-session-id-copy-toast";
-    const TOAST_ROOT_KEY = "__rdshSessionIdCopyToastRoot";
+    const TOAST_HOST_ID = "rdsh-copy-toast";
+    const TOAST_ROOT_KEY = "__rdshCopyToastRoot";
 
     async function copyText(text) {
       const clipboard =
@@ -556,7 +565,8 @@ window.__ModuleLoader__.load({
      * a new worker instead of reusing the bytes it already has (#25). Bump this
      * whenever the worker's push handling changes.
      */
-    const SW_REVISION = "20261026b";
+    // The worker always renders received pushes; host-side event ACKs gate delivery.
+    const SW_REVISION = "20261026e";
     const SW_URL = new URL(`sw.js?v=${SW_REVISION}`, SCOPE).href;
     /** Script URL of the notification plugin's worker (see unifyWorker below). */
     const PUSH_WORKER_PATH = "/push/sw.js";
@@ -2863,6 +2873,33 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       };
 
       /**
+       * The device's preferred language this catalog offers, or "" (#103).
+       *
+       * The Host preference is shared by every device, so "System" following
+       * it alone left an iPhone that is already Japanese on the profile's en.
+       * `navigator.languages` is ordered by preference and carries a region
+       * (`ja-JP`); round each tag to the base language a pack id uses. The
+       * first supported one wins. "" means the device offers nothing this
+       * build can show, so the Host preference stays the fallback.
+       */
+      const systemLanguage = () => {
+        let tags;
+        try {
+          if (typeof navigator === "undefined" || navigator === null) return "";
+          tags = Array.isArray(navigator.languages) ? navigator.languages : [navigator.language];
+        } catch (error) {
+          return "";
+        }
+        for (const tag of Array.isArray(tags) ? tags : []) {
+          if (typeof tag !== "string") continue;
+          const base = tag.trim().toLowerCase().split(/[-_]/)[0];
+          if (base === "") continue;
+          if (state.localDisplay.languages.some((entry) => entry.id === base)) return base;
+        }
+        return "";
+      };
+
+      /**
        * Adopt one Host snapshot as the projection baseline and refresh the
        * picker. Returns false for the known baseline and for this module's own
        * projections, so one publish notified twice stays cheap.
@@ -2900,8 +2937,19 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           // re-read the durable preference before projecting or restoring.
           refreshHostActive();
           const chosen = state.localDisplay.language;
-          const localeDocumentLang = chosen === "zh" ? "zh-CN" : chosen;
-          if (chosen === "" || !state.localDisplay.languages.some((entry) => entry.id === chosen)) {
+          // "System" is the device language, not the shared Host preference
+          // (#103). An explicit choice always wins; a device with no
+          // supported language keeps the Host fallback.
+          const system = chosen === "" ? systemLanguage() : "";
+          if (system !== localDisplaySystemLanguage) {
+            localDisplaySystemLanguage = system;
+            // Rows built from currentLang() repaint at the new device
+            // language even though the picker still shows "System".
+            emit({ localDisplay: { ...state.localDisplay } });
+          }
+          const deviceLanguage = chosen !== "" ? chosen : system;
+          const localeDocumentLang = deviceLanguage === "zh" ? "zh-CN" : deviceLanguage;
+          if (deviceLanguage === "" || !state.localDisplay.languages.some((entry) => entry.id === deviceLanguage)) {
             const hadProjection = projectedLocale !== null;
             projectedLocale = null;
             if (hadProjection || localeService.snapshot !== hostLocale) {
@@ -2920,7 +2968,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           // token stable so readers do not churn for nothing.
           if (projectedLocale !== null
             && localeService.snapshot === projectedLocale
-            && projectedLocale.active === chosen
+            && projectedLocale.active === deviceLanguage
             && Number(projectedLocale.revision) === Number(hostLocale.revision)
             && sameLocales(projectedLocale, hostLocale)) {
             if (document.documentElement.lang !== localeDocumentLang) document.documentElement.lang = localeDocumentLang;
@@ -2931,7 +2979,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           // then lets those caches rebuild at the device language.
           const projected = {
             ...hostLocale,
-            active: chosen,
+            active: deviceLanguage,
             revision: localLocaleRevision(hostLocale.revision),
           };
           // Anyone reading the service back (this module's catalog listener
@@ -3049,6 +3097,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           localDisplayLanguage = "";
           localDisplayStoredLanguage = "";
           localDisplayHostLanguage = "";
+          localDisplaySystemLanguage = "";
           projectedLocale = null;
           localDisplayRuntime = null;
         };
@@ -3304,17 +3353,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         // attribute behind for the next pass to trip over.
         for (const row of modal.querySelectorAll("[data-rdsh-setting-hidden]")) row.removeAttribute("data-rdsh-setting-hidden");
       }
-      // Two plugins can add a "copy this session's id" row. Keep one: prefer the
-      // localised rdsh row (it reports success) and drop the stock duplicate.
-      const menu = document.querySelector("[role='menu']");
-      if (menu !== null && hideOnThisDevice) {
-        const items = [...menu.querySelectorAll("[role='menuitem']")];
-        const localised = items.find((item) => (item.textContent || "").includes(t("sessionId.label")));
-        const stock = items.find((item) => /^Copy Session ID$/i.test(labelOf(item)));
-        if (localised !== undefined && stock !== undefined) {
-          stock.setAttribute("data-rdsh-hidden", "");
-        }
-      }
+
     }
 
     /**
@@ -3394,6 +3433,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     const SESSION_FRAME_KEY = "rdsh-mobile-ux:session-frames";
+    // Folder frames are a separate namespace: a Workspace id and a Session id
+    // can be the same string, and the old key must keep working untouched.
+    const FOLDER_FRAME_KEY = "dsh-mobile-maxxing:folder-frames";
     const FRAME_COLORS = [
       { id: "blue", label: t("frame.color.blue"), value: "#7aaaff" },
       { id: "green", label: t("frame.color.green"), value: "#5bd6a5" },
@@ -3402,36 +3444,52 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       { id: "purple", label: t("frame.color.purple"), value: "#b48cff" },
       { id: "pink", label: t("frame.color.pink"), value: "#ff8fc7" },
     ];
-    function readSessionFrames() {
+    function readFrameMap(key) {
       try {
-        const value = JSON.parse(localStorage.getItem(SESSION_FRAME_KEY) || "{}");
+        const value = JSON.parse(localStorage.getItem(key) || "{}");
         return value !== null && typeof value === "object" && !Array.isArray(value) ? value : {};
       } catch {
         return {};
       }
     }
-    let sessionFrames = readSessionFrames();
-    function sessionFrameOf(row) {
+    let sessionFrames = readFrameMap(SESSION_FRAME_KEY);
+    let folderFrames = readFrameMap(FOLDER_FRAME_KEY);
+    function frameColorOf(frames, row, prefix) {
       const key = row.getAttribute("data-row-key") || "";
-      const id = key.startsWith("session:") ? key.slice("session:".length) : "";
-      const value = id === "" ? undefined : sessionFrames[id];
+      const id = key.startsWith(prefix) ? key.slice(prefix.length) : "";
+      const value = id === "" ? undefined : frames[id];
       return typeof value === "string" && value !== "" ? value : null;
     }
-    function applySessionFrame(row) {
-      const color = sessionFrameOf(row);
+    function workspaceKeyOf(row) {
+      const key = row.getAttribute("data-row-key") || "";
+      return key.startsWith("workspace:") ? key.slice("workspace:".length) : "";
+    }
+    function applyRowFrame(row, color, attribute, property) {
       if (color === null) {
-        row.removeAttribute("data-rdsh-session-frame");
-        row.style.removeProperty("--rdsh-session-frame");
+        row.removeAttribute(attribute);
+        row.style.removeProperty(property);
       } else {
-        row.setAttribute("data-rdsh-session-frame", "");
-        row.style.setProperty("--rdsh-session-frame", color);
+        row.setAttribute(attribute, "");
+        row.style.setProperty(property, color);
       }
     }
-    function saveSessionFrame(sessionId, color) {
-      if (color === null) delete sessionFrames[sessionId];
-      else sessionFrames[sessionId] = color;
-      try { localStorage.setItem(SESSION_FRAME_KEY, JSON.stringify(sessionFrames)); } catch { /* private mode */ }
+    function applySessionFrame(row) {
+      applyRowFrame(row, frameColorOf(sessionFrames, row, "session:"), "data-rdsh-session-frame", "--rdsh-session-frame");
+    }
+    function applyFolderFrame(row) {
+      applyRowFrame(row, frameColorOf(folderFrames, row, "workspace:"), "data-rdsh-folder-frame", "--rdsh-folder-frame");
+    }
+    function saveFrameMap(key, frames, id, color) {
+      if (color === null) delete frames[id];
+      else frames[id] = color;
+      try { localStorage.setItem(key, JSON.stringify(frames)); } catch { /* private mode */ }
       scheduleDecorate();
+    }
+    function saveSessionFrame(sessionId, color) {
+      saveFrameMap(SESSION_FRAME_KEY, sessionFrames, sessionId, color);
+    }
+    function saveFolderFrame(workspaceId, color) {
+      saveFrameMap(FOLDER_FRAME_KEY, folderFrames, workspaceId, color);
     }
 
     function decorateSessionRows() {
@@ -3469,12 +3527,37 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         // The row actions carry the "..." menu plus archive/pin shortcuts. On a
         // phone only the menu earns its width; the shortcuts stay in the menu.
         const actions = children.find((child) => classToken(child, /_rowActions$/));
-        if (actions) {
-          for (const button of actions.querySelectorAll("button")) {
-            if (/^Session actions/i.test(button.getAttribute("aria-label") || "")) button.removeAttribute("data-rdsh-row-minor");
-            else button.setAttribute("data-rdsh-row-minor", "");
-          }
-        }
+        if (actions) decorateRowActions(actions);
+      }
+      // Real Workspace headers carry the same colour frame. The key is the
+      // stable Workspace id, so rename, expand/collapse and reorder keep it;
+      // the Ungrouped bucket ("workspace:") is not a folder and is skipped.
+      for (const row of document.querySelectorAll('[data-row-key^="workspace:"]')) {
+        // The key is empty for the Ungrouped bucket: applyFolderFrame clears
+        // any stale hook there instead of treating it as a folder.
+        applyFolderFrame(row);
+      }
+      decorateFolderMenu();
+    }
+
+    /**
+     * Hide a row's shortcut actions on a phone, keeping its "..." menu (#97).
+     *
+     * The menu must be found structurally, never by its localised label (ja:
+     * "{name} のセッション操作"; zh attaches it to the name too): upstream renders
+     * the Menu anchor first and appends the row-action slot entries after it,
+     * and only the anchor owns a popup. The English prefix stays as a fallback
+     * for a shell whose anchor carries no popup attribute.
+     */
+    function decorateRowActions(actions) {
+      const buttons = [...actions.querySelectorAll("button")];
+      const menu = buttons.find((button) => button.hasAttribute("aria-haspopup") || button.hasAttribute("aria-expanded"))
+        ?? actions.querySelector(ariaContainsSelector("button", "sessionActions", "Session actions"))
+        ?? buttons[0]
+        ?? null;
+      for (const button of buttons) {
+        if (button === menu) button.removeAttribute("data-rdsh-row-minor");
+        else button.setAttribute("data-rdsh-row-minor", "");
       }
     }
 
@@ -3486,6 +3569,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       "data-rdsh-ring-row",
       "data-rdsh-open-row",
       "data-rdsh-session-frame",
+      "data-rdsh-folder-frame",
       "data-rdsh-row-minor",
       "data-rdsh-row-menu",
       "data-rdsh-dragging",
@@ -3516,6 +3600,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         element.removeAttribute("data-rdsh-ringed");
       }
       for (const row of document.querySelectorAll("[data-row-key^='session:']")) row.style.removeProperty("--rdsh-session-frame");
+      for (const row of document.querySelectorAll("[data-row-key^='workspace:']")) row.style.removeProperty("--rdsh-folder-frame");
+      clearFolderMenu();
     }
 
     /**
@@ -3556,6 +3642,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       "data-rdsh-question-frame",
       "data-rdsh-question-tile",
       "data-rdsh-question-arrow",
+      "data-rdsh-question-typing",
       "data-rdsh-todo-item",
       "data-rdsh-todo-text",
       "data-rdsh-todo-status",
@@ -3572,6 +3659,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       "data-rdsh-toast-dismissed",
       "data-rdsh-model-search",
       "data-rdsh-model-search-row",
+      "data-rdsh-model-menu",
       "data-rdsh-model-button",
       "data-rdsh-settings-nav-arrow",
       "data-rdsh-nav-scroll",
@@ -3594,6 +3682,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       "data-rdsh-queue-text",
       "data-rdsh-workspace-menu",
       "data-rdsh-workspace-viewport",
+      "data-rdsh-folder-menu",
       "data-rdsh-workspace-hidden",
       "data-rdsh-workspace-search",
       "data-rdsh-workspace-empty",
@@ -3695,6 +3784,16 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       removeRightPanelHeading();
     }
 
+    /**
+     * The edit summary card's headline ("Edited 3 files"), per locale.
+     *
+     * The count is rendered into the template, so each vocabulary entry is
+     * turned into a pattern once; matching the English text alone is what
+     * stopped this decoration in a ja shell (#97).
+     */
+    const EDITED_FILES = probeValues("editedFiles", ["Edited {count} files"])
+      .map((template) => new RegExp(`^${template.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").split("\\{count\\}").join("\\d[\\d,]*")}$`));
+
     function decorateEditCards() {
       for (const element of document.querySelectorAll("[data-rdsh-edit-card]")) element.removeAttribute("data-rdsh-edit-card");
       for (const element of document.querySelectorAll("[data-rdsh-edit-header], [data-rdsh-edit-row]")) {
@@ -3706,7 +3805,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (!phone()) return;
       for (const element of document.querySelectorAll("span, div")) {
         if (element.children.length !== 0) continue;
-        if (!/^Edited \d+ files?$/.test((element.textContent || "").trim())) continue;
+        if (!EDITED_FILES.some((pattern) => pattern.test((element.textContent || "").trim()))) continue;
         const card = element.closest('[class*="_card"]');
         if (card === null) continue;
         card.setAttribute("data-rdsh-edit-card", "");
@@ -3738,13 +3837,18 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     const RIGHT_PANEL_ROOT = "[data-sidebar-right-panel]";
 
     /**
-     * The panel kinds that get a heading, keyed by upstream's stable body
-     * attribute. The text stays generic: the tab chip already carries the
-     * per-tab name (the terminal number, the child session's label).
+     * The panel kinds whose body attribute names a different kind than its
+     * chip, keyed by upstream's stable body attribute. The chip names the
+     * instance (the shell "bash", the child session's label); the heading names
+     * the kind in the display language (#82).
+     *
+     * Every other tab (files, the start pane, a preview) falls back to the
+     * selected chip's own label, which upstream already translates and which
+     * for those kinds is the kind's name.
      */
     const RIGHT_PANEL_HEADING_KEYS = {
-      "data-sidebar-terminal": "localDisplay.terminal",
       "data-sidebar-chat": "localDisplay.subagent",
+      "data-sidebar-terminal": "localDisplay.terminal",
     };
 
     /**
@@ -3757,11 +3861,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * toggle attribute and keep the English label for builds without it.
      */
     function visibleCollapseButton() {
-      // Two lookups, not one comma selector: the exact English label stays
-      // the first path for builds that expose only that string.
-      const english = document.querySelectorAll('[aria-label="Collapse right sidebar"]');
+      // Two lookups, not one comma selector. The stable toggle attribute goes
+      // first; the label (localised through PROBES, English fallback) is only
+      // for a build that does not expose it.
       const structural = document.querySelectorAll("button[data-sidebar-right-toggle]");
-      for (const button of [...english, ...structural]) {
+      const labelled = document.querySelectorAll(ariaLabelSelector("button", "rightPanelCollapse", "Collapse right sidebar"));
+      for (const button of [...structural, ...labelled]) {
         // Visibility is deliberately not part of this: the real panel keeps
         // its chrome mounted while closed (clipped to a zero-width column and
         // parked off-screen), and its rect stays non-zero. Only a panel that
@@ -3858,6 +3963,20 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         return button;
       }
       return null;
+    }
+
+    /**
+     * Arm the promotion again (#59).
+     *
+     * The promotion fires once per button so a failed click cannot loop, but a
+     * rotation changes what "fits" means: without re-arming, a panel that was
+     * docked in landscape stays a narrow column after the phone turns upright.
+     */
+    function resetRightPanelPromotion() {
+      rightPanelFitPending = false;
+      for (const button of document.querySelectorAll("[data-rdsh-auto-fired]")) {
+        button.removeAttribute("data-rdsh-auto-fired");
+      }
     }
 
     function ensureRightPanelFits() {
@@ -4477,37 +4596,68 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     /**
-     * Which panel-type heading the active tab needs, or "" for any other tab.
+     * The heading text the active tab needs, or "" when it cannot name itself.
      *
      * A panel body carries the same id as its chip (data-sidebar-right-tab and
      * data-dockkit-tab), so the selected chip picks the active body even while
-     * dockkit keeps another tab's section mounted. The chip title is
-     * deliberately not read: it names the instance, the heading names the kind.
+     * dockkit keeps another tab's section mounted: a chat body mounted beside
+     * the terminal must not lend the terminal "Subagent". A mapped kind answers
+     * with the kind's localised name, because its chip names the instance
+     * ("bash", the child session's label); every other kind (#82: files, the
+     * start pane, a preview) uses the chip's own label, which upstream already
+     * translates and which is the kind's name there.
      */
-    function rightPanelHeadingKey(panel) {
+    function rightPanelHeadingLabel(panel) {
       const scope = activeRightPanelScope(panel);
       const selectedTab = scope.querySelector('[role="tab"][data-dockkit-tab][aria-selected="true"]')
         ?? scope.querySelector('[data-dockkit-tab][aria-selected="true"]');
+      const chip = selectedTab === null || selectedTab === undefined
+        ? ""
+        : String(selectedTab.textContent || "").trim();
       const selected = selectedTab === null || selectedTab === undefined
         ? null
         : selectedTab.getAttribute("data-dockkit-tab");
-      let fallback = "";
-      for (const body of scope.querySelectorAll("[data-sidebar-terminal], [data-sidebar-chat]")) {
-        if (body.closest("[hidden]") !== null) continue;
-        const key = body.hasAttribute("data-sidebar-terminal")
-          ? RIGHT_PANEL_HEADING_KEYS["data-sidebar-terminal"]
-          : RIGHT_PANEL_HEADING_KEYS["data-sidebar-chat"];
-        const tab = body.closest("[data-sidebar-right-tab]");
-        if (selected !== null && tab !== null && tab.getAttribute("data-sidebar-right-tab") === selected) return key;
-        if (fallback === "") fallback = key;
+      if (selected !== null) {
+        // The chip carries the same attribute on its title span, and the strip
+        // comes first in document order: the body is the match outside it.
+        const selectedBody = [...scope.querySelectorAll(`[data-sidebar-right-tab="${selected}"]`)]
+          .find((node) => node.closest('[role="tablist"]') === null && node.closest("[data-dockkit-tab]") === null)
+          ?? null;
+        if (selectedBody !== null) {
+          for (const [attribute, key] of Object.entries(RIGHT_PANEL_HEADING_KEYS)) {
+            if (selectedBody.hasAttribute(attribute) || selectedBody.querySelector(`[${attribute}]`) !== null) return t(key);
+          }
+          return chip;
+        }
       }
-      return fallback;
+      // A build that puts no wrapper on the selected tab: name the first
+      // visible body of a named kind, else the chip.
+      for (const [attribute, key] of Object.entries(RIGHT_PANEL_HEADING_KEYS)) {
+        for (const body of scope.querySelectorAll(`[${attribute}]`)) {
+          if (body.closest("[hidden]") === null) return t(key);
+        }
+      }
+      return chip;
     }
 
-    /** Drop the heading node; safe to call when none exists. */
+    /**
+     * Drop the heading node; safe to call when none exists.
+     *
+     * The sweep covers a heading that an earlier client generation left in the
+     * DOM: a replaced module keeps the document but forgets its node, and
+     * without it the terminal would keep a heading the current code never
+     * inserts (#93). Returns whether anything was actually taken down, so the
+     * caller can refit the terminal that just grew.
+     */
     function removeRightPanelHeading() {
+      let removed = rightPanelHeadingNode !== null;
       rightPanelHeadingNode?.remove();
       rightPanelHeadingNode = null;
+      for (const stale of document.querySelectorAll("[data-rdsh-panel-heading]")) {
+        stale.remove();
+        removed = true;
+      }
+      return removed;
     }
 
     /**
@@ -4515,9 +4665,13 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      *
      * Only the mobile surface writes this node. It follows the active tab
      * (and a language change on the next pass), stays outside the tab strip
-     * and the terminal body, and is removed when the panel closes, moves to
+     * and the panel body, and is removed when the panel closes, moves to
      * another node, or the module tears down. The panel itself carries the
      * safe-area padding, so the heading only supplies its own gutters.
+     *
+     * #82: every tab kind gets one (the child session, the terminal and every
+     * kind named by its own chip such as files); only a tab that cannot name
+     * itself keeps the strip alone.
      */
     function decorateRightPanelHeading() {
       const open = document.documentElement.hasAttribute("data-rdsh-rightpanel-open");
@@ -4528,16 +4682,13 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // A split dock spans the phone as one row; the heading belongs at the
       // top of the pane that owns the focused tab, which is always a column.
       const scope = activeRightPanelScope(rightPanelNode);
-      const key = rightPanelHeadingKey(scope);
-      if (key === "") {
-        // A file/preview tab takes the strip back: refit the terminal that a
-        // previous tab heading shortened, if one is still mounted.
-        const removed = rightPanelHeadingNode !== null;
-        removeRightPanelHeading();
-        if (removed) scheduleTerminalFit();
+      const label = rightPanelHeadingLabel(scope);
+      if (label === "") {
+        // An unnamed tab takes the strip back: refit the terminal that a
+        // previous heading shortened, if one is still mounted.
+        if (removeRightPanelHeading()) scheduleTerminalFit();
         return;
       }
-      const label = t(key);
       let heading = rightPanelHeadingNode;
       if (heading === null || !heading.isConnected || heading.parentElement !== scope) {
         removeRightPanelHeading();
@@ -4859,6 +5010,26 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     let modelMenuWatched = null;
     let modelMenuMaxWidth = null;
     let modelMenuNaturalWidth = null;
+    let modelMenuBand = null;
+
+    /**
+     * The open model picker (#97).
+     *
+     * The picker is portalled and carries a CSS-module class whose hash prefix
+     * changes between builds, so a literal `[class*="_7KE1Ra_menu"]` silently
+     * stops matching (#76). While the trigger is open it points at the menu
+     * with `aria-controls`; that is the structural path. The class suffix plus
+     * a menu role is the fallback for a shell without `aria-controls`.
+     */
+    function modelMenu() {
+      const trigger = modelTrigger();
+      const id = trigger === null ? "" : trigger.getAttribute("aria-controls") || "";
+      if (id !== "") {
+        const controlled = document.getElementById(id);
+        if (controlled !== null) return controlled;
+      }
+      return document.querySelector('[class*="_menu"][role="menu"], [class*="_menu"][role="group"]');
+    }
 
     /**
      * Keep the open picker inside the safe area of the visible viewport.
@@ -4938,6 +5109,15 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       clearModelMenuWatch();
       modelMenuWatched = menu;
       clampModelMenu(menu);
+      // #84: the safe band moves when the keyboard opens, the page pans or the
+      // phone rotates, and upstream's inline left does not change then. Without
+      // these listeners the clamp only ran on the menu's own style writes, so
+      // an open panel could sit outside the band the user can see.
+      modelMenuBand = () => clampModelMenu(menu);
+      for (const target of [window, window.visualViewport]) {
+        target?.addEventListener?.("resize", modelMenuBand);
+        target?.addEventListener?.("scroll", modelMenuBand);
+      }
       if (typeof MutationObserver !== "function") return;
       modelMenuWatch = new MutationObserver(() => clampModelMenu(menu));
       modelMenuWatch.observe(menu, { attributes: true, attributeFilter: ["style"] });
@@ -4946,6 +5126,14 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     function clearModelMenuWatch() {
       modelMenuWatch?.disconnect();
       modelMenuWatch = null;
+      const band = modelMenuBand;
+      modelMenuBand = null;
+      if (band !== null) {
+        for (const target of [window, window.visualViewport]) {
+          target?.removeEventListener?.("resize", band);
+          target?.removeEventListener?.("scroll", band);
+        }
+      }
       if (modelMenuWatched !== null && modelMenuMaxWidth !== null
         && modelMenuWatched.style !== null && modelMenuWatched.style !== undefined
         && modelMenuWatched.style.maxWidth === modelMenuMaxWidth) {
@@ -4968,16 +5156,21 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     function decorateModelSearch() {
       if (!phone()) {
         clearModelSearch();
+        clearOwnedAttribute("data-rdsh-model-menu");
         return;
       }
       // The picker was closed and React took the input with it. Forget the tap
       // that enabled it, so the next open starts disabled again.
       if (modelSearchState !== null && !modelSearchState.input.isConnected) clearModelSearch();
-      const menu = document.querySelector('[class*="_7KE1Ra_menu"]');
+      const menu = modelMenu();
       if (menu === null) {
         clearModelMenuWatch();
+        clearOwnedAttribute("data-rdsh-model-menu");
         return;
       }
+      // The picker's own class hash is not stable, so the stylesheet keys off
+      // this hook instead (and clears it with the rest of PHONE_HOOKS).
+      menu.setAttribute("data-rdsh-model-menu", "");
       // The root pane (Model / Effort rows) has no search field, but it is
       // the same upstream menu and needs the same safe-area clamp.
       const input = menu.querySelector("input");
@@ -4992,7 +5185,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       watchModelMenu(menu);
       if (!input.hasAttribute("data-rdsh-model-search")) {
         input.setAttribute("data-rdsh-model-search", "");
-        const row = input.closest('[class*="_7KE1Ra_searchRow"]') ?? input.parentElement;
+        const row = input.closest('[class*="_searchRow"]') ?? input.parentElement;
         if (row !== null) {
           row.setAttribute("data-rdsh-model-search-row", "");
           // The picker focuses this field by itself when it opens the model
@@ -5676,10 +5869,127 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       update();
     }
 
+    /** Question cards whose Enter/validation behaviour is already installed. */
+    const questionBehaviorCards = new WeakSet();
+
+    /**
+     * Whether this card still needs a selected option, or null when it offers
+     * none: a free-text-only question has nothing to select, so its text is
+     * the whole answer and the required-choice rule cannot apply.
+     *
+     * Structure only: the option's role plus aria-checked is what the upstream
+     * card exposes in every locale, so no translated label is matched here.
+     *
+     * @param {Element} card - the question card.
+     * @returns {boolean|null}
+     */
+    function questionNeedsSelection(card) {
+      const options = card.querySelectorAll('[class*="_options"] [role="radio"], [class*="_options"] [role="checkbox"]');
+      if (options.length === 0) return null;
+      return card.querySelector('[role="radio"][aria-checked="true"], [role="checkbox"][aria-checked="true"]') === null;
+    }
+
+    /** The footer button that submits this question, or advances the set. */
+    function questionSubmitButton(card) {
+      const actions = card.querySelector('[class*="_footerActions"]');
+      const buttons = actions === null ? [] : [...actions.querySelectorAll("button")];
+      return buttons.length === 0 ? null : buttons[buttons.length - 1];
+    }
+
+    /** Scroll the focused answer field into the card's own body scroller. */
+    function revealQuestionField(card) {
+      const body = card.querySelector('[class*="_body"]');
+      const field = card.querySelector("textarea");
+      const row = field === null ? null : field.closest('[class*="_customRow"], [class*="_customBlock"], [class*="_field"]');
+      if (body === null || row === null || body.scrollHeight <= body.clientHeight + 2) return;
+      const bodyRect = body.getBoundingClientRect();
+      const rowRect = row.getBoundingClientRect();
+      if (rowRect.bottom > bodyRect.bottom - 4) body.scrollTop += rowRect.bottom - bodyRect.bottom + 8;
+      else if (rowRect.top < bodyRect.top + 4) body.scrollTop -= bodyRect.top - rowRect.top + 8;
+    }
+
+    /** Say why nothing was sent, in the card's own status line. */
+    function refuseEmptyQuestion(card) {
+      const feedback = card.querySelector('[class*="_feedback"]');
+      if (feedback !== null) feedback.textContent = t("question.selectRequired");
+    }
+
+    /** Take our refusal down once a choice exists; leave upstream errors alone. */
+    function clearQuestionFeedback(card) {
+      const feedback = card.querySelector('[class*="_feedback"]');
+      if (feedback !== null && feedback.textContent === t("question.selectRequired")) feedback.textContent = "";
+    }
+
+    /**
+     * The submit button stays the only way to send without a keyboard
+     * shortcut; the guard runs before the click, so upstream's "a custom
+     * answer counts" rule cannot send a zero-selection answer for a question
+     * that has options. Skip remains its own explicit, labelled action.
+     */
+    function submitQuestionCard(card) {
+      if (questionNeedsSelection(card) === true) {
+        refuseEmptyQuestion(card);
+        return;
+      }
+      questionSubmitButton(card)?.click();
+    }
+
+    /**
+     * Enter in the answer field is a line break; the button or Cmd/Ctrl+Enter
+     * sends. Upstream's React handler submits on any Enter, so this capture
+     * listener stops that handler. A plain Enter is not default-prevented and
+     * still inserts the newline.
+     *
+     * @param {KeyboardEvent} event - the field's keydown.
+     * @param {Element} card - the question card that owns the field.
+     */
+    function questionCardKeyDown(event, card) {
+      if (event.key !== "Enter" || event.shiftKey || event.isComposing || event.keyCode === 229) return;
+      event.stopPropagation();
+      if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+      if (!event.metaKey && !event.ctrlKey) return;
+      event.preventDefault();
+      submitQuestionCard(card);
+    }
+
+    /** Install the phone-only answer-field rules once per card node. */
+    function installQuestionCardBehavior(card) {
+      if (questionBehaviorCards.has(card) || card.querySelector('[class*="_options"]') === null) return;
+      const field = card.querySelector("textarea");
+      if (field === null || questionSubmitButton(card) === null) return;
+      questionBehaviorCards.add(card);
+      card.addEventListener("focusin", () => {
+        // The keyboard shrinks the layout viewport; this attribute lifts the
+        // 60vh cap while a field is focused, and the next frame keeps that
+        // field inside the card's scroller.
+        card.setAttribute("data-rdsh-question-typing", "");
+        requestAnimationFrame(() => revealQuestionField(card));
+      });
+      card.addEventListener("focusout", (event) => {
+        if (card.contains(event.relatedTarget)) return;
+        card.removeAttribute("data-rdsh-question-typing");
+      });
+      field.addEventListener("keydown", (event) => questionCardKeyDown(event, card), true);
+      card.addEventListener("click", (event) => {
+        const button = event.target?.closest?.("button") ?? null;
+        if (button === null || button !== questionSubmitButton(card)) {
+          // A choice lands after React commits; clear our message on that frame.
+          requestAnimationFrame(() => {
+            if (questionNeedsSelection(card) === false) clearQuestionFeedback(card);
+          });
+          return;
+        }
+        if (questionNeedsSelection(card) !== true) return;
+        event.preventDefault();
+        if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+        refuseEmptyQuestion(card);
+      }, true);
+    }
+
     function decorateQuestionCards() {
       if (!phone()) {
         clearQuestionArrows();
-        for (const attribute of ["data-rdsh-question-card", "data-rdsh-question-frame", "data-rdsh-question-tile"]) {
+        for (const attribute of ["data-rdsh-question-card", "data-rdsh-question-frame", "data-rdsh-question-tile", "data-rdsh-question-typing"]) {
           clearOwnedAttribute(attribute);
         }
         return;
@@ -5694,6 +6004,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           tile.setAttribute("data-rdsh-question-tile", "");
         }
         decorateQuestionArrow(card);
+        installQuestionCardBehavior(card);
+        if (card.hasAttribute("data-rdsh-question-typing")) revealQuestionField(card);
         live.add(card);
       }
       for (const [card, state] of questionArrowState) {
@@ -6176,19 +6488,31 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     // ---------------------------------------------------------------------
-    // #59: landscape drawer nav — one More row for the three stock actions
+    // #59 / #92: landscape drawer nav — one More row for the three stock actions
     //
     // Plugins, Automation tasks and Settings are wide rows; in landscape the
     // drawer is wider than the phone but still leaves the chat too little
     // room. Only the three rows are folded, and only while the viewport is
     // landscape: the stock nodes stay in place (React keeps its own state, the
     // single #87 Settings row keeps its lifecycle) and receive a hide
-    // attribute. The More row and its menu are this module's nodes and are
-    // removed on portrait, desktop and dispose.
+    // attribute.
+    //
+    // #92: rc.3 ships its own More launcher and portal menu, so a second row
+    // here would show "More" twice. When that launcher exists it is the only
+    // one; the folded rows' labels and glyphs are appended to its menu instead
+    // (decorateSidebarShellMore). A shell without the launcher keeps the #59
+    // row and its own menu, exactly as before.
     // ---------------------------------------------------------------------
     const NAV_MORE_HIDDEN = "data-rdsh-nav-more-hidden";
+    /** The shell slot rendered inside rc.3's More portal; its parent is the list. */
+    const SHELL_MORE_SLOT = "sidebar.panellist.actions";
     let sidebarNavMore = null;
     let sidebarNavMoreSeq = 0;
+    /** The menu our #92 rows live in, the stock rows they borrow from, and the exact nodes we appended. */
+    let shellMoreMenu = null;
+    let shellMoreRows = [];
+    let shellMoreNodes = [];
+    let shellMoreKey = "";
 
     /** #59: landscape means geometry, not the device mode; the mode gate is separate. */
     function navMoreLandscape() {
@@ -6338,15 +6662,16 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     function ensureSidebarNavMore(nav, firstRow) {
       let button = nav.querySelector("[data-rdsh-nav-more]") ?? document.querySelector("[data-rdsh-nav-more]");
+      const label = t("mux.navMore");
       if (button === null) {
         button = document.createElement("button");
         button.type = "button";
         button.className = "hHd-Xa_panelRow rdsh-mux-nav-more";
         button.setAttribute("data-rdsh-nav-more", "");
-        button.setAttribute("aria-label", t("mux.navMore"));
+        button.setAttribute("aria-label", label);
         button.setAttribute("aria-haspopup", "menu");
         button.setAttribute("aria-expanded", "false");
-        button.innerHTML = `<span class="hHd-Xa_panelGlyph" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><circle cx="3.2" cy="8" r="1.45"/><circle cx="8" cy="8" r="1.45"/><circle cx="12.8" cy="8" r="1.45"/></svg></span><span class="hHd-Xa_panelTitle hHd-Xa_wide">${t("mux.navMore")}</span>`;
+        button.innerHTML = `<span class="hHd-Xa_panelGlyph" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><circle cx="3.2" cy="8" r="1.45"/><circle cx="8" cy="8" r="1.45"/><circle cx="12.8" cy="8" r="1.45"/></svg></span><span class="hHd-Xa_panelTitle hHd-Xa_wide">${label}</span>`;
         button.addEventListener("click", (event) => {
           event.preventDefault();
           event.stopPropagation();
@@ -6354,11 +6679,128 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         });
         button.addEventListener("keydown", onSidebarNavMoreButtonKey);
       }
+      // An existing node keeps its listeners, SVG and menu wiring across a
+      // language switch; only its label text moves. Write on change alone so
+      // this pass does not wake the MutationObserver that scheduled it.
+      if (button.getAttribute("aria-label") !== label) button.setAttribute("aria-label", label);
+      const title = button.querySelector(".hHd-Xa_panelTitle");
+      if (title !== null && title.textContent !== label) title.textContent = label;
       if (button.parentElement !== nav || button.nextElementSibling !== firstRow) {
         if (firstRow.parentElement === nav) nav.insertBefore(button, firstRow);
         else nav.append(button);
       }
       return button;
+    }
+
+    /** #92: the shell's own More launcher, matched structurally; never our row. */
+    function sidebarShellMoreLauncher(nav) {
+      if (nav === null) return null;
+      return [...nav.querySelectorAll('button[aria-haspopup="menu"]')]
+        .find((button) => !button.hasAttribute("data-rdsh-nav-more")) ?? null;
+    }
+
+    /** Remove the rows #92 appended to the shell menu and forget the menu. */
+    function clearSidebarShellMore() {
+      for (const node of shellMoreNodes) node.remove();
+      shellMoreNodes = [];
+      shellMoreRows = [];
+      shellMoreMenu = null;
+      shellMoreKey = "";
+    }
+
+    /**
+     * #92: close rc.3's More menu the way #41 closes a chip's menu — with the
+     * Escape its Menu already listens for — after dropping our own rows.
+     */
+    function dismissSidebarShellMore(menu) {
+      clearSidebarShellMore();
+      try {
+        menu.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+      } catch (error) {
+        /* a detached portal has already closed */
+      }
+    }
+
+    /**
+     * #92: put the three folded rows into the shell's own More menu.
+     *
+     * The stock launcher is the only More row now, so its menu must carry
+     * Plugins, Automation tasks and Settings. Labels and glyphs are borrowed
+     * from the hidden stock rows, which keeps the en/ja copy and the icons
+     * identical without another dictionary. These nodes live inside React's
+     * portal but React does not own them, so an open menu rebuilds them from
+     * scratch (a reused portal must not show them twice, #87) and a closed or
+     * unmounted portal drops them with its subtree.
+     */
+    function decorateSidebarShellMore(rows, launcher) {
+      if (launcher.getAttribute("aria-expanded") === "false") {
+        clearSidebarShellMore();
+        return;
+      }
+      const slot = document.querySelector(`[data-slot="${SHELL_MORE_SLOT}"]`);
+      const list = slot === null ? null : slot.parentElement;
+      const menu = slot === null ? null : slot.closest('[role="menu"]');
+      const stockRows = [rows.plugins, rows.automation, rows.settings];
+      const labels = [navRowLabel(stockRows[0]), navRowLabel(stockRows[1]), navRowLabel(stockRows[2])];
+      const key = labels.join("\u0000");
+      // Every decorate pass runs on the observer, including the one our own
+      // append wakes. Only a different menu, a different locale, a replaced
+      // stock row or a detached row list rebuilds; otherwise the pass must
+      // leave the DOM alone or it would rebuild once per frame.
+      const intact = list !== null
+        && menu === shellMoreMenu
+        && key === shellMoreKey
+        && shellMoreRows.length === 3
+        && shellMoreRows.every((row, index) => row === stockRows[index])
+        && shellMoreNodes.length === 4
+        && shellMoreNodes.every((node) => node.parentElement === list);
+      if (intact) return;
+      clearSidebarShellMore();
+      if (slot === null || list === null || menu === null) return;
+      const nodes = [];
+      for (const [index, row] of stockRows.entries()) {
+        const item = document.createElement("button");
+        item.type = "button";
+        item.className = "rdsh-mux-more-item";
+        item.setAttribute("role", "menuitem");
+        item.setAttribute("tabindex", "-1");
+        item.setAttribute("data-rdsh-more-item", "");
+        item.setAttribute("aria-label", labels[index]);
+        const glyph = row.querySelector(".hHd-Xa_panelGlyph svg") ?? row.querySelector("svg");
+        if (glyph !== null) {
+          const icon = document.createElement("span");
+          icon.className = "rdsh-mux-more-icon";
+          icon.setAttribute("aria-hidden", "true");
+          icon.append(glyph.cloneNode(true));
+          item.append(icon);
+        }
+        const text = document.createElement("span");
+        text.className = "rdsh-mux-more-label";
+        text.textContent = labels[index];
+        item.append(text);
+        item.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          // The stock row is display:none, but .click() still runs React's
+          // handler. Close first: Settings opens a second menu, and the Escape
+          // above would close that one instead if it were already mounted.
+          dismissSidebarShellMore(menu);
+          row.click();
+        });
+        nodes.push(item);
+      }
+      const separator = document.createElement("div");
+      separator.className = "rdsh-mux-more-sep";
+      separator.setAttribute("role", "separator");
+      separator.setAttribute("data-rdsh-more-item", "");
+      nodes.push(separator);
+      // The slot outlet is display:contents, so the list's own flex layout
+      // sees these rows and the shell rows as siblings in source order.
+      for (const node of nodes) list.insertBefore(node, slot);
+      shellMoreMenu = menu;
+      shellMoreRows = stockRows;
+      shellMoreNodes = nodes;
+      shellMoreKey = key;
     }
 
     function decorateSidebarNavMore() {
@@ -6378,12 +6820,24 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         if (row !== rows.plugins && row !== rows.automation && row !== rows.settings) row.removeAttribute(NAV_MORE_HIDDEN);
       }
       for (const row of [rows.plugins, rows.automation, rows.settings]) row.setAttribute(NAV_MORE_HIDDEN, "");
+      const launcher = sidebarShellMoreLauncher(nav);
+      if (launcher !== null) {
+        // rc.3+: one launcher. Retire the #59 row (and its menu) if an older
+        // shell passed on the same page, then feed the shell menu instead.
+        if (sidebarNavMore !== null) closeSidebarNavMore();
+        for (const node of document.querySelectorAll("[data-rdsh-nav-more]")) node.remove();
+        decorateSidebarShellMore(rows, launcher);
+        return;
+      }
+      // rc.2 and older: no stock menu to feed, so #59's row stays the launcher.
+      clearSidebarShellMore();
       const button = ensureSidebarNavMore(nav, rows.plugins);
       if (sidebarNavMore !== null && sidebarNavMore.button !== button) closeSidebarNavMore();
     }
 
     function clearSidebarNavMore() {
       closeSidebarNavMore();
+      clearSidebarShellMore();
       for (const node of document.querySelectorAll("[data-rdsh-nav-more]")) node.remove();
       for (const row of document.querySelectorAll(`[${NAV_MORE_HIDDEN}]`)) row.removeAttribute(NAV_MORE_HIDDEN);
     }
@@ -6403,15 +6857,15 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     function sidebarToggle(collapseOnly = false) {
       const sidebar = document.querySelector('[data-slot="sidebar"]');
       if (sidebar === null) return null;
-      // Upstream's sidebar ships en and zh only. Both "Open" labels would open
-      // the drawer again, so closeDrawer never clicks one, however it was found.
-      // The zh label is escaped: it is a match target here, not UI copy.
-      const openLabels = ["Open sidebar", "\u6253\u5f00\u4fa7\u8fb9\u680f"];
+      // Every "Open" label would open the drawer again, so closeDrawer never
+      // clicks one, however it was found. The labels come from PROBES, so a
+      // localised shell is covered without hardcoding its language here.
+      const openLabels = probeValues("sidebarOpen", ["Open sidebar"]);
       const canCollapse = (button) => button !== null
         && (!collapseOnly || !openLabels.includes(button.getAttribute("aria-label")));
       const labelled = sidebar.querySelector(collapseOnly
-        ? 'button[aria-label="Collapse sidebar"]'
-        : 'button[aria-label="Open sidebar"], button[aria-label="Collapse sidebar"]');
+        ? ariaLabelSelector("button", "sidebarCollapse", "Collapse sidebar")
+        : `${ariaLabelSelector("button", "sidebarOpen", "Open sidebar")}, ${ariaLabelSelector("button", "sidebarCollapse", "Collapse sidebar")}`);
       if (canCollapse(labelled)) return labelled;
       // Localised label: the toggle is the only labelled button with a direct
       // SVG icon in the sidebar's drag header (the brand logo is wrapped).
@@ -6443,11 +6897,59 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     const ADD_STOCK_LABEL = t("add.stock");
     const ADD_SELECTOR = `[data-rdsh-add], [aria-label="${ADD_LABEL}"], [aria-label="${ADD_STOCK_LABEL}"]`;
 
+    /** The composer card that owns the input and its control row. */
+    function composerCard() {
+      const composer = document.querySelector("[data-composer-input]");
+      return composer === null ? null : composer.closest('[class*="_card"]');
+    }
+
+    /**
+     * The composer's model trigger (#97).
+     *
+     * Upstream renders the trigger as a button whose children are the CSS
+     * module spans `triggerLabel` / `triggerEffort`. Only the suffix is
+     * stable — the hash in front of it changes between builds (#76) — so the
+     * button is found by walking up from those spans, never by its label. The
+     * label is localised (ja: "モデルを選択（現在 …）"), which is exactly why the
+     * old English-prefix lookup silently stopped matching.
+     *
+     * The model slot bounds the search when this shell publishes slots; inside
+     * it the `triggerEffort` span is unique (the permission select in the same
+     * card has a `triggerLabel` but no effort). The English prefix stays as the
+     * last resort for an older shell.
+     */
+    function modelTrigger() {
+      const slot = document.querySelector('[data-slot="conversation.input.model"]');
+      const card = composerCard();
+      const scopes = [slot, card].filter((scope) => scope !== null && scope !== undefined);
+      for (const scope of scopes) {
+        for (const button of scope.querySelectorAll("button")) {
+          if (button.querySelector('[class*="triggerEffort"]') !== null) return button;
+        }
+      }
+      // A model without a reasoning effort renders no effort span. The slot is
+      // then the only way to tell the model trigger from the permission
+      // select's own label in the same card.
+      if (slot !== null && slot !== undefined) {
+        for (const button of slot.querySelectorAll("button")) {
+          if (button.querySelector('[class*="triggerLabel"]') !== null) return button;
+        }
+      }
+      // No slot either: only the model seat wraps its trigger in the picker's
+      // own `root` element, which is what separates it from the permission
+      // select's label-only button in the same card.
+      if (card !== null) {
+        for (const button of card.querySelectorAll("button")) {
+          if (button.querySelector('[class*="triggerLabel"]') !== null && classToken(button.parentElement, /_root$/)) return button;
+        }
+      }
+      return document.querySelector('button[aria-label^="Select model"]');
+    }
+
     function addButton() {
       // Structure first: the composer's only listbox trigger is the "+" button.
       // Labels are localised, so they are only the fallback.
-      const composer = document.querySelector("[data-composer-input]");
-      const card = composer === null ? null : composer.closest('[class*="_card"]');
+      const card = composerCard();
       const structural = card === null ? null : card.querySelector('button[aria-haspopup="listbox"]');
       return structural || document.querySelector(ADD_SELECTOR);
     }
@@ -6477,9 +6979,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         clearComposerHooks();
         return;
       }
-      for (const model of document.querySelectorAll('button[aria-label^="Select model"]')) {
-        model.setAttribute("data-rdsh-model-button", "");
-      }
+      const model = modelTrigger();
+      if (model !== null) model.setAttribute("data-rdsh-model-button", "");
       const add = addButton();
       if (add === null) {
         document.documentElement.removeAttribute("data-rdsh-has-dock");
@@ -6528,6 +7029,23 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     let lastSlowAt = 0;
+
+    /**
+     * The session breadcrumb navigation (#97).
+     *
+     * `showTitlePopover()` and the header typing both hang off this one node,
+     * so the tag must survive a localised shell. Upstream renders the nav
+     * inside `header[data-window-drag]` with the CSS-module `crumbs` suffix;
+     * the session-header slot bounds it on a shell that publishes slots. The
+     * localised label is matched through PROBES as the last resort.
+     */
+    function sessionHierarchy() {
+      const slot = document.querySelector('[data-slot="conversation.session.header"] nav');
+      if (slot !== null) return slot;
+      const structural = document.querySelector('header[data-window-drag] nav[class*="_crumbs"]');
+      if (structural !== null) return structural;
+      return document.querySelector(ariaLabelSelector("nav", "sessionHierarchy", "Session hierarchy"));
+    }
 
     function decorateFast() {
       // One mode decision per pass. Every tag below belongs to the mobile
@@ -6592,7 +7110,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       decorateStatsDock();
       enforceNoZoomViewport();
       if (onPhone) {
-        const crumbs = document.querySelector('nav[aria-label="Session hierarchy"]');
+        const crumbs = sessionHierarchy();
         if (crumbs !== null) crumbs.setAttribute("data-rdsh-crumbs", "");
         for (const slot of document.querySelectorAll('[data-slot="main.conversation"], [data-slot="conversation"]')) {
           slot.setAttribute("data-rdsh-conversation", "");
@@ -6725,7 +7243,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // drawer; the stock global label is only the fallback for a route with
       // no sidebar slot.
       const button = sidebarToggle()
-        ?? document.querySelector('[aria-label="Open sidebar"], [aria-label="Collapse sidebar"]');
+        ?? document.querySelector(`${ariaLabelSelector("button", "sidebarOpen", "Open sidebar")}, ${ariaLabelSelector("button", "sidebarCollapse", "Collapse sidebar")}`);
       if (button !== null) button.click();
     }
 
@@ -6744,7 +7262,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         // Collapse-only fallback for a route whose frame has no sidebar slot;
         // the selector can never match a control that says "Open".
         const collapse = sidebarToggle(true)
-          ?? document.querySelector('[aria-label="Collapse sidebar"]');
+          ?? document.querySelector(ariaLabelSelector("button", "sidebarCollapse", "Collapse sidebar"));
         if (collapse !== null) {
           collapse.click();
         } else {
@@ -6760,6 +7278,47 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     let currentSessionId = null;
 
     /**
+     * Sessions this browser told the host its turn belongs to.
+     *
+     * A local turn-end banner is only right for these: the host's
+     * `onlyMobileTurns` default notifies phone turns alone, so a turn a PC
+     * started in a session this phone merely watches must stay silent. The
+     * memory mirrors the host's own mobile-send window (10 minutes), so a
+     * session reused from a desktop later is not notified either. A reload
+     * forgets it while the host still remembers the send, so that turn falls
+     * back to the host's OS notification instead of the in-app banner: the
+     * local side can lose the banner, never the notice.
+     */
+    const MARKED_SEND_WINDOW_MS = 10 * 60 * 1000;
+    /** A hard cap: a long-lived page cannot grow this without bound. */
+    const MARKED_SEND_MAX = 128;
+    /** sessionId -> the moment its send stops counting, in ms. */
+    const markedSendSessions = new Map();
+
+    /** Remember one send this browser reported to the host. */
+    function rememberMarkedSend(sessionId) {
+      const now = Date.now();
+      markedSendSessions.delete(sessionId);
+      markedSendSessions.set(sessionId, now + MARKED_SEND_WINDOW_MS);
+      while (markedSendSessions.size > MARKED_SEND_MAX) {
+        const oldest = markedSendSessions.keys().next().value;
+        if (oldest === undefined) break;
+        markedSendSessions.delete(oldest);
+      }
+    }
+
+    /** Whether this browser sent in that session recently enough to be routed to. */
+    function markedSendRecent(sessionId) {
+      const until = markedSendSessions.get(sessionId);
+      if (until === undefined) return false;
+      if (until <= Date.now()) {
+        markedSendSessions.delete(sessionId);
+        return false;
+      }
+      return true;
+    }
+
+    /**
      * Tell the push host that the next turn belongs to this device.
      *
      * A phone send is marked automatically. On a desktop that is the #15
@@ -6768,8 +7327,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * the same width-based behaviour #17 removes.
      */
     function markMobileSession(sessionId = currentSessionId) {
-      if (sessionId === null) return;
+      if (typeof sessionId !== "string" || sessionId === "") return;
       if (!phone() && !notifyDeviceTurns()) return;
+      // Recorded here, with the request: this is the same condition the host
+      // applies, so the local banner follows exactly what the host will send.
+      rememberMarkedSend(sessionId);
       void fetch(`${PUSH_API}/mobile-send`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -6813,6 +7375,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const hasSessions = typeof useSessions === "function";
       const statuses = hasHook ? useSessionStatus((value) => value) : null;
       const sessions = hasSessions ? useSessions((value) => value) : null;
+      // The last snapshot this instance diffed. Null until the first effect
+      // run, which is the baseline and never notifies.
+      const previousStatuses = React.useRef(null);
       useEffect(() => {
         const byId = sessions !== null && sessions !== undefined ? sessions.byId : null;
         const mainIds = byId !== null && byId !== undefined && typeof byId === "object"
@@ -6839,6 +7404,19 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         document.documentElement.toggleAttribute("data-rdsh-sessions-hook", hasSessions);
         globalThis.__RDSH_MOBILE_UX_BADGE__ = { total, main, subagents: Math.max(0, total - main), runningSubagents, mainIds: mainIds === null ? null : [...mainIds] };
         scheduleDecorate();
+        // Local banners: the status store already knows a turn ended or a
+        // question arrived, so the page can say so without the worker's push.
+        // The first pass only records the baseline; emitLocalNotices owns its
+        // own try/catch and notifyUser owns the visibility gate.
+        try {
+          const previous = previousStatuses.current;
+          previousStatuses.current = statuses;
+          if (previous !== null && previous !== undefined) {
+            emitLocalNotices(previous, statuses, byId);
+          }
+        } catch (error) {
+          console.error("[rdsh-mobile-ux] local notification diff failed", error);
+        }
       }, [statuses, sessions, hasHook, hasSessions]);
       return null;
     }
@@ -7185,6 +7763,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     let workspacePickerState = null;
     let workspacePickerWatch = null;
     let workspacePickerWatchTimer = 0;
+    let workspaceMenuWatch = null;
+    let workspaceMenuWatched = null;
+    let workspaceMenuBand = null;
 
     /**
      * Stop watching for the picker's portal and release the reserved band.
@@ -7270,6 +7851,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const state = workspacePickerState;
       workspacePickerState = null;
       workspacePickerPending = false;
+      stopWorkspaceMenuWatch();
       document.documentElement.removeAttribute("data-rdsh-workspace-picking");
       if (state === null) return;
       state.input.removeEventListener("keydown", state.keydown);
@@ -7354,6 +7936,87 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       return null;
     }
 
+    /**
+     * Keep the open picker inside the phone's safe band (#39).
+     *
+     * Upstream places the panel with a 12px margin against
+     * `window.innerWidth/innerHeight`, which is the layout viewport: on a
+     * phone that includes the status bar and the landscape notch. The first
+     * frame of the original bug proved it (a raw 169x820 panel at y=12), and a
+     * panel pushed against the top edge puts its search row inside the cut-out.
+     * The band the user can see is the one measureSafeArea() published plus the
+     * visual viewport, so the panel is shifted inside it; a panel that already
+     * fits is never touched (a desktop or a device without insets is a no-op).
+     */
+    function clampWorkspaceMenu(menu) {
+      const style = menu.style;
+      if (style === null || style === undefined) return;
+      const top = parseFloat(style.top);
+      const left = parseFloat(style.left);
+      // Upstream has not placed the panel yet (or it is a test fixture): its
+      // own inline top/left is the only thing this pass may correct.
+      if (!Number.isFinite(top) || !Number.isFinite(left)) return;
+      const viewport = window.visualViewport;
+      const vvTop = Number.isFinite(viewport?.offsetTop) ? viewport.offsetTop : 0;
+      const vvLeft = Number.isFinite(viewport?.offsetLeft) ? viewport.offsetLeft : 0;
+      const vvWidth = Number.isFinite(viewport?.width) && viewport.width > 0 ? viewport.width : window.innerWidth;
+      const vvHeight = Number.isFinite(viewport?.height) && viewport.height > 0 ? viewport.height : window.innerHeight;
+      const minTop = Math.ceil(vvTop + safeInset("top") + 8);
+      const maxBottom = vvTop + vvHeight - safeInset("bottom") - 8;
+      const minLeft = Math.ceil(vvLeft + safeInset("left") + 8);
+      const maxRight = vvLeft + vvWidth - safeInset("right") - 8;
+      if (!(maxBottom > minTop) || !(maxRight > minLeft)) return;
+      const rect = typeof menu.getBoundingClientRect === "function" ? menu.getBoundingClientRect() : null;
+      const width = menu.offsetWidth || (rect === null ? 0 : rect.width) || 0;
+      const height = menu.offsetHeight || (rect === null ? 0 : rect.height) || 0;
+      const nextTop = height > 0
+        ? Math.min(Math.max(top, minTop), Math.max(minTop, Math.floor(maxBottom - height)))
+        : Math.max(top, minTop);
+      const nextLeft = width > 0
+        ? Math.min(Math.max(left, minLeft), Math.max(minLeft, Math.floor(maxRight - width)))
+        : Math.max(left, minLeft);
+      if (nextTop !== top) style.top = `${nextTop}px`;
+      if (nextLeft !== left) style.left = `${nextLeft}px`;
+    }
+
+    /**
+     * Follow the picker's own inline top/left (upstream rewrites them on
+     * scroll/resize) and the visible band (rotation, keyboard pan). A style
+     * observer alone would miss a band change: the panel's inline position does
+     * not change when the notch or the keyboard moves the safe area.
+     */
+    function watchWorkspaceMenu(menu) {
+      if (workspaceMenuWatched === menu && workspaceMenuWatch !== null) {
+        clampWorkspaceMenu(menu);
+        return;
+      }
+      stopWorkspaceMenuWatch();
+      workspaceMenuWatched = menu;
+      clampWorkspaceMenu(menu);
+      if (typeof MutationObserver === "function") {
+        workspaceMenuWatch = new MutationObserver(() => clampWorkspaceMenu(menu));
+        workspaceMenuWatch.observe(menu, { attributes: true, attributeFilter: ["style"] });
+      }
+      workspaceMenuBand = () => clampWorkspaceMenu(menu);
+      for (const target of [window, window.visualViewport]) {
+        target?.addEventListener?.("resize", workspaceMenuBand);
+        target?.addEventListener?.("scroll", workspaceMenuBand);
+      }
+    }
+
+    function stopWorkspaceMenuWatch() {
+      workspaceMenuWatch?.disconnect();
+      workspaceMenuWatch = null;
+      workspaceMenuWatched = null;
+      const band = workspaceMenuBand;
+      workspaceMenuBand = null;
+      if (band === null) return;
+      for (const target of [window, window.visualViewport]) {
+        target?.removeEventListener?.("resize", band);
+        target?.removeEventListener?.("scroll", band);
+      }
+    }
+
     function decorateWorkspacePicker() {
       if (!phone()) {
         clearWorkspacePicker();
@@ -7426,6 +8089,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       viewport.append(empty);
       menu.setAttribute("data-rdsh-workspace-menu", "");
       viewport.setAttribute("data-rdsh-workspace-viewport", "");
+      watchWorkspaceMenu(menu);
       workspacePickerState = { menu, viewport, wrappers, input, search, empty, keydown };
       workspacePickerPending = false;
       apply();
@@ -7655,10 +8319,18 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       runFilesSearch(filesSearch?.input.value ?? "");
     }
 
-    /** Keep the explicit clear button in step with the field. */
+    /**
+     * Keep the explicit clear button in step with the field.
+     *
+     * #83: it used to wait for an `input` event, so on a phone the ✕ was
+     * invisible until a soft-keyboard keystroke arrived (and WebKit's native
+     * cancel can emit only `search`). It is shown while the field is focused,
+     * which is the state the user is in when looking for it.
+     */
     function syncFilesSearchClear() {
       if (filesSearch === null) return;
-      filesSearch.clear.hidden = filesSearch.input.value === "";
+      const { clear, input } = filesSearch;
+      clear.hidden = input.value === "" && document.activeElement !== input;
     }
 
     /** Clear the field, the filter and the highlight, then return focus. */
@@ -7718,6 +8390,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (filesSearch !== null) {
         filesSearch.input.removeEventListener("keydown", onFilesSearchKeyDown);
         filesSearch.input.removeEventListener("input", onFilesSearchInput);
+        filesSearch.input.removeEventListener("search", onFilesSearchInput);
+        filesSearch.input.removeEventListener("focus", syncFilesSearchClear);
+        filesSearch.input.removeEventListener("blur", syncFilesSearchClear);
         filesSearch.button.removeEventListener("click", onFilesSearchSubmit);
         filesSearch.clear.removeEventListener("click", onFilesSearchClear);
         filesSearch.search.remove();
@@ -7760,6 +8435,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       input.addEventListener("input", onFilesSearchInput);
       button.addEventListener("click", onFilesSearchSubmit);
       clear.addEventListener("click", onFilesSearchClear);
+      input.addEventListener("search", onFilesSearchInput);
+      input.addEventListener("focus", syncFilesSearchClear);
+      input.addEventListener("blur", syncFilesSearchClear);
       const body = root.querySelector("[data-files-body]");
       if (body === null) root.append(search);
       else root.insertBefore(search, body);
@@ -8127,6 +8805,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (filesSearch !== null) {
         filesSearch.input.removeEventListener("keydown", onFilesSearchKeyDown);
         filesSearch.input.removeEventListener("input", onFilesSearchInput);
+        filesSearch.input.removeEventListener("search", onFilesSearchInput);
+        filesSearch.input.removeEventListener("focus", syncFilesSearchClear);
+        filesSearch.input.removeEventListener("blur", syncFilesSearchClear);
         filesSearch.button.removeEventListener("click", onFilesSearchSubmit);
         filesSearch.clear.removeEventListener("click", onFilesSearchClear);
         filesSearch.search.remove();
@@ -8744,6 +9425,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           if (scrolledLeftAncestor(target) !== null) return;
           if (target.closest("input, textarea, [contenteditable=true], .xterm, [class*='xterm']") !== null) return;
         }
+        // #59: a docked panel (landscape) shares the screen with the
+        // conversation. Only a swipe that starts on the panel closes it; a
+        // swipe on the chat keeps the chat's own gesture instead of reaching
+        // across the split and collapsing the column under the finger.
+        const dock = rightPanelNode === null ? null : rightPanelNode.getBoundingClientRect();
+        if (dock !== null && dock.width > 0 && dock.width < window.innerWidth * 0.85 && touch.clientX < dock.left) return;
         edgeSwipe = { x: touch.clientX, y: touch.clientY, fromRight: false, closesPanel: true };
         return;
       }
@@ -8819,7 +9506,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         if (dx > -64) return;
         edgeSwipe = null;
         if (event.cancelable) event.preventDefault();
-        document.querySelector('[aria-label="Open right sidebar"]')?.click();
+        (document.querySelector("[data-sidebar-right-expand]")
+          ?? document.querySelector(ariaLabelSelector("button", "rightPanelOpen", "Open right sidebar")))?.click();
         return;
       }
       if (dx < 64) return;
@@ -9842,6 +10530,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         // The same control closes an open menu; only the opening click starts
         // the observer. aria-expanded still carries the pre-click state here.
         if (trigger !== null && trigger.getAttribute("aria-expanded") !== "true") beginWorkspacePicker();
+        // A folder's "..." menu has no slot in this shell; remember the click
+        // so the decoration pass can claim exactly the portal it opens.
+        armFolderMenu(target);
       }
       // Queued message: tap toggles the full-text preview. The native row still
       // owns its edit/remove/steer buttons; this branch only wraps the preview.
@@ -9985,8 +10676,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (!phone()) return;
       const target = event.target;
       if (target === null || target === undefined || target.closest === undefined) return;
-      const root = target.closest('[class*="_7KE1Ra_root"]');
-      const menu = document.querySelector('[class*="_7KE1Ra_menu"]');
+      const trigger = modelTrigger();
+      const root = trigger === null ? null : trigger.parentElement;
+      const menu = modelMenu();
       if (menu === null) return;
       if (root === null && !menu.contains(target)) return;
       const related = event.relatedTarget;
@@ -10004,7 +10696,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // Popovers (the model picker's search, dialogs, etc.) focus their own
       // inputs programmatically. Blurring those closes the popover because the
       // menu's onBlur sees no related focus target.
-      if (field.closest('[role="menu"], [role="dialog"], [role="listbox"], [class*="_7KE1Ra_menu"], .xterm, [class*="xterm"]') !== null) return;
+      if (field.closest('[role="menu"], [role="dialog"], [role="listbox"], [class*="_menu"], .xterm, [class*="xterm"]') !== null) return;
       if (field === allowFocusElement && Date.now() <= allowFocusUntil) return;
       // Deferred: Safari/the app re-focuses synchronously from its onFocus
       // handler, so an immediate blur() recurses until the stack overflows.
@@ -10062,6 +10754,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (event.key === "Escape") {
         document.querySelector(".rdsh-mux-titlepop")?.remove();
         closeDetailPopover();
+        closeFramePalette();
         return;
       }
       if (!phone() || (event.key !== "Enter" && event.key !== " ")) return;
@@ -10100,13 +10793,149 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       document.querySelector(".rdsh-frame-backdrop")?.remove();
     }
 
-    function showFramePalette(sessionId, anchor) {
+    // ---------------------------------------------------------------------
+    // Folder colour frame: this shell has no workspace-menu slot, so the one
+    // portal opened by a folder's "..." button is claimed structurally
+    // (aria-controls <-> id) and decorated once. Never by menu labels.
+    // ---------------------------------------------------------------------
+    const FOLDER_MENU_ATTR = "data-rdsh-folder-menu";
+    let folderMenu = null;
+    let folderMenuSeq = 0;
+    let folderMenuPending = null;
+
+    function folderRowMenuButton(row) {
+      const actions = [...row.children].find((child) => classToken(child, /_rowActions$/));
+      return actions === undefined ? null : actions.querySelector("button");
+    }
+
+    function armFolderMenu(target) {
+      if (target === null || target === undefined || target.closest === undefined) return;
+      // A claim belongs to the click that made it. Any later click retires it,
+      // so a menu opened from another row can never inherit this frame row.
+      folderMenuPending = null;
+      const button = target.closest("button");
+      if (button === null) return;
+      const row = button.closest('[data-row-key^="workspace:"]');
+      if (row === null || workspaceKeyOf(row) === "") return;
+      // The row's own first action (the Menu anchor), never a session row
+      // nested under the group and never the "+" beside it.
+      if (folderRowMenuButton(row) !== button) return;
+      // One decoration pass after the click: React has committed the portal
+      // by then, so anything that appears later is a different menu.
+      folderMenuPending = {
+        button,
+        key: workspaceKeyOf(row),
+        known: new Set(document.querySelectorAll('[role="menu"]')),
+      };
+    }
+
+    function folderMenuViewport(menu) {
+      for (const child of [...menu.children]) {
+        if (child.getAttribute("role") !== "presentation") continue;
+        if (child.querySelector('button[role="menuitem"]') !== null) return child;
+      }
+      return null;
+    }
+
+    function clearFolderMenu() {
+      folderMenuPending = null;
+      const state = folderMenu;
+      if (state === null) return;
+      folderMenu = null;
+      // Deferred: an item's onSelect is still inside this React root's event.
+      setTimeout(() => {
+        try { state.root?.unmount(); } catch { /* the root is already gone */ }
+      }, 0);
+      state.host.remove();
+      // Strip even from a detached node: React can reuse the portal element.
+      if (state.button.getAttribute("aria-controls") === state.id) state.button.removeAttribute("aria-controls");
+      state.button.removeAttribute("aria-expanded");
+      if (state.menu.id === state.id) state.menu.removeAttribute("id");
+      state.menu.removeAttribute(FOLDER_MENU_ATTR);
+    }
+
+    function attachFolderMenu(menu, button, key) {
+      if (folderMenu !== null || menu.hasAttribute(FOLDER_MENU_ATTR)) return false;
+      let React;
+      let createRoot;
+      let MenuItemButton;
+      try {
+        React = require("react");
+        ({ createRoot } = require("react-dom/client"));
+        ({ MenuItemButton } = require("@deepseek-ai/dsh-client-ui-primitives"));
+      } catch (error) {
+        return false;
+      }
+      if (typeof createRoot !== "function" || typeof MenuItemButton !== "function") return false;
+      const viewport = folderMenuViewport(menu);
+      if (viewport === null) return false;
+      const id = `rdsh-folder-menu-${++folderMenuSeq}`;
+      const host = document.createElement("div");
+      host.setAttribute("data-rdsh-folder-frame-item", "");
+      // display:contents leaves the native itemWrap as a direct flex child of
+      // the menu viewport, so the React host cannot shift the row geometry.
+      host.style.display = "contents";
+      menu.id = id;
+      menu.setAttribute(FOLDER_MENU_ATTR, "");
+      button.setAttribute("aria-controls", id);
+      // The native Menu does not mark its anchor; ours lasts only as long as
+      // the claimed portal.
+      button.setAttribute("aria-expanded", "true");
+      viewport.append(host);
+      const root = createRoot(host);
+      const state = { menu, button, key, host, root, id };
+      folderMenu = state;
+      const onSelect = (event) => {
+        const anchorRect = event?.currentTarget?.getBoundingClientRect?.() ?? button.getBoundingClientRect();
+        clearFolderMenu();
+        // The native Menu closes on the document Escape it already listens for.
+        try {
+          menu.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+        } catch { /* no KeyboardEvent in this shell */ }
+        setTimeout(() => showFramePalette(key, anchorRect, folderFrames, saveFolderFrame), 0);
+      };
+      try {
+        root.render(React.createElement(MenuItemButton, { icon: frameIcon(), onSelect }, t("frame.menu")));
+      } catch (error) {
+        clearFolderMenu();
+        return false;
+      }
+      return true;
+    }
+
+    function decorateFolderMenu() {
+      const state = folderMenu;
+      if (state !== null) {
+        if (state.menu.isConnected) {
+          // React may reconcile the native list and drop an unknown child.
+          if (!state.host.isConnected) {
+            const viewport = folderMenuViewport(state.menu);
+            if (viewport !== null) viewport.append(state.host);
+          }
+          return;
+        }
+        // The previous portal closed and another folder's click may already be
+        // queued. Keep that claim while retiring the old portal.
+        const next = folderMenuPending;
+        clearFolderMenu();
+        folderMenuPending = next;
+      }
+      const pending = folderMenuPending;
+      if (pending === null) return;
+      const menu = [...document.querySelectorAll('[role="menu"]')]
+        .find((node) => !pending.known.has(node) && !node.hasAttribute(FOLDER_MENU_ATTR));
+      folderMenuPending = null;
+      if (menu === undefined) return;
+      attachFolderMenu(menu, pending.button, pending.key);
+    }
+
+    function showFramePalette(targetId, anchor, frames = sessionFrames, save = saveSessionFrame) {
       closeFramePalette();
       const pop = document.createElement("div");
       pop.className = "rdsh-frame-pop";
       pop.setAttribute("role", "dialog");
       pop.setAttribute("aria-label", t("frame.paletteAria"));
-      const current = sessionFrames[sessionId];
+      const current = frames[targetId];
       const title = document.createElement("div");
       title.className = "rdsh-frame-pop-title";
       title.textContent = t("frame.paletteTitle");
@@ -10120,7 +10949,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         swatch.setAttribute("aria-label", color.label);
         swatch.setAttribute("data-current", String(current === color.value));
         swatch.addEventListener("click", () => {
-          saveSessionFrame(sessionId, color.value);
+          save(targetId, color.value);
           closeFramePalette();
           mobileToast(t("frame.applied", { color: color.label }));
         });
@@ -10131,7 +10960,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       clear.className = "rdsh-frame-clear";
       clear.textContent = t("frame.clear");
       clear.addEventListener("click", () => {
-        saveSessionFrame(sessionId, null);
+        save(targetId, null);
         closeFramePalette();
         mobileToast(t("frame.cleared"));
       });
@@ -10161,18 +10990,23 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // is a mobile affordance too (#44). A desktop menu keeps upstream's rows
       // exactly as they were.
       if (!phone()) return null;
-      return h("button", {
-        type: "button",
-        role: "menuitem",
-        className: "rdsh-frame-menu-item",
-        onClick: (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          const anchorRect = event.currentTarget.getBoundingClientRect();
+      // Native menu cell, the same component the shell's pin/rename rows use:
+      // its own padding, gap and 14px icon seat are the reference geometry.
+      let MenuItemButton;
+      try {
+        ({ MenuItemButton } = require("@deepseek-ai/dsh-client-ui-primitives"));
+      } catch (error) {
+        return null;
+      }
+      if (typeof MenuItemButton !== "function") return null;
+      return h(MenuItemButton, {
+        icon: frameIcon(),
+        onSelect: (event) => {
+          const anchorRect = event?.currentTarget?.getBoundingClientRect?.() ?? null;
           if (typeof setMenuOpen === "function") setMenuOpen(false);
           setTimeout(() => showFramePalette(sessionId, anchorRect), 0);
         },
-      }, h("span", { className: "rdsh-frame-menu-icon", "aria-hidden": "true" }, frameIcon()), h("span", null, t("frame.menu")));
+      }, t("frame.menu"));
     }
 
     // ---------------------------------------------------------------------
@@ -10267,7 +11101,13 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       for (const img of root.querySelectorAll("img")) {
         if ((img.currentSrc || img.src) !== src) continue;
         const item = img.closest('[class*="_imageItem"]');
-        return { src, img, item, remove: item?.querySelector('button[aria-label^="Remove image"]') ?? null };
+        // The remove control is the CSS-module `remove` button inside the
+        // item; its label is localised (ja: "画像 {name} を削除"), so match the
+        // stable suffix and fall back to the item's only labelled button.
+        const remove = item?.querySelector('button[class*="_remove"]')
+          ?? item?.querySelector("button[aria-label]")
+          ?? null;
+        return { src, img, item, remove };
       }
       return null;
     }
@@ -10522,9 +11362,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
             let tries = 0;
             const timer = setInterval(() => {
               const root = document.querySelector('[data-rdsh-composer-root]');
-              const remove = root === null ? null : [...root.querySelectorAll("button")]
-                .find((button) => button.getAttribute("aria-label") === `Remove image ${name}`);
-              const img = remove?.closest('[class*="_imageItem"]')?.querySelector("img") ?? null;
+              // Find the new thumbnail by the file name upstream writes into
+              // the img's alt, not by the localised remove label (#97).
+              const item = root === null ? null : [...root.querySelectorAll('[class*="_imageItem"]')]
+                .find((candidate) => (candidate.querySelector("img")?.getAttribute("alt") || "") === name) ?? null;
+              const img = item?.querySelector("img") ?? null;
               if (img !== null) {
                 clearInterval(timer);
                 const newSrc = img.currentSrc || img.src;
@@ -10627,6 +11469,16 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     /**
+     * The host's `onlyMobileTurns`, as its `/config` answer reported it.
+     *
+     * `false` means the host notifies every turn, so a local turn-end banner
+     * is right even for a session this browser never marked. Unknown — before
+     * the answer, or after a failed one — keeps the host default (phone turns
+     * only) and the marked-send gate applies.
+     */
+    let hostNotifiesEveryTurn = false;
+
+    /**
      * Tell the push host which deployed origin this page is.
      *
      * The host delivers each event to one origin only: the app that started
@@ -10641,12 +11493,76 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     function notePushOrigin() {
       if (pushOriginNoted) return;
       pushOriginNoted = true;
-      void fetch(`${PUSH_API}/config`, { cache: "no-store" }).catch(() => {});
+      void fetch(`${PUSH_API}/config`, { cache: "no-store" }).then(async (response) => {
+        const body = await response.json();
+        if (body?.copy?.onlyMobileTurns === false) hostNotifiesEveryTurn = true;
+      }).catch(() => {
+        // No answer keeps the host default, so the gate stays conservative.
+      });
     }
 
     async function refreshNotificationStatus() {
       notePushOrigin();
       emit({ notifications: await notificationStatus() });
+    }
+
+    /**
+     * The endpoint this browser registered last, remembered in localStorage.
+     *
+     * The host retires that exact entry when the next registration arrives
+     * (#98): a replaced endpoint is unreachable from this page but still
+     * delivered to this device, so it must stop being a fan-out target.
+     * localStorage is per browser and per origin, so the value names this
+     * device's own previous endpoint and never another device's.
+     */
+    const PUSH_ENDPOINT_KEY = "rdsh-mobile-ux:push-endpoint";
+
+    /** The endpoint this browser registered last, or "". */
+    function readPushEndpoint() {
+      try {
+        const value = localStorage.getItem(PUSH_ENDPOINT_KEY);
+        return typeof value === "string" ? value : "";
+      } catch {
+        /* private mode */
+        return "";
+      }
+    }
+
+    /** Remember the endpoint this browser holds now. */
+    function rememberPushEndpoint(endpoint) {
+      if (typeof endpoint !== "string" || endpoint === "") return;
+      try {
+        localStorage.setItem(PUSH_ENDPOINT_KEY, endpoint);
+      } catch {
+        /* private mode */
+      }
+    }
+
+    /**
+     * Store this browser's subscription, naming the endpoint it replaces.
+     *
+     * @param {PushSubscription} subscription - the browser's current registration.
+     * @returns {Promise<Response>} the host's answer.
+     */
+    async function savePushSubscription(subscription) {
+      const endpoint = typeof subscription?.endpoint === "string" ? subscription.endpoint : "";
+      const previousEndpoint = readPushEndpoint();
+      const saved = await fetch(`${PUSH_API}/subscribe`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        // `origin` becomes the VAPID contact for pushes: Apple rejects
+        // mailto:root@localhost with 403 BadJwtToken, but accepts the app's own
+        // https origin. `previousEndpoint` is this browser's own earlier
+        // registration ("" on the first run), which the host retires.
+        body: JSON.stringify({
+          subscription: subscription.toJSON(),
+          label: navigator.userAgent,
+          origin: location.origin,
+          previousEndpoint: previousEndpoint === endpoint ? "" : previousEndpoint,
+        }),
+      });
+      if (saved.ok) rememberPushEndpoint(endpoint);
+      return saved;
     }
 
     async function enableNotifications() {
@@ -10661,16 +11577,35 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const subscription = existing === null
         ? await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(publicKey) })
         : existing;
-      const saved = await fetch(`${PUSH_API}/subscribe`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        // `origin` becomes the VAPID contact for pushes: Apple rejects
-        // mailto:root@localhost with 403 BadJwtToken, but accepts the app's own
-        // https origin.
-        body: JSON.stringify({ subscription: subscription.toJSON(), label: navigator.userAgent, origin: location.origin }),
-      });
+      const saved = await savePushSubscription(subscription);
       if (!saved.ok) throw new Error(t("notify.subscribeFailed", { status: saved.status }));
       await refreshNotificationStatus();
+    }
+
+    /**
+     * Re-register this browser's existing subscription on every launch (#98).
+     *
+     * A browser can rotate its registration, and the host retires the old
+     * endpoint only when a page names it. Registering again also refreshes the
+     * entry's timestamp, which is the host's evidence that this device still
+     * holds that endpoint: the stale-entry valve keys on it, so an entry is
+     * never pruned while its device keeps opening the app. Nothing is created
+     * here — without permission or an existing subscription there is nothing
+     * to send.
+     */
+    async function syncPushSubscription() {
+      if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+      if (!("serviceWorker" in navigator)) return;
+      try {
+        const registration = await navigator.serviceWorker.getRegistration();
+        const subscription = registration === null || registration === undefined
+          ? null
+          : await registration.pushManager.getSubscription();
+        if (subscription === null || subscription === undefined) return;
+        await savePushSubscription(subscription);
+      } catch {
+        // A failed sync leaves the stored entry alone; Settings can retry.
+      }
     }
 
     async function disableNotifications() {
@@ -10694,9 +11629,28 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     async function sendTestNotification() {
-      // A local showNotification always succeeds, so it proves nothing about
-      // the push path. Ask the host to push for real, and fall back to the
-      // local notification only when the host has no such route.
+      // A visible page draws the banner itself. The host's `/push/test` sends
+      // a real Web Push, and the service worker has to show every push it
+      // receives (WebKit revokes a subscription after silent pushes), so a
+      // foreground test would put a system notification on top of the app the
+      // user is looking at (#98). Push is exercised only when this page cannot
+      // draw a banner — the one case that needs an OS notification. A missing
+      // subscription is still an error: a banner alone must not claim that
+      // push works.
+      if (pageVisible()) {
+        const status = await notificationStatus();
+        if (!status.subscribed) throw new Error(t("notify.notSubscribed"));
+        const shown = notifyUser({
+          title: t("notify.testTitle"),
+          body: t("notify.testBody"),
+          sessionId: currentSessionId ?? "",
+          kind: "test",
+        });
+        if (shown) return;
+      }
+      // A backgrounded page (or a shell with no banner to mount) still proves
+      // the real path: ask the host to push, and fall back to the local
+      // notification only when the host has no such route.
       let pushed = null;
       try {
         const response = await fetch(`${PUSH_API}/test`, {
@@ -10755,6 +11709,38 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     // Relative to the page so a deployment under a proxy prefix (/dsh/…) keeps
     // working; every caller does fetch(`${PUSH_API}/…`).
     const PUSH_API = "api/dsh-mobile-maxxing/push";
+
+    /**
+     * Acknowledge an actually rendered local banner, per push endpoint.
+     *
+     * There is no periodic visibility reporting. If this request does not
+     * reach the host, that particular event falls back to normal Web Push.
+     * The check after the asynchronous subscription lookup prevents a page
+     * that was just backgrounded from suppressing its own OS notification.
+     */
+    async function acknowledgeLocalNotice({ sessionId, kind }) {
+      // `booted` is false once the mobile half is torn down (HMR, page teardown):
+      // the banner is unmounted, so acknowledging would suppress a push for
+      // something nobody can see.
+      if (!booted || !pageVisible() || typeof sessionId !== "string" || sessionId === "") return;
+      if (kind !== "turn-end" && kind !== "question") return;
+      try {
+        const registration = await navigator.serviceWorker?.getRegistration?.();
+        const subscription = await registration?.pushManager?.getSubscription?.();
+        const endpoint = typeof subscription?.endpoint === "string" ? subscription.endpoint : "";
+        // The lookup awaits: the page can be backgrounded or torn down while it
+        // is in flight, and neither may suppress this event's push.
+        if (!booted || endpoint === "" || !pageVisible()) return;
+        await fetch(`${PUSH_API}/ack`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ endpoint, sessionId, kind, origin: location.origin }),
+          keepalive: true,
+        });
+      } catch {
+        // Missing an ack produces an OS notification, never a lost notice.
+      }
+    }
 
     /** Preset notification sounds, synthesised — no audio files to ship. */
     const SOUND_PRESETS = {
@@ -10862,16 +11848,174 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     let noticeRoot = null;
     let noticeHost = null;
+    /**
+     * Identity of the banner currently rendered.
+     *
+     * React reuses the component instance when the same type is rendered at the
+     * same position, and a reused instance does not re-run its mount effect.
+     * Every banner therefore gets its own sequence, used as the element key: a
+     * second banner in a row is a new mount and reports its own commit.
+     */
+    let noticeSequence = 0;
     /** The last reason a banner was skipped, so a repeating one logs once. */
     let noticeSkipReason = "";
+
+    /** How long a local banner suppresses the same push hand-off. */
+    const LOCAL_NOTICE_DEDUP_MS = 4000;
+    /** Recently shown banners: `sessionId|kind` → timestamp. */
+    const recentLocalNotices = new Map();
+    /** The map stays small; expired entries are dropped before the oldest. */
+    const LOCAL_NOTICE_CACHE_MAX = 64;
+
+    /** The dedup key for one banner, or "" when it cannot be one. */
+    function localNoticeKey(sessionId, kind) {
+      if (typeof sessionId !== "string" || sessionId === "") return "";
+      if (typeof kind !== "string" || kind === "") return "";
+      return `${sessionId}|${kind}`;
+    }
+
+    /** Remember that a banner for this session and kind is on screen now. */
+    function markLocalNotice(sessionId, kind) {
+      const key = localNoticeKey(sessionId, kind);
+      if (key === "") return;
+      const now = Date.now();
+      recentLocalNotices.set(key, now);
+      if (recentLocalNotices.size <= LOCAL_NOTICE_CACHE_MAX) return;
+      for (const [existing, at] of recentLocalNotices) {
+        if (now - at >= LOCAL_NOTICE_DEDUP_MS) recentLocalNotices.delete(existing);
+      }
+      while (recentLocalNotices.size > LOCAL_NOTICE_CACHE_MAX) {
+        const oldest = recentLocalNotices.keys().next().value;
+        if (oldest === undefined) break;
+        recentLocalNotices.delete(oldest);
+      }
+    }
+
+    /** Whether this page already showed that banner moments ago. */
+    function localNoticeRecent(sessionId, kind) {
+      const key = localNoticeKey(sessionId, kind);
+      if (key === "") return false;
+      const at = recentLocalNotices.get(key);
+      if (at === undefined) return false;
+      return Date.now() - at < LOCAL_NOTICE_DEDUP_MS;
+    }
+
+    /**
+     * Diff two status snapshots into the banners worth raising locally.
+     *
+     * This is the push-independent path: the status store already changes on
+     * every turn end and every new question, so the page can announce them
+     * without waiting for the worker. Pure and total — a missing map, entry or
+     * field yields no notice instead of throwing — so the diff is testable
+     * without a React shell.
+     *
+     * Root sessions only: a subagent's turn is reported through its parent,
+     * and animating a banner for every child would bury the real ones. The
+     * first render has no previous map, and a re-run with the same map
+     * identity is not a transition; both answer [].
+     *
+     * @param {Map<string, object>|null} previousStatuses - last render's map.
+     * @param {Map<string, object>|null} statuses - this render's map.
+     * @param {object|null} byId - `sessions.byId`, for origin and title.
+     * @param {(key: string) => string} strings - the copy lookup (`t`).
+     * @returns {Array<{title: string, body: string, sessionId: string, kind: string}>}
+     */
+    function localNotices(previousStatuses, statuses, byId, strings) {
+      const notices = [];
+      if (previousStatuses === null || previousStatuses === undefined) return notices;
+      if (statuses === null || statuses === undefined) return notices;
+      if (previousStatuses === statuses) return notices;
+      if (typeof previousStatuses.get !== "function" || typeof statuses.entries !== "function") return notices;
+      const label = (key, fallback) => {
+        try {
+          const value = typeof strings === "function" ? strings(key) : undefined;
+          return typeof value === "string" && value !== "" && value !== key ? value : fallback;
+        } catch {
+          return fallback;
+        }
+      };
+      const sessionTitle = (row) => (row !== null && typeof row === "object" && typeof row.title === "string"
+        ? row.title.trim()
+        : "");
+      let entries;
+      try {
+        entries = [...statuses.entries()];
+      } catch {
+        return notices;
+      }
+      for (const [sessionId, status] of entries) {
+        if (typeof sessionId !== "string" || sessionId === "") continue;
+        let row = null;
+        if (byId !== null && byId !== undefined && typeof byId === "object") {
+          try {
+            row = byId[sessionId];
+          } catch {
+            row = null;
+          }
+        }
+        // Unknown rows are roots: only a known subagent is skipped.
+        if (row !== null && typeof row === "object" && row.origin === "subagent") continue;
+        let previous = null;
+        try {
+          previous = previousStatuses.get(sessionId);
+        } catch {
+          previous = null;
+        }
+        const wasRunning = previous !== null && previous !== undefined && typeof previous === "object" && previous.running === true;
+        const isRunning = status !== null && status !== undefined && typeof status === "object" && status.running === true;
+        const hadInteraction = previous !== null && previous !== undefined && typeof previous === "object"
+          && previous.pendingInteraction !== null && previous.pendingInteraction !== undefined;
+        const hasInteraction = status !== null && status !== undefined && typeof status === "object"
+          && status.pendingInteraction !== null && status.pendingInteraction !== undefined;
+        const title = sessionTitle(row);
+        if (!hadInteraction && hasInteraction) {
+          // A question is the one thing that needs the user, so it wins a
+          // snapshot that also ends a turn (one banner, one sound).
+          const fallback = label("notify.questionHeader", "Confirm");
+          notices.push({
+            sessionId,
+            kind: "question",
+            title: title !== "" ? title : fallback,
+            body: fallback,
+          });
+        } else if (wasRunning && !isRunning) {
+          notices.push({
+            sessionId,
+            kind: "turn-end",
+            title: title !== "" ? title : label("notify.turn.completed", "Work finished"),
+            body: label("notify.turn.detailCompleted", "The work finished."),
+          });
+        }
+      }
+      return notices;
+    }
+
+    /**
+     * Raise the local banners for one status transition.
+     *
+     * The thin half of the watcher: the diff above decides, `notifyUser` gates
+     * on visibility, plays the sound and renders the banner. Wrapped whole so
+     * a broken store entry can never take the overlay down.
+     */
+    function emitLocalNotices(previousStatuses, statuses, byId) {
+      try {
+        for (const notice of localNotices(previousStatuses, statuses, byId, t)) {
+          // A turn-end is notified only when the host will route it here: this
+          // browser's own send, or a host that turned `onlyMobileTurns` off.
+          // Questions always need the user, wherever the turn came from.
+          if (notice.kind === "turn-end" && !hostNotifiesEveryTurn && !markedSendRecent(notice.sessionId)) continue;
+          notifyUser({ ...notice, onShown: () => acknowledgeLocalNotice(notice) });
+        }
+      } catch (error) {
+        console.error("[rdsh-mobile-ux] local notification failed", error);
+      }
+    }
 
     /**
      * Say why an in-app banner was not shown, once per reason.
      *
-     * A skipped banner is otherwise silent in both directions: this side
-     * returns false, and the worker, seeing no ack, leaves the system
-     * notification to appear. That is the right fallback, but it leaves no
-     * trace when a page should have shown the banner. The reason is logged
+     * A skipped banner cannot acknowledge the pending server event, so the
+     * host sends ordinary push after its grace period. The reason is logged
      * once and cleared by the next successful banner, so a shell that never
      * had the primitives logs one line instead of one per notification.
      *
@@ -10881,6 +12025,30 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (noticeSkipReason === reason) return;
       noticeSkipReason = reason;
       console.warn(`[rdsh-mobile-ux] in-app banner skipped: ${reason}`);
+    }
+
+    /**
+     * Render one Toast and report its commit.
+     *
+     * The toast has to exist before anything claims it was delivered: the
+     * effect runs after React commits, so a render that is replaced before it
+     * commits never reports, and nothing acknowledges a banner nobody saw.
+     * StrictMode runs the effect twice; the ref keeps it to one report.
+     *
+     * @param {object} props - `{ seq, toast, toastProps, onCommit }`.
+     * @returns {*} the Toast element.
+     */
+    function CommittedNotice({ seq, toast, toastProps, onCommit }) {
+      // The sequence this instance last reported. A new key remounts with a
+      // fresh ref; a reused instance still reports its new sequence once, and
+      // a duplicated effect for the same sequence reports nothing.
+      const reported = React.useRef(null);
+      useEffect(() => {
+        if (reported.current === seq) return;
+        reported.current = seq;
+        onCommit();
+      }, [seq]);
+      return h(toast, toastProps);
     }
 
     /**
@@ -10897,9 +12065,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * @param {string} [options.body] - one line of detail.
      * @param {string} [options.sessionId] - session the banner is about.
      * @param {string} [options.kind] - turn-end | question | test | notice.
-     * @returns {boolean} whether the banner was shown.
+     * @param {() => void} [options.onShown] - called once the banner commits.
+     * @returns {boolean} whether the banner was rendered.
      */
-    function showInAppNotice({ title, body = "", sessionId = "", kind = "notice" }) {
+    function showInAppNotice({ title, body = "", sessionId = "", kind = "notice", onShown }) {
       if (!pageVisible()) {
         warnNoticeSkipped("the page is not visible");
         return false;
@@ -10930,21 +12099,41 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         // A banner that was acted on should not linger.
         noticeRoot?.render(null);
       };
-      noticeRoot.render(h(
-        primitives.Toast,
-        {
-          // The session name is the headline; the detail is what happened.
-          text: body === "" ? title : `${title} — ${body}`,
-          holdMs: kind === "question" ? 6000 : 4200,
-          actions: sessionId === ""
-            ? undefined
-            : [{ label: t("notify.open"), prefix: " ", onClick: openSession }],
-          // The component owns its lifetime; this clears the tree afterwards.
-          onDone: () => {
-            noticeRoot?.render(null);
-          },
+      const toastProps = {
+        // The session name is the headline; the detail is what happened.
+        text: body === "" ? title : `${title} — ${body}`,
+        holdMs: kind === "question" ? 6000 : 4200,
+        actions: sessionId === ""
+          ? undefined
+          : [{ label: t("notify.open"), prefix: " ", onClick: openSession }],
+        // The component owns its lifetime; this clears the tree afterwards.
+        onDone: () => {
+          noticeRoot?.render(null);
         },
-      ));
+      };
+      // `render()` only schedules the work; the banner exists once its effect
+      // has run. Everything that claims the notice was delivered hangs off that
+      // commit: an ACK for a banner that never appeared makes the host drop the
+      // push for an event nobody saw.
+      let committed = false;
+      const onCommit = () => {
+        if (committed) return;
+        committed = true;
+        // Remember it so the worker's hand-off for the same event does not
+        // stack a second banner on top of this one.
+        markLocalNotice(sessionId, kind);
+        if (typeof onShown !== "function") return;
+        try {
+          onShown();
+        } catch (error) {
+          console.error("[rdsh-mobile-ux] notice commit callback failed", error);
+        }
+      };
+      // The key makes this banner a new mount, so its own effect runs even
+      // while the previous banner is still on screen.
+      noticeSequence += 1;
+      const seq = noticeSequence;
+      noticeRoot.render(h(CommittedNotice, { key: seq, seq, toast: primitives.Toast, toastProps, onCommit }));
       // A banner made it: the next failure is news again.
       noticeSkipReason = "";
       return true;
@@ -11116,15 +12305,25 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const data = event?.data;
       if (data === null || typeof data !== "object") return;
       if (NOTIFY_MESSAGES.includes(data.type)) {
-        const shown = notifyUser({
+        const sessionId = typeof data.sessionId === "string" ? data.sessionId : "";
+        const kind = typeof data.kind === "string" ? data.kind : "notice";
+        // The local watcher may have announced this exact event a moment ago.
+        // The hand-off still gets its acknowledgement (a banner for it was
+        // rendered), but it must not stack a second one on top.
+        if (localNoticeRecent(sessionId, kind)) {
+          event?.ports?.[0]?.postMessage("shown");
+          return;
+        }
+        // The old worker shows its own banner unless this page answers, so the
+        // answer waits for this page's banner to commit — the same rule as the
+        // host ACK, and for the same reason: answering early loses the notice.
+        notifyUser({
           title: typeof data.title === "string" ? data.title : "DSH",
           body: typeof data.body === "string" ? data.body : "",
-          sessionId: typeof data.sessionId === "string" ? data.sessionId : "",
-          kind: typeof data.kind === "string" ? data.kind : "notice",
+          sessionId,
+          kind,
+          onShown: () => event?.ports?.[0]?.postMessage("shown"),
         });
-        // The worker shows a system banner unless we take the notification, so
-        // acknowledge only when a banner was actually rendered.
-        if (shown) event?.ports?.[0]?.postMessage("shown");
         return;
       }
       if (OPEN_SESSION_MESSAGES.includes(data.type)) {
@@ -11702,19 +12901,16 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
    lives in the mobile sheet, so a desktop never sees it. */
 html[data-rdsh-hide-settings] [data-conversation-tabs] [data-rdsh-trajectory-tab-hidden] { display: none !important; }
 
-/* Session colour frames and their menu/palette. The frame is a phone
-   affordance in the #44 contract: a desktop sidebar is upstream's, unchanged. */
+/* Session/folder colour frames and the session menu palette. The frame is a
+   phone affordance in the #44 contract: a desktop sidebar is upstream's,
+   unchanged. Folder menu rows use the native MenuItemButton seat, so no menu
+   cell geometry is redeclared here. */
 [data-rdsh-session-frame] {
   box-shadow: inset 0 0 0 2px var(--rdsh-session-frame) !important;
 }
-.rdsh-frame-menu-item {
-  width: 100%; display: flex; align-items: center; gap: 10px;
-  padding: 8px 12px; border: 0; border-radius: 8px;
-  background: transparent; color: var(--dsw-alias-label-primary, #f9fafb);
-  font: inherit; font-size: 13px; text-align: left; cursor: pointer;
+[data-rdsh-folder-frame] {
+  box-shadow: inset 0 0 0 2px var(--rdsh-folder-frame) !important;
 }
-.rdsh-frame-menu-item:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,.08)); }
-.rdsh-frame-menu-icon { display: grid; place-items: center; width: 16px; height: 16px; opacity: .9; }
 .rdsh-frame-backdrop { position: fixed; inset: 0; z-index: 900; background: transparent; }
 .rdsh-frame-pop {
   position: fixed; z-index: 901; width: 252px; box-sizing: border-box;
@@ -12330,7 +13526,10 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
     flex: 1 1 auto !important;
     min-width: 0 !important;
   }
-  [data-rdsh-model-button] [class*="triggerEffort"] {
+  /* #97: the second selector survives the JS hook going missing (an
+     unrecognised model trigger); triggerEffort is unique to the model seat. */
+  [data-rdsh-model-button] [class*="triggerEffort"],
+  [data-rdsh-composer-root] [class*="triggerEffort"] {
     flex: 0 0 auto !important;
     width: auto !important;
     max-width: none !important;
@@ -12623,11 +13822,28 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   [data-shortcut-modal="settings"] [class*="zGbnIq_rowName"] { min-width: 0 !important; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   [data-shortcut-modal="settings"] [class*="zGbnIq_rowActions"] { flex-shrink: 0; gap: 6px; }
   [data-shortcut-modal="settings"] [class*="zGbnIq_rowActions"] button { padding-left: 10px !important; padding-right: 10px !important; }
+  /* Settings > Models: the two-step "Add provider" tabs wrap instead of
+     running off the card. The primitive tab is nowrap and the panel has no
+     scroller of its own (overflow-x is hidden above), so a long ja label
+     overflowed the card with no way to reach it (#100). */
+  [data-shortcut-modal="settings"] [class*="zGbnIq_addModes"] { min-width: 0; max-width: 100%; }
+  [data-shortcut-modal="settings"] [class*="zGbnIq_addModes"] > [role="tablist"] {
+    max-width: 100% !important;
+    grid-auto-columns: minmax(0, 1fr) !important; box-sizing: border-box;
+  }
+  [data-shortcut-modal="settings"] [class*="zGbnIq_addModes"] > [role="tablist"] > [role="tab"] {
+    white-space: normal !important; height: auto !important; min-height: 28px; padding: 4px 10px !important;
+  }
 
-  /* Model picker: value never runs into the chevron. */
-  [class*="_7KE1Ra_menu"] { max-width: calc(100vw - 24px) !important; box-sizing: border-box !important; }
-  [class*="_7KE1Ra_cell"] { min-width: 0 !important; gap: 8px !important; }
-  [class*="_7KE1Ra_cell"] > span:last-of-type { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Model picker: value never runs into the chevron. The menu class hash
+     changes between builds (#76), so the JS hook scopes the rule and only the
+     stable cell suffix is matched. */
+  /* No !important on max-width: the clamp writes a narrower inline cap when the
+     safe band is smaller than the menu, and !important made that write lose, so
+     a wide menu crossed the right edge (#84). */
+  [data-rdsh-model-menu] { max-width: calc(100vw - 24px); box-sizing: border-box !important; }
+  [data-rdsh-model-menu] [class*="_cell"] { min-width: 0 !important; gap: 8px !important; }
+  [data-rdsh-model-menu] [class*="_cell"] > span:last-of-type { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   [data-rdsh-model-search]:disabled { opacity: 1 !important; cursor: text; }
 
   /* Agent question / plan review card: use the same 16px gutter and 349px
@@ -12882,6 +14098,13 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   /* The answer field takes its height from a hidden mirror, so both layers
      must share the font size (16px here stops iOS from zooming on focus). */
   [data-rdsh-question-card] [class*="_field"] > * { font-size: 16px !important; }
+  /* The on-screen keyboard shrinks the layout viewport, and upstream's 60vh
+     cap then collapsed the card to its header and footer before the answer
+     field. While a field inside the card has focus, size the card from the
+     visible height; the phone JS keeps that field scrolled into view. */
+  [data-rdsh-question-card][data-rdsh-question-typing] {
+    max-height: calc(100dvh - 28px) !important;
+  }
   /* The card clips its overflow, so a long unbroken token used to be cut. */
   [data-rdsh-question-card] [class*="_optionLabel"],
   [data-rdsh-question-card] [class*="_title"],
@@ -12991,10 +14214,10 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
        it to this full-width pane as well double-insets the panel (and cost 47px
        of height in portrait). */
   }
-  /* #82: name the kind of panel above dockkit's tab strip. The panel already
-     applies the safe-area insets; the heading only adds its own gutters. It
-     is pointer-transparent and sits outside the strip and the terminal body,
-     so it cannot claim a tab drag or resize the xterm mount. */
+  /* #82: name the kind of panel above dockkit's tab strip, per tab kind. The
+     panel already applies the safe-area insets; the heading only adds its own
+     gutters. It is pointer-transparent and sits outside the strip and the
+     panel body, so it cannot claim a tab drag or resize the xterm mount. */
   [data-rdsh-rightpanel] [data-rdsh-panel-heading] {
     flex: 0 0 auto;
     box-sizing: border-box;
@@ -13012,8 +14235,13 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   /* The preview's close control is drawn as a panel glyph, which reads as
      "collapse this pane" rather than "leave the preview". Swap it for an X,
      the same glyph the tab close buttons already use. */
-  [data-rdsh-rightpanel] [aria-label="Collapse right sidebar"] svg,
+  /* #97: the panel toggle's label is localised, so the stable upstream
+     attribute carries the glyph swap; the English label stays for an older
+     shell that does not emit it. */
+  [data-rdsh-rightpanel] [data-sidebar-right-toggle] svg,
+  [data-sidebar-right-toggle] svg,
   [aria-label="Collapse right sidebar"] svg { display: none !important; }
+  [data-sidebar-right-toggle]::before,
   [aria-label="Collapse right sidebar"]::before {
     content: ""; width: 16px; height: 16px; display: block;
     background: currentColor;
@@ -13104,11 +14332,14 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
     word-break: break-word !important;
   }
 
-  /* Two controls in the panel header duplicate what the phone already is or
-     cannot do: "Exit fullscreen" closes the panel exactly like the ✕ next to
-     it, and "Split" needs width the phone does not have. Keep only the ✕. */
-  ${RIGHT_PANEL_EXIT},
-  ${RIGHT_PANEL_SPLIT} { display: none !important; }
+  /* "Split" needs width a phone does not have, and this plugin uses the docked
+     column as its tablet layout instead of dockkit's pane split, so it stays
+     hidden everywhere on mobile (#59, #72). "Exit fullscreen" is deliberately
+     NOT hidden here any more (#72): hiding it "because the ✕ is next to it"
+     also hid the only way back from a fullscreen panel once the tablet tier's
+     show rule lost to this later hide. It closes the panel exactly like the ✕
+     on a phone, and docks the panel again on a tablet. */
+  [data-dockkit-split-button] { display: none !important; }
 
   /* The native strip already contains the home indicator. */
   html[data-rdsh-native-gap] [data-rdsh-sidebar],
@@ -13184,6 +14415,41 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
 .rdsh-mux-nav-more-menu button[disabled] {
   color: var(--dsw-alias-label-tertiary, #a1a1aa);
   cursor: default;
+}
+
+/* #92: the three folded rows appended to the shell's own More menu. React does
+   not reconcile these nodes, so they cannot use a hashed shell class; the
+   dimensions mirror a shell menu row (36px, 16px glyph + 8px gap, 14px label)
+   and the hover tint is the same alias. */
+.rdsh-mux-more-item {
+  box-sizing: border-box; width: 100%; min-height: 36px;
+  margin: 0; padding: 7px 10px; border: 0; border-radius: var(--dsw-radius-md, 8px);
+  display: flex; align-items: center; gap: 8px;
+  font: inherit; font-size: 14px; line-height: 22px; text-align: left;
+  color: var(--dsw-alias-label-primary, #f9fafb); background: transparent;
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.rdsh-mux-more-item:hover,
+.rdsh-mux-more-item:focus-visible {
+  background: var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,.08));
+  outline: none;
+}
+.rdsh-mux-more-item:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary, #7aaaff);
+  outline-offset: -2px;
+}
+.rdsh-mux-more-icon {
+  flex: none; width: 16px; height: 16px;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.rdsh-mux-more-icon svg { width: 16px; height: 16px; display: block; }
+.rdsh-mux-more-label {
+  min-width: 0; overflow: hidden;
+  white-space: nowrap; text-overflow: ellipsis;
+}
+.rdsh-mux-more-sep {
+  flex: none; height: 1px; margin: 4px 6px;
+  background: var(--dsw-alias-border-l3, rgba(255,255,255,.16));
 }
 
 `;
@@ -13318,6 +14584,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           if (window.innerWidth !== gestureWidth) {
             gestureWidth = window.innerWidth;
             resetGestures();
+            resetRightPanelPromotion();
           }
           onLayoutResize();
         };
@@ -13325,6 +14592,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           gestureWidth = window.innerWidth;
           if (!phone()) return;
           resetGestures();
+          resetRightPanelPromotion();
           onLayoutResize();
         };
         // #76: iPadOS standalone can dismiss the soft keyboard while the
@@ -13458,6 +14726,9 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
 
         scheduleDecorate();
         void refreshNotificationStatus();
+        // #98: re-assert this device's subscription so a rotated endpoint
+        // retires the one it replaced, and the host sees this device as live.
+        void syncPushSubscription();
 
         globalThis.__RDSH_MOBILE_UX__ = {
           get state() { return { ...state }; },
@@ -13493,7 +14764,27 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             sequence: terminalKeySequence,
             controlByte: terminalControlByte,
           },
+          // The answer field's Enter/required-selection rules. The tests drive
+          // these closures the way folderFrames is driven above.
+          questionCard: {
+            keyDown: questionCardKeyDown,
+            needsSelection: questionNeedsSelection,
+            clearFeedback: clearQuestionFeedback,
+          },
           phone,
+          // Folder frames and the one-shot workspace-menu claim. The keys,
+          // offsets and DOM checks above are what the browser uses; the tests
+          // drive the same closures.
+          folderFrames: {
+            read: () => ({ ...folderFrames }),
+            save: saveFolderFrame,
+            menu: () => folderMenu,
+            pending: () => folderMenuPending,
+            arm: armFolderMenu,
+            claim: attachFolderMenu,
+            decorate: decorateFolderMenu,
+            clear: clearFolderMenu,
+          },
           markMobileSession,
           closeDrawer,
           openDrawer: toggleDrawer,
@@ -13554,6 +14845,9 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             // the cleanup below.
             live = false;
             scheduled = false;
+            // A teardown forgets which sends this page reported; the next mount
+            // has to learn them from its own sends again.
+            markedSendSessions.clear();
             // One teardown path: every owned attribute/node/listener/style,
             // the original viewport and the upstream palette. It runs even if
             // the window is still narrow, so a live reload starts clean.
@@ -13603,6 +14897,20 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         disposeWorkspaceTools,
         filesMenu: () => filesMenu,
         filesSearch: () => filesSearch,
+      };
+    }
+
+    // Test seam for the push-independent notifications. The diff is a plain
+    // function, but rendering the banner needs React and a DOM; a harness that
+    // sets this flag before load gets the same closures production uses.
+    // Nothing reads it in a normal page.
+    const noticeTestHook = globalThis.__RDSH_NOTICE_TEST__;
+    if (noticeTestHook !== null && typeof noticeTestHook === "object") {
+      noticeTestHook.notice = {
+        localNotices,
+        emitLocalNotices,
+        onWorkerMessage,
+        localNoticeRecent,
       };
     }
 
@@ -13703,72 +15011,16 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
     }
 
     // ---------------------------------------------------------------------
-    // rdsh-session-id-copy — copy a session id from its row menu.
-    // ---------------------------------------------------------------------
-    function sessionIdCopyPart() {
-
-    const React = require("react");
-    const primitives = require("@deepseek-ai/dsh-client-ui-primitives");
-    const h = React.createElement;
-
-    const SLOT = "sidebar.workspaces.session.menu.item";
-    const ENTRY_ID = "rdsh-session-id-copy";
-    // After the shipped rows (pin 100 / rename 200 / fork 300 / archive 400).
-    const ORDER = 500;
-    // Resolved at render time so the device-local display language reaches
-    // this row too; the registration label is likewise a getter.
-    const label = () => t("sessionId.label");
-
-    /** One "..." menu row: copy this Session's ID, then close the menu. */
-    function CopySessionIdMenuItem({ sessionId, useMenuOpenState }) {
-      const [, setMenuOpen] = useMenuOpenState();
-      const id = String(sessionId ?? "");
-      return h(primitives.MenuItemButton, {
-        // Icon seat of the shipped rows; the default 16px one-pixel outline,
-        // like pin / rename / fork beside it.
-        icon: h(primitives.IconCopyOutlineRegular, { key: "icon" }),
-        onSelect: () => {
-          setMenuOpen(false);
-          void copyText(id).then((copied) => {
-            if (copied) {
-              notify(t("sessionId.copied"));
-              return;
-            }
-            // 自動コピーが両方とも塞がれている環境では、選択済みの ID を見せる。
-            if (typeof window === "object" && window !== null && typeof window.prompt === "function") {
-              window.prompt(t("sessionId.manualPrompt"), id);
-            }
-          });
-        },
-        children: label(),
-      });
-    }
-
-    return {
-      inject: ["slots"],
-      apply(ctx) {
-        // Wait for ui-workspace's declaration before contributing to it.
-        ctx.slots.inject(SLOT, () =>
-          ctx.slots.register({ name: SLOT, id: ENTRY_ID, order: ORDER, label }, CopySessionIdMenuItem),
-        );
-      },
-    };
-    }
-
-    // ---------------------------------------------------------------------
     // Wiring
     // ---------------------------------------------------------------------
     return {
       inject: ["slots"],
       apply(ctx) {
-        // Order matters only for the one that touches the session menu: the id
-        // copy row registers into its own slot, so any order works. Each part
-        // is built and applied behind its own guard: one broken half must not
-        // take the other two down with it.
+        // Each part is built and applied behind its own guard: one broken half
+        // must not take the other one down with it.
         const factories = [
           ["pwa", pwaPart],
           ["mobile-ux", mobilePart],
-          ["session-id-copy", sessionIdCopyPart],
         ];
         for (const [name, factory] of factories) {
           let part;

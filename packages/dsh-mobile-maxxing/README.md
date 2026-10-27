@@ -1,7 +1,7 @@
 # dsh-mobile-maxxing — `dsh-mobile-maxxing`
 
 DSH（DeepSeek Harness）の Web UI をスマホで使い倒すための統合プラグインです。
-PWA・通知・モバイルUX・セッションIDのコピーを1パッケージにまとめています。
+PWA・通知・モバイルUXを1パッケージにまとめています。
 CJK表示の修正は、PC 側の描画を変えない方針のため別パッケージ `rdsh-markdown-cjk` に分離しています。
 **素の DSH にそのまま入ります。** コア機能に他の `rdsh-*` プラグインも外部 npm パッケージも不要です。
 
@@ -44,9 +44,9 @@ dsh plugin --profile web add link:/path/to/dsh-mobile-maxxing
 ```
 
 **必要なのはこれだけです。** 追加のプラグインも、`web-push` などのライブラリも要りません。
-日本語の共有 UI だけは任意の別パッケージ `rdsh-locale-ja` が所有します（この tarball には
+日本語の共有 UI だけは任意の別パッケージ `dsh-locale-ja` が所有します（この tarball には
 含まれず、自動では有効になりません）。完全な翻訳のローカル tarball から入れる手順は
-[`../rdsh-locale-ja/README.md`](../rdsh-locale-ja/README.md) にあります。
+[`../dsh-locale-ja/README.md`](../dsh-locale-ja/README.md) にあります。
 
 ## できること
 
@@ -61,8 +61,7 @@ dsh plugin --profile web add link:/path/to/dsh-mobile-maxxing
 | チャット表示（この端末のみ） | 作業の詳細・折りたたみ時機・実行中の Enter・性能表示を、この端末だけ上書き。共有設定は変更しない |
 | モバイル操作の細部 | ターミナルだけダーク、上端で過去ログを自動読み込み、Trajectory タブ非表示、右パネル見出し、ファイル検索のクリア、モデルメニューのセーフエリア、左端スワイプで戻る |
 | CJK 表示の修正（任意） | 別パッケージ `rdsh-markdown-cjk` を入れた場合のみ。このパッケージ本体は PC 側を変えないため、Markdown レンダラを書き換えません |
-| 日本語 UI（任意） | 別パッケージ `rdsh-locale-ja` をローカルの tarball から入れた場合のみ。この tarball には含まれず、自動で有効になりません |
-| セッションIDのコピー | セッションメニューに1行追加 |
+| 日本語 UI（任意） | 別パッケージ `dsh-locale-ja` をローカルの tarball から入れた場合のみ。この tarball には含まれず、自動で有効になりません |
 
 ## もっと詳しく
 
@@ -74,7 +73,7 @@ dsh plugin --profile web add link:/path/to/dsh-mobile-maxxing
 ## 開発
 
 ```sh
-npm test     # Node.js のテスト + 任意の Chrome CSS fixture 3件
+npm test     # Node.js のテスト + 任意の Chrome CSS fixture 7件
 ```
 
 ビルド工程はありません。`client.js` はブラウザにそのまま配信され、`index.js` は Node
@@ -85,7 +84,7 @@ npm test     # Node.js のテスト + 任意の Chrome CSS fixture 3件
 # English
 
 A single integrated plugin that makes the DSH (DeepSeek Harness) Web UI pleasant on phones and tablets:
-installable PWA, notifications, a phone/tablet layout chosen by device mode and a session-id copy row.
+installable PWA, notifications and a phone/tablet layout chosen by device mode.
 The CJK autolink fix stays a separate package (`rdsh-markdown-cjk`) because this package deliberately
 leaves the PC renderer untouched. **It installs on a stock DSH** — the core needs no other `rdsh-*`
 plugin and no external npm package.
@@ -125,8 +124,8 @@ dsh plugin --profile web add link:/path/to/dsh-mobile-maxxing
 ```
 
 **That is all.** No companion plugin, no `web-push`, no build step. The shared Japanese UI
-is owned only by the optional separate `rdsh-locale-ja` package (not in this tarball, never
-auto-enabled); see [`../rdsh-locale-ja/README.md`](../rdsh-locale-ja/README.md) for its
+is owned only by the optional separate `dsh-locale-ja` package (not in this tarball, never
+auto-enabled); see [`../dsh-locale-ja/README.md`](../dsh-locale-ja/README.md) for its
 local-tarball install.
 
 ## What it does
@@ -142,8 +141,7 @@ local-tarball install.
 | Chat view (this device) | Work-details verbosity, collapse timing, busy Enter and performance detail overridden for this browser only |
 | Mobile polish | Terminal-only dark, older history at scroll-to-top, hidden Trajectory tab, right-panel heading, file-search clear, model-menu safe area, left-edge swipe back |
 | CJK rendering (optional) | Only with the separate `rdsh-markdown-cjk` package; this package leaves the Markdown renderer stock to avoid changing the PC |
-| Japanese UI (optional) | Only with the separate `rdsh-locale-ja` package from its local tarball; it is not in this tarball and is never enabled automatically |
-| Session id copy | One row in the session row menu |
+| Japanese UI (optional) | Only with the separate `dsh-locale-ja` package from its local tarball; it is not in this tarball and is never enabled automatically |
 
 ## More detail
 
@@ -153,7 +151,7 @@ local-tarball install.
 ## Development
 
 ```sh
-npm test     # Node.js tests + optional Chrome CSS fixture tests (3)
+npm test     # Node.js tests + optional Chrome CSS fixture tests (7)
 ```
 
 There is no build step: `client.js` is served verbatim and `index.js` uses only Node

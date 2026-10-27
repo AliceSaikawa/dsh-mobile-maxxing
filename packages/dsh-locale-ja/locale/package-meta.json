@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "name": "rdsh-locale-ja",
+  "name": "dsh-locale-ja",
   "version": "0.1.0",
   "private": true,
   "description": "Optional Japanese locale package for DSH: the sole ja language and namespace owner, released only when every key has a reviewed Japanese entry and no value falls back to English.",
@@ -17,9 +17,9 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/kuraneko1/dsh-mobile-maxxing.git",
-    "directory": "packages/rdsh-locale-ja"
+    "directory": "packages/dsh-locale-ja"
   },
-  "homepage": "https://github.com/kuraneko1/dsh-mobile-maxxing/tree/main/packages/rdsh-locale-ja#readme",
+  "homepage": "https://github.com/kuraneko1/dsh-mobile-maxxing/tree/main/packages/dsh-locale-ja#readme",
   "bugs": {
     "url": "https://github.com/kuraneko1/dsh-mobile-maxxing/issues"
   }

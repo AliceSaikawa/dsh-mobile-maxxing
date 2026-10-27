@@ -535,6 +535,8 @@ const PHONE_SAMPLE = {
 	"[data-rdsh-rightpanel]": "div",
 	"[data-rdsh-session]": "div",
 	"[data-rdsh-session-frame]": "div",
+	"[data-rdsh-folder-frame]": "div",
+	"[data-rdsh-folder-menu]": "div",
 	"[data-rdsh-question-card]": "div",
 	"[data-rdsh-todo-item]": "li",
 	"[data-rdsh-transcript]": "div",
@@ -742,6 +744,8 @@ function ipadPanel(booted, { viewportWidth, dockWidth, open = true, label = "Ful
 	const panel = new FakeNode("div");
 	panel.className = "_panel";
 	const collapse = new FakeNode("button");
+	// #97: upstream's stable panel-toggle attribute; the label is localised.
+	collapse.setAttribute("data-sidebar-right-toggle", "");
 	collapse.setAttribute("aria-label", "Collapse right sidebar");
 	const fullscreen = new FakeNode("button");
 	fullscreen.setAttribute("aria-label", label);
@@ -787,11 +791,19 @@ test("#72 the tablet tier reserves the measured dock and keeps safe-area padding
 		/\[data-rdsh-rightpanel\] \[aria-label="Exit fullscreen"\], \[data-rdsh-rightpanel\] \[aria-label="全画面表示を終了"\] \{ display: inline-flex !important; \}/,
 		"the tablet cannot leave fullscreen in en or ja",
 	);
-	assert.match(phone, /\[data-rdsh-rightpanel\] \[aria-label="全画面表示を終了"\]/, "the ja phone still shows the duplicate exit control");
+	// #72: the exit control is never hidden again. Hiding it left a fullscreen
+	// panel with no way back once the tablet show rule lost to a later hide.
+	assert.doesNotMatch(
+		phone,
+		/aria-label="(?:Exit fullscreen|全画面表示を終了)"[^{}]*\{[^}]*display:\s*none/,
+		"a rule still hides the only way out of fullscreen",
+	);
+	// #59: the split control is hidden without depending on the panel tag, so
+	// a closed or not-yet-decorated panel cannot offer it.
 	assert.match(
 		phone,
-		/\[data-rdsh-rightpanel\] \[aria-label="Split"\], \[data-rdsh-rightpanel\] \[aria-label="分割"\] \{ display: none !important; \}/,
-		"the ja phone still shows the dock split control",
+		/\[data-dockkit-split-button\] \{ display: none !important; \}/,
+		"dockkit's pane split is reachable on a phone",
 	);
 	assert.doesNotMatch(tablet, /\[aria-label="Split"\].*display: (?:inline-flex|block)/, "dockkit's pane split was restored");
 	assert.doesNotMatch(tablet, /padding-(?:top|right|bottom|left)/, "the tablet tier reset the panel's safe-area padding");

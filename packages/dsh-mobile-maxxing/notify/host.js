@@ -35,6 +35,15 @@ const PUSH_TTL_SECONDS = 600;
 const VAPID_TTL_SECONDS = 12 * 60 * 60;
 /** How many subscriptions one store keeps; the oldest is dropped past this. */
 const MAX_SUBSCRIPTIONS = 32;
+/**
+ * How long one device's registration stays trusted while it is never refreshed.
+ *
+ * A browser re-registers on every launch, so a live device keeps its entry
+ * fresh. An entry this old belongs to a registration the device no longer
+ * holds — typically left behind by a reinstall that cleared its storage, which
+ * also clears the endpoint it would otherwise name (#98).
+ */
+const STALE_SUBSCRIPTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // Small helpers
@@ -562,10 +571,24 @@ export class PushStore {
 	}
 
 	/**
-	 * Add or refresh one subscription.
+	 * Add or refresh one subscription, retiring the registration it replaced.
+	 *
+	 * A browser can replace its push registration (reinstall, RFC 8030
+	 * rotation). The replaced endpoint is unreachable from the page but still
+	 * delivered to the same device, so leaving it stored makes every
+	 * notification arrive twice — the foreground banner plus a system
+	 * notification from the stale copy (#98). The page names the endpoint it
+	 * held last, and only that exact entry is dropped.
+	 *
+	 * The endpoint is per browser registration, not per origin: two devices can
+	 * serve the same origin, and a device that reinstalled can name nothing.
+	 * An entry left without a `previousEndpoint` is therefore only dropped once
+	 * it has not been refreshed for {@link STALE_SUBSCRIPTION_MS} and carries
+	 * this device's label — a live device refreshes its entry on every launch.
 	 *
 	 * @param {object} subscription - `{ endpoint, keys }` from the browser.
-	 * @param {object} [meta] - `{ label, origin }` for the VAPID contact.
+	 * @param {object} [meta] - `{ label, origin, previousEndpoint }` for the
+	 *   VAPID contact and for the registration this browser replaced.
 	 * @returns {number} how many subscriptions are stored now.
 	 */
 	add(subscription, meta = {}) {
@@ -591,9 +614,29 @@ export class PushStore {
 			origin: normalizeOrigin(meta.origin),
 			addedAt: Date.now(),
 		};
+		const previous = typeof meta.previousEndpoint === "string" ? meta.previousEndpoint : "";
 		this.reload();
-		this.state.subscriptions = [entry, ...this.state.subscriptions.filter((item) => item.endpoint !== endpoint)]
-			.slice(0, MAX_SUBSCRIPTIONS);
+		let kept = this.state.subscriptions.filter((item) => item.endpoint !== endpoint);
+		// Same origin only: the endpoint came from this browser, but an entry
+		// owned by another app is not this registration's to remove.
+		if (previous !== "" && previous !== endpoint) {
+			kept = kept.filter((item) => !(item.endpoint === previous && sameOrigin(item.origin, entry.origin)));
+		}
+		// The safety valve for entries no client can name. It is scoped to this
+		// origin and this label, so another origin (or a device with a different
+		// label) is never touched; a live device resets its own `addedAt` at
+		// every launch, which is what keeps it out of this filter.
+		if (entry.origin !== "" && entry.label !== "") {
+			const cutoff = entry.addedAt - STALE_SUBSCRIPTION_MS;
+			kept = kept.filter((item) => !(
+				item.endpoint !== endpoint
+				&& item.label === entry.label
+				&& sameOrigin(item.origin, entry.origin)
+				&& Number.isFinite(item.addedAt)
+				&& item.addedAt <= cutoff
+			));
+		}
+		this.state.subscriptions = [entry, ...kept].slice(0, MAX_SUBSCRIPTIONS);
 		this.save();
 		return this.state.subscriptions.length;
 	}
@@ -740,6 +783,37 @@ export function applyNotify(ctx, config) {
 	/** Enough remembered origins for two apps plus a proxy and a stale tab. */
 	const MAX_OWN_ORIGINS = 8;
 
+	/** Allow a foreground client to render and acknowledge before sending push. */
+	const NOTICE_ACK_GRACE_MS = 1500;
+	/** Only actual, in-flight notices are kept: nothing remains after the grace. */
+	const pendingNotices = new Set();
+
+	/**
+	 * Acknowledge one notice for one subscription, only if that origin is a
+	 * target of a currently pending delivery. An unsolicited/stale ack cannot
+	 * suppress a later event, and another device still receives its push.
+	 *
+	 * The oldest unacknowledged event is consumed first. A payload carries no
+	 * event id and the status hook exposes none, so an ACK names a session and a
+	 * kind, not one event; insertion order is the only rule that leaves a newer,
+	 * still-unacknowledged event its push. An ACK that arrives late can still
+	 * land on the wrong event of the same session and kind — that gap is known
+	 * and accepted, not silently guessed at.
+	 */
+	function acknowledgeNotice({ endpoint, sessionId, kind, origin }) {
+		if (typeof endpoint !== "string" || endpoint === "") return false;
+		if (typeof sessionId !== "string" || sessionId === "") return false;
+		if (kind !== "turn-end" && kind !== "question") return false;
+		for (const pending of pendingNotices) {
+			if (pending.payload.sessionId !== sessionId || pending.payload.kind !== kind) continue;
+			if (!sameOrigin(pending.origin, origin)) continue;
+			if (!pending.endpoints.has(endpoint) || pending.acked.has(endpoint)) continue;
+			pending.acked.add(endpoint);
+			return true;
+		}
+		return false;
+	}
+
 	/** Record one origin as the most recently served. */
 	function learnOrigin(value) {
 		const text = typeof value === "string" ? value.trim() : "";
@@ -851,7 +925,29 @@ export function applyNotify(ctx, config) {
 		}
 		const subject = store.subject(copy.subject);
 		const results = [];
+		let pending = null;
+		if (target.awaitAck === true && typeof payload?.sessionId === "string" && payload.sessionId !== "") {
+			pending = {
+				payload,
+				origin: targetOrigin,
+				endpoints: new Set(subscriptions.map((item) => item.endpoint)),
+				acked: new Set(),
+			};
+			pendingNotices.add(pending);
+			try {
+				await new Promise((resolve) => setTimeout(resolve, NOTICE_ACK_GRACE_MS));
+			} finally {
+				pendingNotices.delete(pending);
+			}
+		}
 		for (const subscription of subscriptions) {
+			// Skip only after this particular notice was rendered and acknowledged.
+			// A suspended page, failed request, or missing UI always gets normal
+			// push instead of losing the notification behind a stale visibility lease.
+			if (pending?.acked.has(subscription.endpoint)) {
+				results.push({ status: 0, ok: true, skipped: "acknowledged" });
+				continue;
+			}
 			try {
 				const result = await sendWebPush(subscription, payload, { keys: store.keys(), subject });
 				results.push({ status: result.status, ok: result.ok });
@@ -863,7 +959,11 @@ export function applyNotify(ctx, config) {
 				results.push({ status: 0, ok: false, error: describePushError(error) });
 			}
 		}
-		return { ok: results.some((item) => item.ok), subject, results, targetOrigin };
+		const everyDelivered = results.every((item) => item.ok);
+		const skipped = results.length > 0 && results.every((item) => item.skipped === "acknowledged")
+			? "acknowledged"
+			: undefined;
+		return { ok: results.length > 0 && everyDelivered, subject, results, targetOrigin, skipped };
 	}
 
 	ctx.inject(["agents"], (agentCtx) => {
@@ -891,7 +991,7 @@ export function applyNotify(ctx, config) {
 				copy,
 				lang: copy.lang,
 				session: sessionNameOf(ctx, session),
-			}), { origin }).catch((error) => {
+			}), { origin, awaitAck: true }).catch((error) => {
 				console.error("[dsh-mobile-maxxing] turn-end push failed", error);
 			});
 		});
@@ -909,7 +1009,7 @@ export function applyNotify(ctx, config) {
 					copy,
 					lang: copy.lang,
 					session: asking === undefined ? "" : sessionNameOf(ctx, asking),
-				}), { origin }).catch((error) => {
+				}), { origin, awaitAck: true }).catch((error) => {
 					console.error("[dsh-mobile-maxxing] question push failed", error);
 				});
 			}
@@ -994,7 +1094,13 @@ export function applyNotify(ctx, config) {
 						// and overwriting it would misroute the push. The
 						// headers remain the fallback for a hand-rolled request.
 						const origin = requestOrigin(req, body);
-						const count = store.add(body.subscription, { label: body.label, origin });
+						const count = store.add(body.subscription, {
+							label: body.label,
+							origin,
+							// The endpoint this browser held before this
+							// registration; see `PushStore.add` (#98).
+							previousEndpoint: body.previousEndpoint,
+						});
 						json(res, 200, { ok: true, count, subject: store.subject(copy.subject) });
 					} catch (error) {
 						json(res, 400, { ok: false, error: String(error?.message ?? error) });
@@ -1018,6 +1124,27 @@ export function applyNotify(ctx, config) {
 					// also holds the other installed origin's subscription.
 					const removed = typeof endpoint === "string" ? store.remove(endpoint, requestOrigin(req, body)) : false;
 					json(res, 200, { ok: true, removed, count: store.subscriptions().length });
+				},
+			},
+			{
+				kind: "exact",
+				path: "/api/dsh-mobile-maxxing/push/ack",
+				handler: async (req, res) => {
+					if (!guard(req, res)) return;
+					if (req.method !== "POST") {
+						res.writeHead(405, { allow: "POST" });
+						res.end();
+						return;
+					}
+					const body = await readJsonBody(req);
+					noteOrigin(req, body);
+					const acknowledged = acknowledgeNotice({
+						endpoint: body?.endpoint,
+						sessionId: body?.sessionId,
+						kind: body?.kind,
+						origin: requestOrigin(req, body),
+					});
+					json(res, 200, { ok: true, acknowledged });
 				},
 			},
 			{

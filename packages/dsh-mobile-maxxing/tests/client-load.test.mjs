@@ -99,6 +99,119 @@ function element() {
 }
 
 /**
+ * A tiny element tree for the folder-menu test. The generic stub above answers
+ * every call but keeps no children, so a claim needs a node that can really
+ * append a host, report children and answer the few selectors the claim uses.
+ */
+function treeElement(tagName = "div") {
+	const attributes = new Map();
+	const node = {
+		tagName: tagName.toUpperCase(),
+		className: "",
+		classList: [],
+		textContent: "",
+		parentElement: null,
+		childNodes: [],
+		style: { setProperty() {}, removeProperty() {} },
+		connected: true,
+		get id() {
+			return attributes.get("id") ?? "";
+		},
+		set id(value) {
+			attributes.set("id", String(value));
+		},
+		get children() {
+			return this.childNodes.filter((child) => child.tagName !== undefined);
+		},
+		get isConnected() {
+			return this.connected;
+		},
+		setAttribute(name, value) {
+			attributes.set(name, String(value));
+			if (name === "class") this.classList = String(value).split(/\s+/).filter(Boolean);
+		},
+		getAttribute(name) {
+			return attributes.has(name) ? attributes.get(name) : null;
+		},
+		hasAttribute(name) {
+			return attributes.has(name);
+		},
+		removeAttribute(name) {
+			attributes.delete(name);
+		},
+		append(...children) {
+			for (const child of children) {
+				if (child.parentElement !== null) child.remove();
+				child.parentElement = this;
+				this.childNodes.push(child);
+			}
+		},
+		remove() {
+			const siblings = this.parentElement?.childNodes;
+			if (siblings !== undefined) {
+				const at = siblings.indexOf(this);
+				if (at >= 0) siblings.splice(at, 1);
+			}
+			this.parentElement = null;
+			this.connected = false;
+		},
+		querySelector(selector) {
+			return firstMatch(this, selector);
+		},
+		querySelectorAll(selector) {
+			return allMatches(this, selector);
+		},
+		closest(selector) {
+			let current = this;
+			while (current !== null) {
+				if (matchesTreeSelector(current, selector)) return current;
+				current = current.parentElement;
+			}
+			return null;
+		},
+		getBoundingClientRect() {
+			return { x: 0, y: 0, left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 };
+		},
+		focus() {},
+		blur() {},
+		addEventListener() {},
+		removeEventListener() {},
+	};
+	return node;
+}
+
+function matchesTreeSelector(node, selector) {
+	if (node.tagName === undefined) return false;
+	const match = selector.match(/^([A-Za-z]*)(?:\[([\w-]+)(?:([\^$*]?=)"([^"]*)")?\])?$/);
+	if (match === null) return selector === node.tagName.toLowerCase();
+	const [, tag, name, operator, value] = match;
+	if (tag !== "" && node.tagName !== tag.toUpperCase()) return false;
+	if (name === undefined) return true;
+	if (operator === undefined) return node.hasAttribute(name);
+	const actual = node.getAttribute(name);
+	if (operator === "^=") return actual !== null && actual.startsWith(value);
+	if (operator === "$=") return actual !== null && actual.endsWith(value);
+	if (operator === "*=") return actual !== null && actual.includes(value);
+	return actual === value;
+}
+
+function allMatches(root, selector) {
+	const found = [];
+	const visit = (node) => {
+		for (const child of node.children) {
+			if (matchesTreeSelector(child, selector)) found.push(child);
+			visit(child);
+		}
+	};
+	visit(root);
+	return found;
+}
+
+function firstMatch(root, selector) {
+	return allMatches(root, selector)[0] ?? null;
+}
+
+/**
  * A localStorage that remembers, for tests that boot with a saved choice.
  *
  * The plain stub answers every call, which is enough for code that only checks
@@ -133,6 +246,7 @@ function memoryStorage(initial = {}) {
  * nodes it cares about, and `schedule` replaces setTimeout. `requireImpl`
  * replaces the module table the bundle loads (the default answers every name
  * with a stub), `services` supplies named client services through `ctx.get`,
+ * `globals` seeds the sandbox with the flags a test seam reads before load,
  * and `log` replaces the sandbox console.
  */
 function bootClient({
@@ -153,11 +267,13 @@ function bootClient({
 	config = null,
 	fetchImpl = null,
 	navigator = null,
+	notification = null,
 	computedStyle = () => stub(),
 	theme = null,
 	locale = null,
 	requireImpl = null,
 	services = {},
+	globals = null,
 	slotsEntries = null,
 	log = console,
 } = {}) {
@@ -238,7 +354,9 @@ function bootClient({
 		TouchEvent: class TouchEvent {},
 		Touch: class Touch {},
 		MessageChannel: class MessageChannel {},
-		Notification: stub(),
+		// `Notification` has to be replaceable for the push tests: the browser
+		// half reads `permission` to decide whether it may re-register (#98).
+		Notification: notification ?? stub(),
 		AudioContext: class AudioContext {},
 		screen: stub(),
 		innerWidth: narrow ? 390 : 1024,
@@ -272,6 +390,7 @@ function bootClient({
 	// the legacy default"; contract tests pass it explicitly. `injectMode:
 	// false` models an old/absent bootstrap and must fail closed to desktop.
 	if (injectMode) sandbox.__RDSH_DEVICE_MODE__ = mode ?? (narrow ? "mobile" : "desktop");
+	if (globals !== null && typeof globals === "object") Object.assign(sandbox, globals);
 	vm.createContext(sandbox);
 
 	vm.runInContext(CLIENT, sandbox, { filename: "client.js" });
@@ -382,7 +501,7 @@ function drawerClosedAfterTapping(label, { narrow = true, mode = "mobile" } = {}
 		schedule: (callback) => timers.push(callback),
 		configureDocument(doc) {
 			doc.getElementById = (id) => (id === "root" ? root : null);
-			doc.querySelector = (selector) => (selector === '[aria-label="Collapse sidebar"]' ? collapse : null);
+			doc.querySelector = (selector) => (selector.includes("Collapse sidebar") ? collapse : null);
 			doc.addEventListener = (type, handler) => {
 				if (type === "click") clickHandlers.push(handler);
 			};
@@ -640,7 +759,7 @@ test("the legacy hide list applies at phone width even with a fine pointer", () 
 
 /** One committed ja namespace, as the full translation ships it. */
 function jaNamespace(name) {
-	return JSON.parse(readFileSync(new URL(`../../rdsh-locale-ja/locale/namespaces/ja/${name}.json`, import.meta.url), "utf8"));
+	return JSON.parse(readFileSync(new URL(`../../dsh-locale-ja/locale/namespaces/ja/${name}.json`, import.meta.url), "utf8"));
 }
 
 test("#80 the default hide list matches the committed ja labels", () => {
@@ -1127,6 +1246,236 @@ test("the session colour frame is a phone-only hook", () => {
 	phone.booted.disposeAll();
 });
 
+test("folder colour frames are phone-only and never share a namespace with sessions", () => {
+	// A folder header carries the same palette, but its storage and hook are
+	// separate. The same id in both maps must stay two different colours.
+	const paint = (row) => {
+		let color = null;
+		row.style = {
+			setProperty(name, value) { if (name === "--rdsh-folder-frame") color = value; },
+			removeProperty(name) { if (name === "--rdsh-folder-frame") color = null; },
+		};
+		return () => color;
+	};
+	const folderRow = (narrow, storage = {}) => {
+		const row = element();
+		row.setAttribute("data-row-key", "workspace:w1");
+		const color = paint(row);
+		const frames = [];
+		const booted = bootClient({
+			mode: narrow ? "mobile" : "desktop",
+			narrow,
+			frames,
+			storage,
+			configureDocument(doc) {
+				doc.querySelectorAll = (selector) => (selector === '[data-row-key^="workspace:"]' ? [row] : []);
+				doc.querySelector = () => null;
+			},
+		});
+		for (let index = 0; index < 20 && frames.length > 0; index += 1) frames.shift()();
+		return { row, color, booted };
+	};
+
+	const wide = folderRow(false, { "dsh-mobile-maxxing:folder-frames": JSON.stringify({ w1: "#5bd6a5" }) });
+	assert.equal(wide.row.hasAttribute("data-rdsh-folder-frame"), false, "a desktop folder row got the phone frame hook");
+	assert.equal(wide.color(), null, "a desktop folder row got the frame colour");
+	wide.booted.disposeAll();
+
+	const phone = folderRow(true, { "dsh-mobile-maxxing:folder-frames": JSON.stringify({ w1: "#5bd6a5" }) });
+	assert.equal(phone.row.hasAttribute("data-rdsh-folder-frame"), true, "the phone folder frame hook was not generated");
+	assert.equal(phone.color(), "#5bd6a5", "the phone folder frame colour was not written");
+	const phoneApi = phone.booted.sandbox.__RDSH_MOBILE_UX__.folderFrames;
+	phoneApi.save("w1", null);
+	phone.booted.sandbox.__RDSH_MOBILE_UX__.decorateNow();
+	assert.equal(phone.row.hasAttribute("data-rdsh-folder-frame"), false, "clearing a folder frame left the hook");
+	assert.equal(phone.color(), null, "clearing a folder frame left the colour");
+	assert.equal(phoneApi.read().w1, undefined, "clearing a folder frame left the stored map entry");
+	phone.row.setAttribute("data-row-key", "workspace:");
+	phone.booted.sandbox.__RDSH_MOBILE_UX__.decorateNow();
+	assert.equal(phone.row.hasAttribute("data-rdsh-folder-frame"), false, "the Ungrouped bucket was treated as a folder");
+	phone.booted.disposeAll();
+
+	const collision = (() => {
+		const sessionRow = element();
+		sessionRow.setAttribute("data-row-key", "session:w1");
+		let sessionColor = null;
+		sessionRow.style = {
+			setProperty(name, value) { if (name === "--rdsh-session-frame") sessionColor = value; },
+			removeProperty(name) { if (name === "--rdsh-session-frame") sessionColor = null; },
+		};
+		const row = element();
+		row.setAttribute("data-row-key", "workspace:w1");
+		const color = paint(row);
+		const frames = [];
+		const booted = bootClient({
+			mode: "mobile",
+			narrow: true,
+			frames,
+			storage: {
+				"rdsh-mobile-ux:session-frames": JSON.stringify({ w1: "#ff6b6b" }),
+				"dsh-mobile-maxxing:folder-frames": JSON.stringify({ s1: "#5bd6a5", w1: "#7aaaff" }),
+			},
+			configureDocument(doc) {
+				doc.querySelectorAll = (selector) => (
+					selector === '[data-row-key^="session:"]' ? [sessionRow]
+						: selector === '[data-row-key^="workspace:"]' ? [row]
+							: []
+				);
+				doc.querySelector = () => null;
+			},
+		});
+		for (let index = 0; index < 20 && frames.length > 0; index += 1) frames.shift()();
+		return { sessionRow, sessionColor: () => sessionColor, row, color, booted };
+	})();
+	assert.equal(collision.sessionColor(), "#ff6b6b", "the session row read the folder map");
+	assert.equal(collision.color(), "#7aaaff", "the folder row read the session map");
+	assert.equal(collision.sessionRow.hasAttribute("data-rdsh-folder-frame"), false, "the session row got a folder hook");
+	assert.equal(collision.row.hasAttribute("data-rdsh-session-frame"), false, "the folder row got a session hook");
+	const api = collision.booted.sandbox.__RDSH_MOBILE_UX__.folderFrames;
+	api.save("w2", "#5bd6a5");
+	assert.equal(
+		collision.booted.sandbox.localStorage.getItem("dsh-mobile-maxxing:folder-frames"),
+		JSON.stringify({ s1: "#5bd6a5", w1: "#7aaaff", w2: "#5bd6a5" }),
+		"the folder save did not land in the dsh-named folder key",
+	);
+	assert.equal(
+		collision.booted.sandbox.localStorage.getItem("rdsh-mobile-ux:session-frames"),
+		JSON.stringify({ w1: "#ff6b6b" }),
+		"the folder save rewrote the legacy session key",
+	);
+	collision.booted.disposeAll();
+});
+
+test("a folder menu is claimed by portal structure once and leaves other menus alone", () => {
+	// The shell has no workspace-menu slot. A click on the folder's own "..."
+	// arms one claim; the first menu portal that appears after that click is
+	// the claimed one, marked aria-controls <-> id. No label is ever read.
+	const menus = [];
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		configureDocument(doc) {
+			doc.createElement = (tag) => treeElement(tag);
+			doc.querySelectorAll = (selector) => (selector === '[role="menu"]' ? menus : []);
+			doc.querySelector = () => null;
+		},
+		requireImpl(name) {
+			if (name === "react") return { createElement: () => ({}) };
+			if (name === "react-dom/client") return { createRoot: () => ({ render() {}, unmount() {} }) };
+			if (name === "@deepseek-ai/dsh-client-ui-primitives") return { MenuItemButton: function MenuItemButton() {} };
+			return stub();
+		},
+	});
+	const api = booted.sandbox.__RDSH_MOBILE_UX__?.folderFrames;
+	assert.ok(api, "the mobile half did not publish the folder-frame diagnostics");
+
+	const menuWithItem = () => {
+		const viewport = treeElement("div");
+		viewport.setAttribute("role", "presentation");
+		const item = treeElement("button");
+		item.setAttribute("role", "menuitem");
+		viewport.append(item);
+		const menu = treeElement("div");
+		menu.setAttribute("role", "menu");
+		menu.append(viewport);
+		return { menu, viewport };
+	};
+
+	const other = menuWithItem();
+	menus.push(other.menu);
+
+	const row = treeElement("div");
+	row.setAttribute("data-row-key", "workspace:w1");
+	const actions = treeElement("span");
+	actions.classList = ["YDXeBa_rowActions"];
+	const trigger = treeElement("button");
+	trigger.setAttribute("aria-label", "Workspace actions: repo");
+	const plus = treeElement("button");
+	actions.append(trigger, plus);
+	row.append(actions);
+
+	api.arm(trigger);
+	assert.equal(api.pending()?.key, "w1", "the folder click did not arm a claim");
+	const folder = menuWithItem();
+	menus.push(folder.menu);
+	api.decorate();
+
+	assert.equal(folder.menu.getAttribute("data-rdsh-folder-menu"), "", "the folder portal was not claimed");
+	assert.match(folder.menu.getAttribute("id") ?? "", /^rdsh-folder-menu-\d+$/, "the folder portal has no ownership id");
+	assert.equal(trigger.getAttribute("aria-controls"), folder.menu.getAttribute("id"), "the anchor does not point at the claimed portal");
+	assert.equal(trigger.getAttribute("aria-expanded"), "true", "the anchor does not report the claimed portal");
+	assert.equal(other.menu.hasAttribute("data-rdsh-folder-menu"), false, "another menu was decorated");
+	assert.equal(other.menu.getAttribute("id"), null, "another menu received the ownership id");
+	const hostCount = () => folder.viewport.children.filter((child) => child.hasAttribute("data-rdsh-folder-frame-item")).length;
+	assert.equal(hostCount(), 1, "the frame row host was not appended to the folder menu");
+	assert.equal(
+		folder.viewport.children.find((child) => child.hasAttribute("data-rdsh-folder-frame-item"))?.style.display,
+		"contents",
+		"the host adds a layout box around the native menu row",
+	);
+	api.decorate();
+	api.decorate();
+	assert.equal(hostCount(), 1, "a re-decorate appended a second frame row");
+
+	// Switching folders: the old portal is gone but its replacement opened in
+	// the same frame. The queued claim must survive the old portal's cleanup.
+	folder.menu.remove();
+	api.arm(trigger);
+	const second = menuWithItem();
+	menus.push(second.menu);
+	api.decorate();
+	assert.equal(folder.menu.hasAttribute("data-rdsh-folder-menu"), false, "the closed portal kept its marker");
+	assert.equal(second.menu.getAttribute("data-rdsh-folder-menu"), "", "the replacement portal was not claimed");
+	assert.equal(trigger.getAttribute("aria-controls"), second.menu.getAttribute("id"), "the anchor does not point at the replacement");
+
+	api.clear();
+	assert.equal(second.menu.hasAttribute("data-rdsh-folder-menu"), false, "clear left the ownership marker");
+	assert.equal(second.menu.getAttribute("id"), null, "clear left the ownership id");
+	assert.equal(trigger.hasAttribute("aria-controls"), false, "clear left aria-controls on the anchor");
+	assert.equal(trigger.hasAttribute("aria-expanded"), false, "clear left aria-expanded on the anchor");
+	assert.equal(second.viewport.children.filter((child) => child.hasAttribute("data-rdsh-folder-frame-item")).length, 0, "clear left the frame row host");
+
+	// A click that opens no portal consumes the claim: a menu opened later is
+	// another menu and must not inherit the folder row.
+	api.arm(trigger);
+	api.decorate();
+	assert.equal(api.pending(), null, "the claim survived a pass that saw no new portal");
+
+	// A Session row's "..." is not a Workspace menu: it neither arms nor claims.
+	const sessionRow = treeElement("div");
+	sessionRow.setAttribute("data-row-key", "session:s1");
+	const sessionActions = treeElement("span");
+	sessionActions.classList = ["YDXeBa_rowActions"];
+	const sessionTrigger = treeElement("button");
+	sessionActions.append(sessionTrigger);
+	sessionRow.append(sessionActions);
+	const stray = menuWithItem();
+	// The folder claim is still live when the Session trigger is clicked; that
+	// click must retire it instead of decorating the Session menu.
+	api.arm(trigger);
+	api.arm(sessionTrigger);
+	assert.equal(api.pending(), null, "a later click did not retire the folder claim");
+	menus.push(stray.menu);
+	api.decorate();
+	assert.equal(stray.menu.hasAttribute("data-rdsh-folder-menu"), false, "a session menu was claimed as a folder menu");
+	assert.equal(stray.menu.getAttribute("id"), null, "a session menu received the folder ownership id");
+
+	// The Ungrouped bucket has no Workspace id, so it cannot arm either.
+	const ungrouped = treeElement("div");
+	ungrouped.setAttribute("data-row-key", "workspace:");
+	const ungroupedActions = treeElement("span");
+	ungroupedActions.classList = ["YDXeBa_rowActions"];
+	const ungroupedTrigger = treeElement("button");
+	ungroupedActions.append(ungroupedTrigger);
+	ungrouped.append(ungroupedActions);
+	const strayUngrouped = menuWithItem();
+	api.arm(ungroupedTrigger);
+	menus.push(strayUngrouped.menu);
+	api.decorate();
+	assert.equal(strayUngrouped.menu.hasAttribute("data-rdsh-folder-menu"), false, "the Ungrouped bucket was claimed as a folder");
+	booted.disposeAll();
+});
+
 test("a rightward swipe closes an open right panel from the left edge too", () => {
 	const documentHandlers = [];
 	const collapse = element();
@@ -1143,7 +1492,9 @@ test("a rightward swipe closes an open right panel from the left edge too", () =
 			doc.documentElement.setAttribute("data-rdsh-rightpanel-open", "");
 			doc.addEventListener = (type, handler) => documentHandlers.push([type, handler]);
 			doc.querySelector = () => null;
-			doc.querySelectorAll = (selector) => (selector === '[aria-label="Collapse right sidebar"]' ? [collapse] : []);
+			// #97: upstream marks the panel toggle with a stable data attribute.
+			collapse.setAttribute("data-sidebar-right-toggle", "");
+			doc.querySelectorAll = (selector) => (selector.includes("data-sidebar-right-toggle") ? [collapse] : []);
 		},
 	});
 	const handler = (type, name) => [...documentHandlers].reverse()
@@ -1740,7 +2091,16 @@ function noticeRequire(state) {
 			return { Toast: function Toast() {} };
 		}
 		if (name === "react-dom/client") {
-			return { createRoot: () => ({ render: (node) => state.renders.push(node) }) };
+			return {
+				createRoot: () => ({
+					render: (node) => {
+						state.renders.push(node);
+						// React runs the banner's effect once it commits; the
+						// hand-off answer and the host ACK both wait for that.
+						node?.props?.onCommit?.();
+					},
+				}),
+			};
 		}
 		return stub();
 	};
@@ -1792,7 +2152,7 @@ test("a notification hand-off from the current or old worker name renders one ba
 		booted.send({ type, title: "Session A", body: "Turn finished", sessionId: "s1", kind: "turn-end" });
 		assert.deepEqual(booted.state.acks, ["shown"], type + " was not acknowledged exactly once");
 		assert.equal(booted.state.renders.length, 1, type + " did not render exactly one banner");
-		assert.equal(booted.state.renders[0].props.text, "Session A — Turn finished");
+		assert.equal(booted.state.renders[0].props.toastProps?.text, "Session A — Turn finished");
 		const host = booted.state.appended.find((node) => node.getAttribute?.("data-rdsh-notice-host") === "");
 		assert.ok(host, "the banner host was not attached to the body");
 		assert.deepEqual(booted.state.warnings, [], "a shown banner warned");
@@ -2815,6 +3175,140 @@ test("#80 mounted text and slot labels refresh on the device language without a 
 	assert.equal(rows.active, "en", "dispose wrote the device language into the shared row");
 });
 
+/**
+ * Boot under "System" with a device language list (#103).
+ *
+ * The locale catalog is the pack list a real install publishes; `packs`
+ * lets a test model a device language no pack covers. The navigator carries
+ * the fields boot() reads (service worker, UA, platform, touch count) so the
+ * only variable between cases is `languages`.
+ */
+function bootSystemLanguage({ languages, host = "en", stored = null, docLang = "en", packs = ["en", "ja"] } = {}) {
+	const labels = { en: "English", ja: "日本語" };
+	const { service } = localeService({
+		locales: packs.map((id) => ({ id, label: labels[id] ?? id })),
+		active: host,
+	});
+	const serviceWorkerPrototype = {
+		register: () => Promise.resolve(undefined),
+		getRegistration: async () => undefined,
+	};
+	const serviceWorker = Object.assign(Object.create(serviceWorkerPrototype), {
+		controller: null,
+		addEventListener() {},
+		removeEventListener() {},
+	});
+	const navigator = {
+		languages: [...languages],
+		language: languages[0],
+		userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+		platform: "iPhone",
+		maxTouchPoints: 5,
+		standalone: false,
+		onLine: true,
+		serviceWorker,
+	};
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		locale: service,
+		navigator,
+		storage: stored === null ? {} : { "rdsh-mobile-ux:local-display": JSON.stringify(stored) },
+		configureDocument(doc) { doc.documentElement.lang = docLang; },
+	});
+	return { booted, service };
+}
+
+test("a ja device under System follows the device language, not the Host en (#103)", () => {
+	const { booted, service } = bootSystemLanguage({ languages: ["ja-JP", "en-US"], host: "en" });
+	const api = booted.sandbox.__RDSH_MOBILE_UX__;
+	assert.equal(api.state.localDisplay.language, "", "System was stored as a concrete language");
+	assert.equal(api.state.localDisplay.languages.map((entry) => entry.id).join(","), "en,ja",
+		"the picker lost a language pack");
+	assert.equal(service.snapshot.active, "ja", "the device language was not projected");
+	assert.equal(booted.sandbox.document.documentElement.lang, "ja",
+		"the document language does not match the projected language");
+	assert.equal(api.lang, "ja", "the mobile copy stayed on the Host language");
+	assert.equal(booted.sandbox.localStorage.getItem("rdsh-mobile-ux:local-display"), null,
+		"System wrote a device language to storage");
+	booted.disposeAll();
+	assert.equal(service.snapshot.active, "en", "dispose did not restore the Host language");
+	assert.equal(booted.sandbox.document.documentElement.lang, "en",
+		"dispose left the document language projected");
+});
+
+test("an en device keeps en even when the shared Host preference is ja (#103)", () => {
+	const { booted, service } = bootSystemLanguage({ languages: ["en-US"], host: "ja", docLang: "ja" });
+	assert.equal(service.snapshot.active, "en", "the device en lost to the Host ja");
+	assert.equal(booted.sandbox.document.documentElement.lang, "en");
+	assert.equal(booted.sandbox.__RDSH_MOBILE_UX__.lang, "en");
+	booted.disposeAll();
+	assert.equal(service.snapshot.active, "ja", "dispose did not restore the Host ja");
+	assert.equal(booted.sandbox.document.documentElement.lang, "ja");
+});
+
+test("an unsupported device language falls back to the Host language (#103)", () => {
+	const unsupported = bootSystemLanguage({ languages: ["fr-FR", "fr"], host: "en" });
+	const hostSnapshot = unsupported.service.snapshot;
+	assert.equal(hostSnapshot.active, "en", "the Host baseline changed");
+	assert.equal(unsupported.booted.sandbox.document.documentElement.lang, "en",
+		"an unsupported device language reached the document");
+	assert.equal(unsupported.booted.sandbox.__RDSH_MOBILE_UX__.lang, "en");
+	assert.equal(unsupported.service.snapshot, hostSnapshot,
+		"an unsupported device language installed a projection");
+	unsupported.booted.disposeAll();
+
+	// ja is a device language with no pack in this catalog: same fallback.
+	const noPack = bootSystemLanguage({ languages: ["ja-JP"], host: "en", packs: ["en"] });
+	assert.equal(noPack.service.snapshot.active, "en", "a device language without a pack was projected");
+	assert.equal(noPack.booted.sandbox.document.documentElement.lang, "en");
+	noPack.booted.disposeAll();
+});
+
+test("an explicit language choice always beats the device language (#103)", () => {
+	const jaDevice = bootSystemLanguage({
+		languages: ["ja-JP", "en-US"],
+		host: "en",
+		stored: { language: "en" },
+	});
+	assert.equal(jaDevice.booted.sandbox.__RDSH_MOBILE_UX__.state.localDisplay.language, "en");
+	assert.equal(jaDevice.service.snapshot.active, "en", "the stored en lost to the device ja");
+	assert.equal(jaDevice.booted.sandbox.document.documentElement.lang, "en");
+	assert.equal(jaDevice.booted.sandbox.__RDSH_MOBILE_UX__.lang, "en");
+	jaDevice.booted.disposeAll();
+
+	const enDevice = bootSystemLanguage({
+		languages: ["en-US"],
+		host: "en",
+		stored: { language: "ja" },
+	});
+	assert.equal(enDevice.booted.sandbox.__RDSH_MOBILE_UX__.state.localDisplay.language, "ja");
+	assert.equal(enDevice.service.snapshot.active, "ja", "the stored ja lost to the device en");
+	assert.equal(enDevice.booted.sandbox.document.documentElement.lang, "ja");
+	enDevice.booted.disposeAll();
+});
+
+test("returning to System re-applies the device language (#103)", async () => {
+	const { booted, service } = bootSystemLanguage({ languages: ["ja-JP", "en-US"], host: "en" });
+	const api = booted.sandbox.__RDSH_MOBILE_UX__;
+	assert.equal(service.snapshot.active, "ja", "the device language was not projected at boot");
+
+	api.setLanguage("en");
+	await settleLocale();
+	assert.equal(service.snapshot.active, "en", "an explicit en was not projected");
+	assert.equal(booted.sandbox.document.documentElement.lang, "en");
+
+	api.setLanguage("");
+	await settleLocale();
+	assert.equal(service.snapshot.active, "ja", "System did not return to the device language");
+	assert.equal(booted.sandbox.document.documentElement.lang, "ja");
+	assert.equal(api.state.localDisplay.language, "", "System kept the explicit language in the picker");
+	assert.equal(JSON.parse(booted.sandbox.localStorage.getItem("rdsh-mobile-ux:local-display")).language, "",
+		"resetting to System wrote a concrete language");
+	booted.disposeAll();
+	assert.equal(service.snapshot.active, "en", "dispose did not restore the Host language");
+});
+
 test("#80 the local revision token stays inside the rc.2 LocaleFace compatibility boundary", async () => {
 	const MARKER = Symbol.for("rdsh-mobile-ux:local-display-revision");
 	const PROJECTION = Symbol.for("rdsh-mobile-ux:local-display-projection");
@@ -2934,7 +3428,7 @@ test("#80 an owner that activates after the mobile attach reaches the picker and
 	assert.deepEqual(api.state.localDisplay.languages.map((entry) => entry.id), ["zh", "en"]);
 	assert.equal(api.state.localDisplay.language, "", "ja cannot be selected before its owner exists");
 
-	// rdsh-locale-ja activates late: addLanguage publishes the catalog through
+	// dsh-locale-ja activates late: addLanguage publishes the catalog through
 	// the LocaleFace listeners only, because the active locale stays zh.
 	const releaseJa = service.addLanguage(ja);
 	await settleLocale();
@@ -3473,6 +3967,564 @@ test("font and language availability are independent and fail soft", () => {
 	assert.equal(localeOnly.sandbox.document.documentElement.lang, "zh-CN");
 });
 
+/**
+ * Push-independent local banners.
+ *
+ * `__RDSH_NOTICE_TEST__` exposes the same closures the overlay watcher runs:
+ * the pure status diff, the thin emit that renders through `notifyUser`, and
+ * the worker-message handler that must not stack a second banner. The require
+ * table is a tiny React: `createElement` keeps the props so the fake root can
+ * write the banner text into the real notice host. The shipping `Toast` portals
+ * into `document.body` (`div[role="alert"]`), so the fake root stands in for
+ * that portal and reads the text it was handed; the commit model below is what
+ * these tests are actually about.
+ */
+function localNoticeHarness({
+	endpoint = "",
+	initialVisibility = "visible",
+	subscriptionGate = null,
+	commits = "auto",
+	onlyMobileTurns = undefined,
+	pushTest = "ok",
+	notification = null,
+	storage = null,
+} = {}) {
+	const rendered = [];
+	const roots = [];
+	const ackPosts = [];
+	const testPushes = [];
+	const subscribePosts = [];
+	let latestBanner = null;
+	let lastKey = null;
+	let mountedOnce = false;
+	// What React does after the render it was handed: run the effect. The
+	// default fakes a real commit; "manual" keeps the banner uncommitted until
+	// the test asks, which is the only way to assert that an ACK waits for it.
+	const commitNode = (node) => {
+		const onCommit = node?.props?.onCommit;
+		if (typeof onCommit === "function") onCommit();
+	};
+	const registration = {
+		update: async () => {},
+		addEventListener() {},
+		removeEventListener() {},
+		pushManager: {
+			getSubscription: async () => {
+				if (subscriptionGate !== null) await subscriptionGate;
+				// A real PushSubscription serializes itself for /subscribe.
+				return endpoint === "" ? null : { endpoint, toJSON: () => ({ endpoint }) };
+			},
+		},
+	};
+	const react = {
+		// React takes `key` out of the props and keeps it on the element.
+		createElement: (type, props) => {
+			const { key, ...rest } = props ?? {};
+			return { type, props: rest, key };
+		},
+		useState: (initial) => [initial, () => {}],
+		useEffect: () => {},
+		useRef: (initial) => ({ current: initial }),
+	};
+	const booted = bootClient({
+		mode: "mobile",
+		narrow: true,
+		lang: "en",
+		copy: COPY,
+		navigator: {
+			onLine: true,
+			serviceWorker: {
+				ready: Promise.resolve(registration),
+				getRegistration: async () => registration,
+				register: async () => registration,
+				addEventListener() {},
+				removeEventListener() {},
+			},
+		},
+		globals: {
+			__RDSH_NOTICE_TEST__: {},
+			location: { origin: "https://app.example:8446", href: "https://app.example:8446/" },
+		},
+		notification,
+		storage,
+		fetchImpl: async (url, options) => {
+			const target = String(url);
+			if (target.endsWith("/push/ack")) ackPosts.push({ url: target, options });
+			if (target.endsWith("/push/subscribe")) {
+				subscribePosts.push({ url: target, options });
+				return { status: 200, ok: true, json: async () => ({ ok: true, count: 1 }) };
+			}
+			if (target.endsWith("/push/config")) {
+				// The real route answers with the host's copy, which carries
+				// onlyMobileTurns. An absent key is the host default (true).
+				return {
+					status: 200,
+					ok: true,
+					json: async () => ({ ok: true, copy: onlyMobileTurns === undefined ? {} : { onlyMobileTurns } }),
+				};
+			}
+			if (target.endsWith("/push/test")) {
+				testPushes.push({ url: target, options });
+				if (pushTest === "fail") {
+					return { status: 200, ok: true, json: async () => ({ ok: false, results: [{ status: 410, error: "gone" }] }) };
+				}
+				return { status: 200, ok: true, json: async () => ({ ok: true }) };
+			}
+			return { status: 200, ok: true, json: async () => ({ ok: true }) };
+		},
+		configureDocument(doc) { doc.visibilityState = initialVisibility; },
+		requireImpl(name) {
+			if (name === "react") return react;
+			if (name === "react-dom/client") {
+				return {
+					createRoot(container) {
+						roots.push(container);
+						return {
+							render(node) {
+								if (node === null || node === undefined) {
+									latestBanner = null;
+									container.textContent = "";
+									return;
+								}
+								const props = node.props ?? {};
+								const key = node.key ?? null;
+								const mounted = !mountedOnce || key !== lastKey;
+								mountedOnce = true;
+								lastKey = key;
+								latestBanner = node;
+								rendered.push(props.toastProps?.text ?? props.text ?? "");
+								container.textContent = rendered[rendered.length - 1];
+								// Only a fresh mount runs the wrapper's effect again.
+								if (commits === "auto" && mounted) commitNode(node);
+							},
+						};
+					},
+				};
+			}
+			if (name === "@deepseek-ai/dsh-client-ui-primitives") return { Toast: function Toast() {} };
+			return stub();
+		},
+	});
+	const notice = booted.sandbox.__RDSH_NOTICE_TEST__?.notice;
+	assert.ok(notice, "the local notice test seam was not installed");
+	const api = booted.sandbox.__RDSH_MOBILE_UX__;
+	return {
+		booted,
+		notice,
+		rendered,
+		roots,
+		ackPosts,
+		testPushes,
+		subscribePosts,
+		api,
+		// A turn this browser sent is the one the host will route back to it.
+		markSend: (sessionId) => api.markMobileSession(sessionId),
+		flushCommits: () => {
+			if (latestBanner !== null) commitNode(latestBanner);
+		},
+	};
+}
+
+test("a finished root turn raises one local banner and push does not stack", () => {
+	const { booted, notice, rendered, roots, markSend } = localNoticeHarness();
+	const byId = { "root-1": { title: "Main" } };
+	const running = new Map([["root-1", { running: true }]]);
+	const idle = new Map([["root-1", { running: false }]]);
+
+	// The very first render has no baseline and must stay silent.
+	notice.emitLocalNotices(null, running, byId);
+	assert.equal(rendered.length, 0, "the baseline render raised a banner");
+
+	markSend("root-1");
+	notice.emitLocalNotices(running, idle, byId);
+	assert.equal(rendered.length, 1, "a finished root turn raised no banner");
+	assert.equal(rendered[0], "Main — The work finished.", "title and body reached the toast");
+	assert.equal(roots.length, 1, "one banner root");
+	assert.equal(roots[0].getAttribute("data-rdsh-notice-host"), "", "the banner rendered into the notice host");
+	assert.equal(roots[0].textContent, "Main — The work finished.", "the notice host carries the banner text");
+
+	// The worker's hand-off for the same event arrives inside the 4s window.
+	notice.onWorkerMessage({
+		data: { type: "dsh-mobile-maxxing:notify", title: "Main", body: "done", sessionId: "root-1", kind: "turn-end" },
+	});
+	assert.equal(rendered.length, 1, "the push hand-off stacked a second banner");
+	booted.disposeAll();
+});
+
+test("a subagent turn end and a first render raise no local banner", () => {
+	const { booted, notice, rendered } = localNoticeHarness();
+	const byId = { "child-1": { origin: "subagent", title: "Child" } };
+	const running = new Map([["child-1", { running: true }]]);
+	const idle = new Map([["child-1", { running: false }]]);
+
+	notice.emitLocalNotices(null, running, byId);
+	assert.equal(rendered.length, 0, "the first render notified");
+	notice.emitLocalNotices(running, idle, byId);
+	assert.equal(rendered.length, 0, "a subagent turn end notified");
+	// Missing fields must not throw either.
+	assert.doesNotThrow(() => notice.emitLocalNotices(
+		new Map([["root-x", null]]),
+		new Map([["root-x", { running: false }]]),
+		null,
+	));
+	booted.disposeAll();
+});
+
+
+
+test("a rendered local banner acknowledges its event without visibility polling", async () => {
+	const endpoint = "https://web.push.apple.com/device";
+	const { booted, notice, rendered, ackPosts, markSend } = localNoticeHarness({ endpoint });
+	const settle = async () => {
+		for (let index = 0; index < 6; index += 1) await new Promise((resolve) => setImmediate(resolve));
+	};
+	await settle();
+	assert.equal(ackPosts.length, 0, "boot must not report visibility or send ACKs");
+	const byId = { "root-ack": { title: "Main" } };
+	const running = new Map([["root-ack", { running: true }]]);
+	const idle = new Map([["root-ack", { running: false }]]);
+	markSend("root-ack");
+	notice.emitLocalNotices(running, idle, byId);
+	await settle();
+	assert.equal(rendered.length, 1);
+	assert.equal(ackPosts.length, 1, "the rendered banner did not acknowledge the host event");
+	assert.equal(ackPosts[0].url, "api/dsh-mobile-maxxing/push/ack");
+	assert.equal(ackPosts[0].options.keepalive, true);
+	assert.deepEqual(JSON.parse(ackPosts[0].options.body), {
+		endpoint, sessionId: "root-ack", kind: "turn-end", origin: "https://app.example:8446",
+	});
+	notice.emitLocalNotices(idle, idle, byId);
+	await settle();
+	assert.equal(ackPosts.length, 1, "an unchanged snapshot sent another ACK");
+	assert.deepEqual(booted.disposeAll(), []);
+});
+
+test("hidden, unsubscribed, and just-backgrounded pages cannot suppress push", async () => {
+	const endpoint = "https://web.push.apple.com/device";
+	const byId = { "root-ack": { title: "Main" } };
+	const running = new Map([["root-ack", { running: true }]]);
+	const idle = new Map([["root-ack", { running: false }]]);
+	const hidden = localNoticeHarness({ endpoint, initialVisibility: "hidden" });
+	hidden.markSend("root-ack");
+	hidden.notice.emitLocalNotices(running, idle, byId);
+	await new Promise((resolve) => setImmediate(resolve));
+	assert.deepEqual(hidden.ackPosts, [], "a hidden page acknowledged an invisible banner");
+	hidden.booted.disposeAll();
+
+	const unregistered = localNoticeHarness();
+	unregistered.markSend("root-ack");
+	unregistered.notice.emitLocalNotices(running, idle, byId);
+	await new Promise((resolve) => setImmediate(resolve));
+	assert.deepEqual(unregistered.ackPosts, [], "a device without push subscription sent an ACK");
+	unregistered.booted.disposeAll();
+
+	let releaseSubscription;
+	const gate = new Promise((resolve) => { releaseSubscription = resolve; });
+	const transitioning = localNoticeHarness({ endpoint, subscriptionGate: gate });
+	transitioning.markSend("root-ack");
+	transitioning.notice.emitLocalNotices(running, idle, byId);
+	transitioning.booted.sandbox.document.visibilityState = "hidden";
+	releaseSubscription();
+	await new Promise((resolve) => setImmediate(resolve));
+	assert.deepEqual(transitioning.ackPosts, [], "the page acknowledged after being backgrounded");
+	transitioning.booted.disposeAll();
+});
+
+test("a new pending interaction raises a question banner once", () => {
+	const { booted, notice, rendered } = localNoticeHarness();
+	const byId = { "root-2": { title: "Ask" } };
+	const running = new Map([["root-2", { running: true }]]);
+	const asked = new Map([["root-2", { running: true, pendingInteraction: { kind: "question" } }]]);
+
+	notice.emitLocalNotices(null, running, byId);
+	assert.equal(rendered.length, 0, "the first render notified");
+	notice.emitLocalNotices(running, asked, byId);
+	assert.equal(rendered.length, 1, "a new question raised no banner");
+	assert.equal(rendered[0], "Ask — Confirm");
+	// The same map identity is not a transition.
+	notice.emitLocalNotices(asked, asked, byId);
+	assert.equal(rendered.length, 1, "an unchanged map raised another banner");
+	booted.disposeAll();
+});
+
+/** Let the page's promises (subscription lookup, ACK fetch) settle. */
+async function settleNoticeWork() {
+	for (let index = 0; index < 8; index += 1) await new Promise((resolve) => setImmediate(resolve));
+}
+
+test("a turn this browser did not send raises no local banner", async () => {
+	const endpoint = "https://web.push.apple.com/device";
+	const { booted, notice, rendered, ackPosts } = localNoticeHarness({ endpoint });
+	const byId = { "root-pc": { title: "Main" } };
+	const running = new Map([["root-pc", { running: true }]]);
+	const idle = new Map([["root-pc", { running: false }]]);
+
+	// A PC turn: the host (onlyMobileTurns) never notifies it, so a banner here
+	// would invent a notification the user asked not to get.
+	notice.emitLocalNotices(running, idle, byId);
+	await settleNoticeWork();
+	assert.equal(rendered.length, 0, "a turn from another device raised a local banner");
+	assert.deepEqual(ackPosts, [], "a turn from another device acknowledged a push it never got");
+	booted.disposeAll();
+});
+
+test("a turn this browser did send raises one banner and one ACK", async () => {
+	const endpoint = "https://web.push.apple.com/device";
+	const { booted, notice, rendered, ackPosts, markSend } = localNoticeHarness({ endpoint });
+	const byId = { "root-phone": { title: "Main" } };
+	const running = new Map([["root-phone", { running: true }]]);
+	const idle = new Map([["root-phone", { running: false }]]);
+
+	markSend("root-phone");
+	notice.emitLocalNotices(running, idle, byId);
+	await settleNoticeWork();
+	assert.equal(rendered.length, 1, "a turn this browser sent raised no banner");
+	assert.equal(ackPosts.length, 1, "a turn this browser sent was not acknowledged");
+	assert.equal(JSON.parse(ackPosts[0].options.body).sessionId, "root-phone");
+	booted.disposeAll();
+});
+
+test("a question from another device still raises a local banner", async () => {
+	const endpoint = "https://web.push.apple.com/device";
+	const { booted, notice, rendered, ackPosts } = localNoticeHarness({ endpoint });
+	const byId = { "root-ask": { title: "Ask" } };
+	const running = new Map([["root-ask", { running: true }]]);
+	const asked = new Map([["root-ask", { running: true, pendingInteraction: { kind: "question" } }]]);
+
+	// A question needs the user wherever the turn came from.
+	notice.emitLocalNotices(running, asked, byId);
+	await settleNoticeWork();
+	assert.equal(rendered.length, 1, "an unmarked session lost its question banner");
+	assert.equal(ackPosts.length, 1, "a question banner was not acknowledged");
+	assert.equal(JSON.parse(ackPosts[0].options.body).kind, "question");
+	booted.disposeAll();
+});
+
+test("a host that notifies every turn keeps the local banner for an unmarked session", async () => {
+	const endpoint = "https://web.push.apple.com/device";
+	const { booted, notice, rendered, markSend } = localNoticeHarness({ endpoint, onlyMobileTurns: false });
+	const byId = { "root-pc": { title: "Main" } };
+	const running = new Map([["root-pc", { running: true }]]);
+	const idle = new Map([["root-pc", { running: false }]]);
+
+	// The config answer arrives on boot; without it the host default (true)
+	// applies. Marked here so the config fetch is not racing the assertion.
+	markSend("root-unused");
+	await settleNoticeWork();
+	notice.emitLocalNotices(running, idle, byId);
+	await settleNoticeWork();
+	assert.equal(rendered.length, 1, "onlyMobileTurns:false still suppressed a legitimately notified turn");
+	booted.disposeAll();
+});
+
+test("the ACK waits for the banner commit and is sent once", async () => {
+	const endpoint = "https://web.push.apple.com/device";
+	const { booted, notice, rendered, ackPosts, markSend, flushCommits } = localNoticeHarness({ endpoint, commits: "manual" });
+	const byId = { "root-ack": { title: "Main" } };
+	const running = new Map([["root-ack", { running: true }]]);
+	const idle = new Map([["root-ack", { running: false }]]);
+
+	markSend("root-ack");
+	notice.emitLocalNotices(running, idle, byId);
+	await settleNoticeWork();
+	assert.equal(rendered.length, 1, "the banner was not rendered");
+	assert.deepEqual(ackPosts, [], "the ACK was sent before the banner committed");
+	flushCommits();
+	await settleNoticeWork();
+	assert.equal(ackPosts.length, 1, "the committed banner did not acknowledge its event");
+	// StrictMode and a re-run effect call the same commit twice.
+	flushCommits();
+	flushCommits();
+	await settleNoticeWork();
+	assert.equal(ackPosts.length, 1, "a repeated commit sent a second ACK");
+	booted.disposeAll();
+});
+
+test("a second banner that replaces a shown one is acknowledged on its own", async () => {
+	const endpoint = "https://web.push.apple.com/device";
+	const { booted, notice, rendered, ackPosts, markSend } = localNoticeHarness({ endpoint });
+	const byId = { "root-a": { title: "A" }, "root-b": { title: "B" } };
+	markSend("root-a");
+	markSend("root-b");
+
+	// First banner commits while it is on screen (its hold is still running).
+	notice.emitLocalNotices(new Map([["root-a", { running: true }]]), new Map([["root-a", { running: false }]]), byId);
+	await settleNoticeWork();
+	assert.equal(rendered.length, 1, "the first banner was not rendered");
+	assert.equal(ackPosts.length, 1, "the first banner did not acknowledge its event");
+
+	// The second banner is the same component at the same position: without its
+	// own identity React reuses the instance and the mount effect never runs
+	// again, so its event would never be acknowledged.
+	notice.emitLocalNotices(new Map([["root-b", { running: true }]]), new Map([["root-b", { running: false }]]), byId);
+	await settleNoticeWork();
+	assert.equal(rendered.length, 2, "the second banner was not rendered");
+	assert.equal(ackPosts.length, 2, "the second banner was never acknowledged");
+	assert.deepEqual(
+		ackPosts.map((post) => JSON.parse(post.options.body).sessionId),
+		["root-a", "root-b"],
+		"the two banners acknowledged the wrong events",
+	);
+	booted.disposeAll();
+});
+
+test("a teardown during the subscription lookup acknowledges nothing", async () => {
+	const endpoint = "https://web.push.apple.com/device";
+	let releaseSubscription;
+	const gate = new Promise((resolve) => { releaseSubscription = resolve; });
+	const harness = localNoticeHarness({ endpoint, subscriptionGate: gate });
+	const byId = { "root-gone": { title: "Main" } };
+
+	harness.markSend("root-gone");
+	harness.notice.emitLocalNotices(new Map([["root-gone", { running: true }]]), new Map([["root-gone", { running: false }]]), byId);
+	// HMR / teardown unmounts the banner while the endpoint lookup is still in
+	// flight; the page is still "visible" but nothing is on screen any more.
+	harness.booted.disposeAll();
+	releaseSubscription();
+	await settleNoticeWork();
+	assert.deepEqual(harness.ackPosts, [], "a torn-down page acknowledged an unmounted banner");
+});
+
+test("a banner replaced before it commits is never acknowledged", async () => {
+	const endpoint = "https://web.push.apple.com/device";
+	const { booted, notice, rendered, ackPosts, markSend, flushCommits } = localNoticeHarness({ endpoint, commits: "manual" });
+	const byId = { "root-a": { title: "A" }, "root-b": { title: "B" } };
+	const running = new Map([["root-a", { running: true }], ["root-b", { running: true }]]);
+	const idle = new Map([["root-a", { running: false }], ["root-b", { running: false }]]);
+
+	markSend("root-a");
+	markSend("root-b");
+	// Two events in one snapshot; the last banner replaces the first before
+	// React commits, so only the visible one may be acknowledged.
+	notice.emitLocalNotices(running, idle, byId);
+	await settleNoticeWork();
+	assert.equal(rendered.length, 2, "both transitions rendered a banner");
+	assert.deepEqual(ackPosts, [], "an uncommitted banner acknowledged its event");
+	flushCommits();
+	await settleNoticeWork();
+	assert.equal(ackPosts.length, 1, "exactly the visible banner acknowledges its event");
+	assert.equal(JSON.parse(ackPosts[0].options.body).sessionId, "root-b", "the replaced banner was acknowledged");
+	booted.disposeAll();
+});
+
+test("the old worker's hand-off is answered only after the banner commits", async () => {
+	const { booted, notice, rendered, flushCommits } = localNoticeHarness({ commits: "manual" });
+	const ports = [];
+	notice.onWorkerMessage({
+		data: { type: "dsh-mobile-maxxing:notify", title: "Main", body: "done", sessionId: "root-old", kind: "turn-end" },
+		ports: [{ postMessage: (value) => ports.push(value) }],
+	});
+	assert.equal(rendered.length, 1, "the hand-off raised no banner");
+	assert.deepEqual(ports, [], "the hand-off was accepted before the banner committed");
+	flushCommits();
+	assert.deepEqual(ports, ["shown"], "the committed banner did not answer the hand-off");
+	booted.disposeAll();
+});
+
+test("a foreground test shows one banner and never asks for a push", async () => {
+	const endpoint = "https://web.push.apple.com/device";
+	const { booted, api, rendered, testPushes, ackPosts } = localNoticeHarness({ endpoint });
+	await settleNoticeWork();
+	await api.sendTestNotification();
+	assert.equal(rendered.length, 1, "the foreground test raised no banner");
+	assert.equal(rendered[0], "DSH test notification — This banner is how it arrives while the app is open.");
+	// The host's test route sends a real Web Push, and the worker must show
+	// every push it receives, so asking for it would put an OS notification on
+	// top of the app the user is looking at (#98).
+	assert.deepEqual(testPushes, [], "a foreground test still took the push path");
+	assert.deepEqual(ackPosts, [], "the test banner acknowledged an event");
+	booted.disposeAll();
+});
+
+test("a foreground test without a subscription reports it instead of a banner", async () => {
+	const { booted, api, rendered, testPushes } = localNoticeHarness({ endpoint: "" });
+	await settleNoticeWork();
+	await assert.rejects(() => api.sendTestNotification(), /not enabled on this device/);
+	assert.equal(rendered.length, 0, "a banner claimed push works with no subscription");
+	assert.deepEqual(testPushes, [], "a missing subscription still took the push path");
+	booted.disposeAll();
+});
+
+test("a backgrounded page still takes the push path for a test", async () => {
+	const endpoint = "https://web.push.apple.com/device";
+	const { booted, api, rendered, testPushes } = localNoticeHarness({ endpoint, initialVisibility: "hidden" });
+	await settleNoticeWork();
+	await api.sendTestNotification();
+	assert.equal(testPushes.length, 1, "the background test did not reach the push path");
+	assert.equal(rendered.length, 0, "a hidden page rendered a banner");
+	booted.disposeAll();
+});
+
+test("a failed test push on a hidden page is reported", async () => {
+	const endpoint = "https://web.push.apple.com/device";
+	const { booted, api, rendered, testPushes, ackPosts } = localNoticeHarness({ endpoint, pushTest: "fail", initialVisibility: "hidden" });
+	await settleNoticeWork();
+	await assert.rejects(() => api.sendTestNotification(), /Push was rejected/);
+	assert.equal(testPushes.length, 1, "the test did not reach the push path");
+	assert.equal(rendered.length, 0, "the test raised a local banner before the push result");
+	assert.deepEqual(ackPosts, [], "the test acknowledged an event");
+	booted.disposeAll();
+});
+
+test("a launch re-registers this device's subscription and names the one it replaced", async () => {
+	const endpoint = "https://web.push.apple.com/device";
+	const previous = "https://web.push.apple.com/previous";
+	const { booted, subscribePosts } = localNoticeHarness({
+		endpoint,
+		notification: { permission: "granted" },
+		storage: { "rdsh-mobile-ux:push-endpoint": previous },
+	});
+	await settleNoticeWork();
+	assert.equal(subscribePosts.length, 1, "the launch did not refresh the subscription");
+	const body = JSON.parse(subscribePosts[0].options.body);
+	assert.equal(body.subscription.endpoint, endpoint);
+	assert.equal(body.previousEndpoint, previous, "the replaced endpoint was not named");
+	assert.equal(body.origin, "https://app.example:8446");
+	// The next launch names the endpoint it now holds.
+	assert.equal(booted.sandbox.localStorage.getItem("rdsh-mobile-ux:push-endpoint"), endpoint);
+	booted.disposeAll();
+});
+
+test("a launch names no previous endpoint while the registration did not change", async () => {
+	const endpoint = "https://web.push.apple.com/device";
+	const { booted, subscribePosts } = localNoticeHarness({
+		endpoint,
+		notification: { permission: "granted" },
+		storage: { "rdsh-mobile-ux:push-endpoint": endpoint },
+	});
+	await settleNoticeWork();
+	assert.equal(subscribePosts.length, 1);
+	assert.equal(JSON.parse(subscribePosts[0].options.body).previousEndpoint, "", "an unchanged endpoint was reported as replaced");
+	booted.disposeAll();
+});
+
+test("a launch without permission or a subscription registers nothing", async () => {
+	const noPermission = localNoticeHarness({
+		endpoint: "https://web.push.apple.com/device",
+		notification: { permission: "default" },
+	});
+	await settleNoticeWork();
+	assert.deepEqual(noPermission.subscribePosts, [], "a permission-less launch registered a subscription");
+	noPermission.booted.disposeAll();
+
+	const noSubscription = localNoticeHarness({ endpoint: "", notification: { permission: "granted" } });
+	await settleNoticeWork();
+	assert.deepEqual(noSubscription.subscribePosts, [], "a launch with no subscription posted one");
+	noSubscription.booted.disposeAll();
+});
+
+test("a local-only notice still marks the banner for the worker hand-off", async () => {
+	const { booted, notice, rendered, markSend } = localNoticeHarness();
+	const byId = { "root-1": { title: "Main" } };
+	const running = new Map([["root-1", { running: true }]]);
+	const idle = new Map([["root-1", { running: false }]]);
+	markSend("root-1");
+	notice.emitLocalNotices(running, idle, byId);
+	assert.equal(rendered.length, 1, "the banner was not rendered");
+	assert.equal(notice.localNoticeRecent("root-1", "turn-end"), true, "a committed banner is not deduplicated against the hand-off");
+	booted.disposeAll();
+});
+
 /* ---------------------------------------------------------------------- */
 /* #59: landscape drawer nav folds into one accessible More row           */
 /* ---------------------------------------------------------------------- */
@@ -3778,6 +4830,75 @@ test("#59 the More menu dismisses on Escape, outside press, Tab and resize", () 
 	fixture.booted.disposeAll();
 });
 
+test("#59 a language switch relabels the same More row in place", () => {
+	const fixture = navBoot();
+	const more = fixture.more();
+	assert.equal(more.getAttribute("aria-label"), COPY.en["mux.navMore"]);
+	// The real button's innerHTML carries the title span; the stub discards
+	// markup, so the node the copy is written into is attached here.
+	const title = navNode(fixture.doc, "span");
+	title.className = "hHd-Xa_panelTitle hHd-Xa_wide";
+	title.textContent = COPY.en["mux.navMore"];
+	more.append(title);
+	let titleText = COPY.en["mux.navMore"];
+	let titleWrites = 0;
+	Object.defineProperty(title, "textContent", {
+		configurable: true,
+		get: () => titleText,
+		set(value) {
+			titleWrites += 1;
+			titleText = String(value);
+		},
+	});
+	let ariaWrites = 0;
+	const setAttribute = more.setAttribute;
+	more.setAttribute = (name, value) => {
+		if (name === "aria-label") ariaWrites += 1;
+		return setAttribute.call(more, name, value);
+	};
+
+	// The node already exists in English; the switch must relabel it.
+	fixture.sandbox.__RDSH_PWA_LANG__ = "ja";
+	fixture.booted.sandbox.__RDSH_MOBILE_UX__.decorateNow();
+	assert.equal(fixture.more(), more, "the language switch replaced the More row");
+	assert.equal(fixture.nav.querySelectorAll("[data-rdsh-nav-more]").length, 1, "the language switch duplicated More");
+	assert.equal(more.getAttribute("aria-label"), "その他");
+	assert.equal(title.textContent, "その他", "the visible title kept the old language");
+	assert.equal(titleWrites, 1, "the title was not rewritten exactly once");
+	assert.equal(more.children.length, 1, "the title sync added nodes");
+
+	// A re-apply must not write the same label again: every write wakes the
+	// MutationObserver that scheduled this pass.
+	fixture.booted.sandbox.__RDSH_MOBILE_UX__.decorateNow();
+	fixture.booted.sandbox.__RDSH_MOBILE_UX__.decorateNow();
+	assert.equal(ariaWrites, 1, "a pass with no language change rewrote aria-label");
+	assert.equal(titleWrites, 1, "a pass with no language change rewrote the title");
+
+	// An open menu keeps its state and focus across the relabel.
+	more.click();
+	const menu = fixture.menus()[0];
+	const item = fixture.items()[0];
+	assert.equal(fixture.doc.activeElement, item, "the menu did not focus its first item");
+	assert.equal(more.getAttribute("aria-expanded"), "true");
+	const controls = more.getAttribute("aria-controls");
+	fixture.sandbox.__RDSH_PWA_LANG__ = "en";
+	fixture.booted.sandbox.__RDSH_MOBILE_UX__.decorateNow();
+	assert.equal(more.getAttribute("aria-label"), "More");
+	assert.equal(title.textContent, "More");
+	assert.equal(titleWrites, 2);
+	assert.equal(fixture.menus().length, 1, "the language switch closed or duplicated the menu");
+	assert.equal(menu.parentElement, fixture.body, "the open menu left the page");
+	assert.equal(more.getAttribute("aria-expanded"), "true");
+	assert.equal(more.getAttribute("aria-controls"), controls);
+	assert.equal(fixture.doc.activeElement, item, "the language switch stole menu focus");
+
+	const escape = { key: "Escape", preventDefault() {}, stopPropagation() {} };
+	[...fixture.docListeners].reverse().find((entry) => entry.type === "keydown" && entry.capture).handler(escape);
+	assert.equal(menu.parentElement, null, "Escape stopped closing the menu");
+	assert.equal(fixture.doc.activeElement, more, "Escape stopped restoring focus to More");
+	fixture.booted.disposeAll();
+});
+
 test("#59 the More row is mobile-landscape only and is removed on dispose", () => {
 	const portrait = navBoot({ narrow: true });
 	assert.equal(portrait.more(), null, "a portrait phone got the landscape More row");
@@ -3843,4 +4964,131 @@ test("#80 a full ja desktop keeps the stock nav and installs no phone controls",
 	assert.equal(fixture.plugins.getAttribute("aria-label"), "プラグイン", "a ja desktop nav was rewritten");
 	assert.equal(fixture.docListeners.length, 0, "a ja desktop installed the mobile click listener");
 	fixture.booted.disposeAll();
+});
+
+
+/**
+ * A question card stand-in for the answer-field rules. Only the structural
+ * queries those rules make are answered; anything label-based throws, so a
+ * translation regression cannot pass through this fake.
+ */
+function questionCardFixture({ options = 2, checked = 0 } = {}) {
+	const feedback = { textContent: "" };
+	let clicks = 0;
+	const submit = {
+		click() {
+			clicks += 1;
+		},
+	};
+	return {
+		feedback,
+		get clicks() {
+			return clicks;
+		},
+		querySelectorAll(selector) {
+			assert.doesNotMatch(selector, /aria-label/, "the question guard matched a translated label");
+			assert.match(selector, /role="(?:radio|checkbox)"/, "the option list was not found structurally");
+			return new Array(options).fill({});
+		},
+		querySelector(selector) {
+			assert.doesNotMatch(selector, /aria-label/, "the question guard matched a translated label");
+			if (selector.includes('aria-checked="true"')) return checked > 0 ? {} : null;
+			if (selector.includes('_footerActions')) return { querySelectorAll: () => [{}, submit] };
+			if (selector.includes('_feedback')) return feedback;
+			return null;
+		},
+	};
+}
+
+/** A synthetic keydown; only what the rule reads. */
+function enterKey(overrides = {}) {
+	const event = {
+		key: "Enter",
+		shiftKey: false,
+		metaKey: false,
+		ctrlKey: false,
+		isComposing: false,
+		keyCode: 13,
+		prevented: 0,
+		stopped: 0,
+		preventDefault() {
+			event.prevented += 1;
+		},
+		stopPropagation() {
+			event.stopped += 1;
+		},
+		stopImmediatePropagation() {},
+		...overrides,
+	};
+	return event;
+}
+
+test("#26 a question with options needs one selected, a free-text question does not", () => {
+	const booted = bootClient({ mode: "mobile", narrow: true });
+	const { needsSelection } = booted.sandbox.__RDSH_MOBILE_UX__.questionCard;
+
+	assert.equal(needsSelection(questionCardFixture({ options: 2, checked: 0 })), true, "an empty question was accepted");
+	assert.equal(needsSelection(questionCardFixture({ options: 2, checked: 1 })), false, "a chosen option was rejected");
+	assert.equal(needsSelection(questionCardFixture({ options: 3, checked: 2 })), false, "two multi-select choices were rejected");
+	// A free-text-only question has no options to choose, so its text is the answer.
+	assert.equal(needsSelection(questionCardFixture({ options: 0 })), null, "a free-text-only question became unsendable");
+	booted.disposeAll();
+});
+
+test("#26 Enter in the answer field breaks the line; only Cmd/Ctrl+Enter sends", () => {
+	const booted = bootClient({ mode: "mobile", narrow: true, copy: COPY, lang: "ja" });
+	const { keyDown } = booted.sandbox.__RDSH_MOBILE_UX__.questionCard;
+
+	const plain = enterKey();
+	const plainCard = questionCardFixture({ options: 2, checked: 1 });
+	keyDown(plain, plainCard);
+	assert.equal(plain.stopped, 1, "plain Enter was left to upstream's submit handler");
+	assert.equal(plain.prevented, 0, "plain Enter lost its newline");
+	assert.equal(plainCard.clicks, 0, "plain Enter submitted the question");
+
+	const shifted = enterKey({ shiftKey: true });
+	keyDown(shifted, plainCard);
+	assert.equal(shifted.prevented, 0, "Shift+Enter lost its newline");
+	assert.equal(shifted.stopped, 0, "Shift+Enter was intercepted needlessly");
+
+	const composing = enterKey({ isComposing: true });
+	keyDown(composing, plainCard);
+	assert.equal(composing.stopped, 0, "an IME confirm was intercepted");
+	assert.equal(plainCard.clicks, 0, "an IME confirm submitted the question");
+
+	const chord = enterKey({ ctrlKey: true });
+	const empty = questionCardFixture({ options: 2, checked: 0 });
+	keyDown(chord, empty);
+	assert.equal(chord.prevented, 1, "Cmd/Ctrl+Enter was not taken over");
+	assert.equal(empty.clicks, 0, "Cmd/Ctrl+Enter sent a zero-selection answer");
+	assert.equal(empty.feedback.textContent, COPY.ja["question.selectRequired"], "the missing choice was not explained in ja");
+
+	const meta = enterKey({ metaKey: true });
+	const chosen = questionCardFixture({ options: 2, checked: 1 });
+	keyDown(meta, chosen);
+	assert.equal(chosen.clicks, 1, "Cmd/Ctrl+Enter did not press the submit button");
+	assert.equal(chosen.feedback.textContent, "", "a valid send showed the missing-choice message");
+
+	const freeText = enterKey({ ctrlKey: true });
+	const onlyText = questionCardFixture({ options: 0 });
+	keyDown(freeText, onlyText);
+	assert.equal(onlyText.clicks, 1, "a free-text-only question could not be sent from the keyboard");
+	booted.disposeAll();
+});
+
+
+test("#26 the missing-choice message clears when a choice lands, an upstream error stays", () => {
+	const booted = bootClient({ mode: "mobile", narrow: true, copy: COPY, lang: "ja" });
+	const { clearFeedback } = booted.sandbox.__RDSH_MOBILE_UX__.questionCard;
+	const card = questionCardFixture({ options: 2, checked: 1 });
+	card.feedback.textContent = COPY.ja["question.selectRequired"];
+	clearFeedback(card);
+	assert.equal(card.feedback.textContent, "", "the refusal stayed after a choice was made");
+	card.feedback.textContent = COPY.en["question.selectRequired"];
+	clearFeedback(card);
+	assert.equal(card.feedback.textContent, COPY.en["question.selectRequired"], "an en refusal was not cleared");
+	card.feedback.textContent = "Please complete this question first.";
+	clearFeedback(card);
+	assert.equal(card.feedback.textContent, "Please complete this question first.", "an upstream error was cleared");
+	booted.disposeAll();
 });

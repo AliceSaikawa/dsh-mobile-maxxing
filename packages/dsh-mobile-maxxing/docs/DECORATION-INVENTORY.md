@@ -19,7 +19,7 @@ width-only specification per direct user request.
 | Constant | Contents |
 | --- | --- |
 | `CSS_DEVICE` | Only this plugin's own chrome: `.rdsh-mux-toast` and the Settings cards. Always present. No upstream selector. |
-| `CSS_PHONE` | Every rule that reshapes upstream in mobile mode (drawer, right panel, composer, transcript, question cards, queue, workspace picker, settings navigation, animations, session colour frame, safe-area root padding). |
+| `CSS_PHONE` | Every rule that reshapes upstream in mobile mode (drawer, right panel, composer, transcript, question cards, queue, workspace picker, settings navigation, animations, session/folder colour frames, safe-area root padding). |
 
 There is **no `@media (max-width: 767px)` wrapper**. The mobile half is a
 separate `<style data-rdsh-mux-style="phone">` appended only when the
@@ -45,14 +45,14 @@ mode. The mode never changes during a page, so the cleanup path is dispose
 | `decorateFast` header/crumbs/conversation | `data-rdsh-header`, `-crumbs`, `-conversation` | mobile mode only | attributes removed |
 | `decorateFast` `data-rdsh-anim` | animation choice | mobile mode only | attribute removed |
 | `decorateFast` `data-rdsh-hide-settings` | hidden-control switch | mobile mode only (`onPhone && !hideDisabled`) | attribute removed |
-| `decorateSessionRows` | row/status/title/running/ring/open/minor hooks **and** the colour frame | mobile mode only | `clearSessionRowHooks()` removes all, including `--rdsh-session-frame` |
+| `decorateSessionRows` | row/status/title/running/ring/open/minor hooks **and** the session/folder colour frames | mobile mode only | `clearSessionRowHooks()` removes all, including both frame variables, and `clearFolderMenu()` drops the claimed workspace-menu row |
 | `decorateEditCards` | edit card/header/row | mobile mode only | attributes removed before the scan |
 | `decorateTranscript` | transcript column hooks | mobile mode only | attributes removed |
 | `decorateUserBubbles` | user stack/bubble | mobile mode only | attributes removed |
 | `decorateRightPanel` | panel node + `data-rdsh-rightpanel-open`, observers, `--rdsh-rightbar-width` | mobile mode only | `forgetRightPanel()` clears the attribute, the width variable and the observers |
 | `decorateRightPanelTabs` | `data-rdsh-rtab` | mobile mode only | attribute removed |
 | `decorateCodePreview` | code pre/scroll locks | mobile mode only | attributes removed |
-| `decorateQuestionCards` / `decorateQuestionArrow` | question card/frame/tile + injected arrow button | mobile mode only | attributes + arrows removed |
+| `decorateQuestionCards` / `decorateQuestionArrow` | question card/frame/tile/typing + injected arrow button; Enter/CMD-Enter and required-selection listeners | mobile mode only | attributes + arrows removed |
 | `decorateTodoPanel` | todo row text/status/tab/title | mobile mode only | attributes restored/removed via `clearDetailPanelHooks()` |
 | `decorateGoalBar` | goal objective/actions/editing, role/tab/title | mobile mode only | same |
 | `decorateHeaderTitle` | header title/running | mobile mode only | attributes removed |
@@ -93,8 +93,8 @@ drawer state stay released.
 
 `client.js` resolves the mode before it builds anything and returns
 `{ apply() {} }` for a desktop. A PC therefore gets **no part of this package**:
-no PWA shell (no manifest handling, no service worker registration), no
-session-id copy row, no Settings cards or tabs, no terminal touch bridge, and no
+no PWA shell (no manifest handling, no service worker registration),
+no Settings cards or tabs, no terminal touch bridge, and no
 listener, style, timer, fetch or storage read. Every surface described in this
 document is mobile mode only.
 
@@ -114,7 +114,7 @@ hide overrides are ignored without deleting storage.
 
 Device-local additions live in the same section: font sizes (text/code/terminal), UI
 language from the registered catalog (`ja` only when the separate optional
-`rdsh-locale-ja` package owns it), and a default permission preset. Storage keys are
+`dsh-locale-ja` package owns it), and a default permission preset. Storage keys are
 `rdsh-mobile-ux:local-permission` and `rdsh-mobile-ux:local-display`; no Host writer is
 called. The permission preset is applied through the opened session's own `/permission`
 command, using the public `uiWorkspace.openWorkspaceSession(beforeOpen)` contract plus

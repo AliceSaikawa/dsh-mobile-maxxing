@@ -125,6 +125,12 @@ function load({ sidebar = null, globals = [], phone = true, frameElement = null 
 			return body.querySelectorAll(selector);
 		},
 	};
+	// #97: the locator reads its label vocabulary from PROBES (the host-injected
+	// table) instead of hardcoding en/zh strings.
+	const probes = {
+		sidebarOpen: ["Open sidebar", "打开侧边栏", "サイドバーを開く"],
+		sidebarCollapse: ["Collapse sidebar", "收起侧边栏", "サイドバーを折りたたむ"],
+	};
 	const context = {
 		document,
 		phone: () => phone,
@@ -132,6 +138,10 @@ function load({ sidebar = null, globals = [], phone = true, frameElement = null 
 		state: { drawerOpen: true },
 		emit() {},
 		scheduleDecorate() {},
+		probeValues: (key, fallback) => (Array.isArray(probes[key]) ? probes[key] : fallback === undefined ? [] : [fallback]),
+		ariaLabelSelector: (tag, key, fallback) => context.probeValues(key, fallback)
+			.map((value) => `${tag}[aria-label="${String(value).replaceAll('"', '\\"')}"]`)
+			.join(", "),
 	};
 	const api = vm.runInNewContext(
 		`(() => {\n${sidebarSource}\n${decorateSource}\n${toggleSource}\n${closeSource}\nreturn { sidebarToggle, decorateSidebarToggle, toggleDrawer, closeDrawer };\n})()`,

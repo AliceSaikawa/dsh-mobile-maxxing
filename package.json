@@ -28,7 +28,7 @@
   ],
   "scripts": {
     "test": "node --test packages/dsh-mobile-maxxing/tests/*.test.mjs",
-    "test:locale": "node --test packages/rdsh-locale-ja/test/*.test.mjs",
+    "test:locale": "node --test packages/dsh-locale-ja/test/*.test.mjs",
     "extract:locale": "node tools/extract-upstream.mjs",
     "check:locale": "node tools/extract-upstream.mjs --check",
     "build:locale": "node tools/build-client.mjs",
@@ -49,7 +49,7 @@
   },
   "meta": {
     "title": "dsh-mobile-maxxing",
-    "description": "PWA化、スマホ/タブレットの操作感、通知（アプリ内バナーとWeb Push）、CJK表示の修正、セッションIDのコピーをまとめて提供します。"
+    "description": "PWA化、スマホ/タブレットの操作感、通知（アプリ内バナーとWeb Push）、CJK表示の修正をまとめて提供します。"
   },
   "author": "kuraneko1",
   "keywords": [

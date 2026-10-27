@@ -326,6 +326,7 @@ test("upstream hooks are styled only in the mobile stylesheet", () => {
 	assert.deepEqual(leaked, [], "an upstream hook leaked into the always-on stylesheet");
 	const phone = cssTemplate("CSS_PHONE");
 	assert.match(phone, /\[data-rdsh-session-frame\]/, "the session frame rule is not in the mobile sheet");
+	assert.match(phone, /\[data-rdsh-folder-frame\]/, "the folder frame rule is not in the mobile sheet");
 	assert.doesNotMatch(phone, /@media \(max-width: 767px\)/, "the mobile sheet regained a max-width wrapper");
 	// The drawer header toggle: every pointer state is label-primary on a
 	// transparent background, no Android tap flash, and no delayed tooltip.
@@ -395,16 +396,18 @@ test("dispose removes the mobile hooks, including the colour frame", () => {
 	const locator = functionHead("sidebarToggle", 1700);
 	assert.match(locator, /\[data-slot="sidebar"\]/, "the sidebar toggle search is not bounded by its slot");
 	assert.match(locator, /if \(sidebar === null\) return null;/, "a missing sidebar falls back to a global control");
-	assert.match(locator, /button\[aria-label="Open sidebar"\], button\[aria-label="Collapse sidebar"\]/, "the toggle action label is not used");
+	assert.match(locator, /ariaLabelSelector\("button", "sidebarOpen", "Open sidebar"\)/, "the drawer's open label vocabulary is not used");
+	assert.match(locator, /ariaLabelSelector\("button", "sidebarCollapse", "Collapse sidebar"\)/, "the drawer's collapse label vocabulary is not used");
 	assert.match(locator, /\[data-window-drag\]/, "the localized structural fallback is missing");
-	assert.match(locator, /const openLabels = \["Open sidebar", /, "closing does not check the known open labels");
+	assert.match(locator, /const openLabels = probeValues\("sidebarOpen", \["Open sidebar"\]\)/, "closing does not check the known open labels");
 	assert.match(locator, /!openLabels\.includes\(button\.getAttribute\("aria-label"\)\)/, "closing can click a control known to open the sidebar");
 	const action = functionHead("toggleDrawer", 500);
 	assert.match(action, /sidebarToggle\(\)/, "the drawer action bypasses the decorator locator");
-	assert.match(action, /document\.querySelector\('\[aria-label="Open sidebar"\], \[aria-label="Collapse sidebar"\]'\)/, "the stock action fallback is gone");
+	assert.match(action, /ariaLabelSelector\("button", "sidebarOpen", "Open sidebar"\)/, "the stock action fallback is gone");
+	assert.match(action, /ariaLabelSelector\("button", "sidebarCollapse", "Collapse sidebar"\)/, "the stock action fallback lost its collapse label");
 	const close = functionHead("closeDrawer", 1400);
 	assert.match(close, /const collapse = sidebarToggle\(true\)/, "the close path does not use the collapse-only locator");
-	assert.match(close, /document\.querySelector\('\[aria-label="Collapse sidebar"\]'\)/, "the close path lost its collapse-only stock fallback");
+	assert.match(close, /ariaLabelSelector\("button", "sidebarCollapse", "Collapse sidebar"\)/, "the close path lost its collapse-only stock fallback");
 	assert.doesNotMatch(close, /Open sidebar/, "the close path can click a control known to open the sidebar");
 	// Session rows are still visited on every pass, but the function only
 	// writes the mobile hooks (frame included) in mobile mode.
@@ -416,8 +419,54 @@ test("dispose removes the mobile hooks, including the colour frame", () => {
 	);
 	const phoneCss = cssTemplate("CSS_PHONE");
 	assert.match(phoneCss, /\[data-rdsh-session-frame\]/, "the session frame rule is not in the mobile stylesheet");
+	assert.match(phoneCss, /\[data-rdsh-folder-frame\]/, "the folder frame rule is not in the mobile stylesheet");
 	assert.doesNotMatch(phoneCss, /@media \(max-width: 767px\)/, "the frame is behind a width wrapper again");
 	assert.match(CLIENT, /"data-rdsh-session-frame",/, "the frame hook is not in the cleanup list");
+	assert.match(CLIENT, /"data-rdsh-folder-frame",/, "the folder frame hook is not in the cleanup list");
+	assert.match(CLIENT, /"data-rdsh-folder-menu",/, "the folder menu hook is not in the cleanup list");
+});
+
+test("folder frames reuse the native menu cell and claim only the folder portal", () => {
+	// The icon looked misaligned because the item carried its own padding, gap
+	// and 16px seat. It is now the same MenuItemButton native pin/rename use.
+	const item = functionHead("ColorFrameMenuItem", 1600);
+	assert.match(item, /require\("@deepseek-ai\/dsh-client-ui-primitives"\)/, "the colour-frame row does not use the shell primitive");
+	assert.match(item, /MenuItemButton/, "the colour-frame row no longer renders MenuItemButton");
+	assert.match(item, /icon: frameIcon\(\)/, "the frame glyph is not passed through the native icon seat");
+	assert.doesNotMatch(item, /rdsh-frame-menu-item/, "the hand-built menu cell came back");
+	const phone = cssTemplate("CSS_PHONE");
+	assert.doesNotMatch(phone, /\.rdsh-frame-menu-item/, "the custom menu-cell geometry came back");
+	assert.doesNotMatch(phone, /\.rdsh-frame-menu-icon/, "the custom icon seat came back");
+
+	// No slot exists for the workspace menu: ownership is the portal the click
+	// opened, linked aria-controls <-> id. Labels are never read.
+	assert.match(CLIENT, /const SESSION_FRAME_KEY = "rdsh-mobile-ux:session-frames"/, "the session key moved");
+	assert.match(CLIENT, /const FOLDER_FRAME_KEY = "dsh-mobile-maxxing:folder-frames"/, "the folder key is not the dsh namespace");
+	const attach = functionHead("attachFolderMenu", 2600);
+	assert.match(attach, /menu\.setAttribute\(FOLDER_MENU_ATTR/, "the claimed portal is not marked");
+	assert.match(attach, /button\.setAttribute\("aria-controls", id\)/, "the anchor does not own the portal by aria-controls");
+	assert.doesNotMatch(attach, /aria-haspopup/, "the folder anchor claims a picker/model popup");
+	assert.match(attach, /MenuItemButton/, "the folder row is not the native menu cell");
+	const decorateAt = CLIENT.indexOf("function decorateFolderMenu(");
+	const decorate = CLIENT.slice(decorateAt, CLIENT.indexOf("\n    function showFramePalette", decorateAt));
+	assert.match(decorate, /!pending\.known\.has\(node\)/, "a menu that was already open can be claimed");
+	assert.match(decorate, /!node\.hasAttribute\(FOLDER_MENU_ATTR\)/, "an already-decorated portal can be claimed twice");
+	assert.doesNotMatch(decorate, /textContent|aria-label|labelOf/, "a folder menu was matched by its copy");
+	const arm = functionHead("armFolderMenu", 1200);
+	assert.match(arm, /folderRowMenuButton\(row\) !== button/, "a non-menu row action can arm the claim");
+	assert.match(arm, /workspaceKeyOf\(row\) === ""/, "the Ungrouped bucket can arm a folder claim");
+	const escape = functionHead("onKeyDown", 400);
+	assert.match(escape, /closeFramePalette\(\)/, "Escape does not close the frame palette");
+
+	// #97 moved the session row actions into decorateRowActions. The folder
+	// pass is per row pass, not per session row, and must stay outside it.
+	const rowsAt = CLIENT.indexOf("function decorateSessionRows(");
+	const rowActionsAt = CLIENT.indexOf("function decorateRowActions(");
+	const rows = CLIENT.slice(rowsAt, rowActionsAt);
+	assert.match(rows, /for \(const row of document\.querySelectorAll\('\[data-row-key\^="workspace:"\]'\)\)/, "folder rows are not visited once per pass");
+	assert.match(rows, /decorateFolderMenu\(\)/, "the folder menu is not decorated once per pass");
+	const actions = CLIENT.slice(rowActionsAt, CLIENT.indexOf("let rowHooksActive", rowActionsAt));
+	assert.doesNotMatch(actions, /applyFolderFrame|decorateFolderMenu/, "the folder pass moved back inside decorateRowActions");
 });
 
 test("the live-speed poller only runs in mobile mode", () => {
@@ -676,7 +725,8 @@ test("representative Japanese copy matches the reference wording", () => {
 		"crop.cancel": "キャンセル",
 		"crop.save": "クエリに追加",
 		"frame.menu": "色枠",
-		"sessionId.label": "セッションIDをコピー",
+		// The palette is shared by sessions and folders: no target in the label.
+		"frame.paletteAria": "枠の色",
 		"notify.turn.completed": "作業完了",
 		"notify.questionHeader": "確認",
 		"notify.previewQuestion": "このまま進めますか？",
@@ -693,6 +743,17 @@ test("representative Japanese copy matches the reference wording", () => {
 		assert.equal(copyFor("ja")[key], value, `${key} does not match the reference Japanese`);
 	}
 	assert.equal(copyFor("en")["tab.mobile"], "Mobile");
+	assert.equal(copyFor("en")["frame.paletteAria"], "Frame color", "the English palette label names a session only");
+});
+
+test("the local session-id copy row is gone (#99)", () => {
+	// rc.3 registers its own `session-id` row in the same menu slot, so the
+	// local part made the menu show two identical copy rows. Upstream is the
+	// only owner now: the factory, its slot id and its copy keys stay gone.
+	assert.equal(CLIENT.includes("sessionIdCopyPart"), false, "the local factory is still in the bundle");
+	assert.equal(CLIENT.includes("rdsh-session-id-copy"), false, "the local slot id is still in the bundle");
+	const copy = readFileSync(new URL("../lib/copy.js", import.meta.url), "utf8");
+	assert.equal(/["']sessionId\./.test(copy), false, "a sessionId.* copy key is still shipped");
 });
 
 test("the retired diagnostics and custom hide are gone", () => {

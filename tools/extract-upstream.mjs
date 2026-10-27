@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const DEFAULT_SNAPSHOT_DIR = path.join(REPO_ROOT, 'packages', 'rdsh-locale-ja', 'locale');
+const DEFAULT_SNAPSHOT_DIR = path.join(REPO_ROOT, 'packages', 'dsh-locale-ja', 'locale');
 const SNAPSHOT_SCHEMA = 1;
 const SNAPSHOT_LOCALE = 'en';
 const REQUIRED_LOCALES = ['en', 'zh'];
@@ -893,7 +893,7 @@ function printHelp() {
 		'Options:',
 		'  --dsh-root <path>  DSH runtime root, @deepseek-ai scope, or @deepseek-ai/dsh package.',
 		'                     Defaults to $DSH_HOME/runtime or ~/.dsh/runtime.',
-		'  --out <path>       Snapshot directory (default: packages/rdsh-locale-ja/locale).',
+		'  --out <path>       Snapshot directory (default: packages/dsh-locale-ja/locale).',
 		'  --check            Compare the installed upstream sources with the committed snapshot.',
 		'  --help             Show this help.',
 	].join('\n'));

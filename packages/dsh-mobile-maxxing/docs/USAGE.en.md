@@ -6,14 +6,13 @@ Everything `dsh-mobile-maxxing` does, in detail. **For installation see the [REA
 
 ## What this package is
 
-Three plugins that used to be separate, merged into one. The CJK autolink fix remains a
+Plugins that used to be separate, merged into one. The CJK autolink fix remains a
 separate package because it rewrites the PC renderer.
 
 | Was | Now |
 | --- | --- |
 | `rdsh-pwa` | PWA: installable, offline launch, notification send/receive, notification sounds |
 | `rdsh-mobile-ux` | Phone-width UX: drawer, settings, composer, code view, in-app banners |
-| `rdsh-session-id-copy` | Adds a session-id copy row to the session menu |
 | `rdsh-markdown-cjk` (separate) | Fixes broken autolinks around CJK text; not mounted by this package |
 
 **Why not separate packages:** DSH maps one package to one browser module. Splitting them
@@ -30,7 +29,6 @@ separate because it changes the PC renderer.
 | Notification sounds | Five synthesised presets, volume, no audio files |
 | Mobile layout | Sidebar becomes a drawer, settings open in one tap, code wraps by default (toggle available) |
 | CJK rendering (optional) | Only with the separate `rdsh-markdown-cjk` package; this package leaves the Markdown renderer stock to avoid changing the PC |
-| Session id copy | One row in the session row menu |
 
 ## Screenshots
 
@@ -60,7 +58,7 @@ none writes the shared DSH profile.
 | --- | --- |
 | Font sizes (text / code / terminal) | Changes this device's rendering only |
 | Terminal-only dark | Keeps the terminal dark on a light page; the shared theme and the rest of the UI are unchanged |
-| Display language | Changes this device's UI language; only locales registered in the shared locale service are offered. Japanese appears only with the optional separate `rdsh-locale-ja` package |
+| Display language | Changes this device's UI language; only locales registered in the shared locale service are offered. Japanese appears only with the optional separate `dsh-locale-ja` package |
 | Default permission | Applies to new sessions started on this device only |
 
 The permission choice is recorded as the session's own `/permission` right after it opens; the
@@ -128,12 +126,12 @@ untranslated dictionary keys fall back to English.
 This package does not add a `ja` language pack. The picker lists only the `en` /
 `zh` locales the host registers, and a stored `ja` choice is ignored while no owner
 registers it (nothing is guessed). Japanese requires the optional separate
-`rdsh-locale-ja` package, installed from its local tarball. It is not part of the
+`dsh-locale-ja` package, installed from its local tarball. It is not part of the
 mobile tarball and is never enabled automatically. Both packages may be enabled
 together without a duplicate registration (the mobile half never calls
 `addLanguage`), and the shared display language is never rewritten: only this
 device's view is projected. See
-[`packages/rdsh-locale-ja/README.md`](../../rdsh-locale-ja/README.md) for its
+[`packages/dsh-locale-ja/README.md`](../../dsh-locale-ja/README.md) for its
 translation status and install steps. The PC's language list is unchanged.
 
 ## Mobile layout
@@ -179,7 +177,10 @@ What changes:
 - The sidebar becomes an overlay drawer you open with the floating button
 - At 768px and wider the right panel uses the dock beside the conversation when the
   measured width allows it; otherwise it stays the full-screen sheet. Below 768px it is
-  always the sheet
+  always the sheet. The panel's fullscreen control stays visible, so a fullscreened panel
+  can always go back to the dock, and a rotation re-fits a docked panel to the new
+  orientation. While the panel is docked, a swipe on the conversation is left to the
+  conversation; only a swipe that starts on the panel closes it
 - Settings get a single column and a scrolling tab strip
 - The code viewer wraps by default; the header's wrap button turns that
   off and long lines scroll sideways again
@@ -194,8 +195,9 @@ What changes:
 - The composer stays above the keyboard
 - Session rows keep their actions hidden until the menu or a long press
 - Right-panel tabs are finger-sized, and the tab strip scrolls sideways
-- The phone sheet names the panel kind above the tab strip ("Terminal" or "Subagent"); other
-  tabs get no heading
+- The phone sheet names the tab's kind above the tab strip: "Terminal" and "Subagent" by
+  kind, and the tab's own label for every other kind ("Files", "Start", ...), in the display
+  language. The heading never takes a tap
 - Dragging inside the terminal scrolls it (the bundled xterm has no touch support)
 - The terminal gets a top key row for Esc, Tab, arrows and Ctrl; it stays above the keyboard.
   Ctrl applies to the next key only: Ctrl then C sends ETX (0x03) to the PTY, which an
@@ -225,14 +227,50 @@ by it.
 
 | App state | How you are told |
 | --- | --- |
-| Visible (foreground) | In-app banner. No system notification |
+| Visible (foreground) | In-app banner; no system push if the host receives its acknowledgement |
 | Background, another app, closed | Web Push system notification |
 | Tap the notification | That session opens (banner "open" while in the app) |
 
-The service worker decides: `clients.matchAll()` finds a window with
-`visibilityState === "visible"` and hands the payload to the page, waiting up to 1.5s for the
-banner to acknowledge it. A visible window owns the notification: if no acknowledgement
-arrives, the miss is logged and no system notification is stacked on top of the app.
+The host waits up to 1.5s per notification event for an acknowledgement. A visible
+page renders the local banner from session state and acknowledges that event for its
+own push endpoint only after React has committed the banner, so a banner that was
+replaced before it appeared acknowledges nothing. Only acknowledged endpoints skip
+push. A hidden, disconnected, or failed page sends no acknowledgement, so ordinary Web
+Push is the fallback; there is no visibility heartbeat or expiring lease. Every push
+that reaches the service worker calls `showNotification`, as WebKit requires.
+
+An acknowledgement is **per subscription (endpoint)**. A reinstall or a browser-side
+rotation creates a new registration while the old endpoint, still delivered to the same
+device, becomes unreachable from the page. A leftover endpoint therefore turns one
+foreground event into a banner plus a system notification (#98). Two steps retire it:
+
+- on subscribe, the page sends the endpoint it held last (kept in `localStorage` as
+  `rdsh-mobile-ux:push-endpoint`) as `previousEndpoint`, and **only that one entry of
+  the same origin** is removed
+- every launch re-registers the current subscription, and entries of the same origin and
+  label that have not been refreshed for 7 days are removed (the fallback for a reinstall,
+  which clears `localStorage`)
+
+An origin is shared by every device, so the store never collapses it to "the newest
+endpoint". Another origin always keeps its subscription, and another device on the same
+origin is only removed by its own named endpoint. The caveat: a second device with the
+same label (User-Agent) that has not opened the app for over 7 days can be caught by the
+fallback; opening the app again re-registers it and notifications return.
+
+**Settings → Mobile → Test** follows the same rule: while the app is visible it only
+shows the in-app banner, and the host's `/push/test` (a real Web Push) is used only when
+the page is backgrounded — that route was the remaining way to get a system notification
+while the app was open.
+
+The turn-end banner follows the host's own rule. While `onlyMobileTurns` is on (the
+default) only a session this browser sent in raises one, because that is the only turn
+the host notifies. Questions are always announced in the app, whichever device started
+the work.
+
+An acknowledgement that arrives too late still leaves the system notification beside
+the in-app banner, and a push already sent cannot be taken back, so that duplicate is
+accepted. A commit proves the banner was mounted, not that the user read it: another
+notice can replace it immediately.
 
 ### Sounds
 
@@ -298,6 +336,12 @@ once teaches the host its origin (after a restart, `webServer.getOrigin()` is ad
 when it matches a stored subscription). A subscription answered with 404/410 is removed from
 the store on the spot.
 
+So that one device does not accumulate endpoints, `/push/subscribe` accepts
+`previousEndpoint` (the endpoint that browser held last) and removes that one entry of
+the same origin. Entries of the same origin and label that have not been refreshed for 7
+days are removed too; the launch-time re-registration refreshes `addedAt`, so a device
+that is still in use is never stale.
+
 Every stored endpoint is validated on subscribe: it must be `https` and must not resolve
 to loopback, a private range or a link-local address. The host POSTs to whatever is stored,
 so an unvalidated endpoint would be a way to park an internal URL in the store.
@@ -330,7 +374,7 @@ as follows. **This package never edits the profile.**
 
 - Move `rdsh-mobile-ux`'s `runningAnimation` / `hideLabels` / `showHiddenControls` to
   `dsh-mobile-maxxing.mobileUx.*`
-- Remove the plugins this package replaces from the profile: `rdsh-mobile-ux`,
+- Remove the old plugins from the profile: `rdsh-mobile-ux`,
   `rdsh-session-id-copy`, `dsh-notify-push`. Also remove `rdsh-mobile-ui` (layout) and
   `@local/dsh-sound` (sounds) if present, or the layout and the notification sound are
   controlled twice

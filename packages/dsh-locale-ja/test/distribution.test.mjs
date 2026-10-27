@@ -28,7 +28,7 @@ const upstream = JSON.parse(fs.readFileSync(path.join(packageDir, 'locale', 'ups
 const rootLicense = fs.readFileSync(path.join(repo, 'LICENSE'), 'utf8');
 
 function temporaryDirectory(t) {
-	const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'rdsh-locale-ja-dist-'));
+	const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-locale-ja-dist-'));
 	t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
 	return directory;
 }
@@ -46,7 +46,7 @@ function tarballEntries(file) {
 }
 
 test('the package is a separate, private web client with its own exports', () => {
-	assert.equal(manifest.name, 'rdsh-locale-ja');
+	assert.equal(manifest.name, 'dsh-locale-ja');
 	assert.equal(manifest.private, true, 'the package stays private until its actual release');
 	assert.equal(manifest.type, 'module');
 	assert.equal(manifest.description, meta.description, 'the generated description drifted from package-meta.json');
@@ -71,12 +71,28 @@ test('the package is a separate, private web client with its own exports', () =>
 	// nothing silently installs or enables the locale pack.
 	const rootManifest = JSON.parse(fs.readFileSync(path.join(repo, 'package.json'), 'utf8'));
 	for (const field of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']) {
-		assert.equal(rootManifest[field]?.['rdsh-locale-ja'], undefined, 'the root package silently depends on ' + field);
+		assert.equal(rootManifest[field]?.['dsh-locale-ja'], undefined, 'the root package silently depends on ' + field);
 	}
-	assert.doesNotMatch(fs.readFileSync(path.join(repo, 'cordis.patch.yml'), 'utf8'), /rdsh-locale-ja/,
+	assert.doesNotMatch(fs.readFileSync(path.join(repo, 'cordis.patch.yml'), 'utf8'), /dsh-locale-ja/,
 		'the mobile bundle silently enables the locale pack');
-	assert.equal(rootManifest.files.some((entry) => entry.includes('rdsh-locale-ja')), false,
+	assert.equal(rootManifest.files.some((entry) => entry.includes('dsh-locale-ja')), false,
 		'the root file list ships the locale package');
+});
+
+test('the rename left one identity: dsh-locale-ja, and no old name in the tracked tree', () => {
+	assert.equal(manifest.name, 'dsh-locale-ja');
+	assert.equal(meta.name, manifest.name, 'the generated manifest and package-meta.json disagree');
+	assert.equal(path.basename(packageDir), manifest.name, 'the directory name is the package name');
+	assert.equal(manifest.repository?.directory, 'packages/dsh-locale-ja');
+	assert.equal(manifest.homepage?.endsWith('/packages/dsh-locale-ja#readme'), true, 'the homepage points elsewhere');
+
+	// The old name belongs to no live file. Spelled in parts so this guard is
+	// itself not a hit; historical notes, if any, live outside this repository.
+	const oldName = ['rdsh', 'locale', 'ja'].join('-');
+	const tracked = execFileSync('git', ['ls-files'], { cwd: repo, encoding: 'utf8' }).trim().split('\n');
+	assert.equal(tracked.some((file) => file.startsWith('packages/' + oldName + '/')), false, 'the old package directory is still tracked');
+	const offenders = tracked.filter((file) => fs.readFileSync(path.join(repo, file), 'utf8').includes(oldName));
+	assert.deepEqual(offenders, [], 'the old package name survives in tracked files');
 });
 
 test('npm pack is a standalone install: no work directory and every export resolves', async (t) => {
@@ -116,7 +132,7 @@ test('npm pack is a standalone install: no work directory and every export resol
 	// register through the DSH loader, so evaluate them the way the Host does
 	// instead of importing them as an ES module in bare Node.
 	const client = loadClientModule(fs.readFileSync(path.join(extracted, 'client.js'), 'utf8'));
-	assert.equal(client.registration.id, 'rdsh-locale-ja');
+	assert.equal(client.registration.id, 'dsh-locale-ja');
 	assert.deepEqual(Object.keys(client.registration).sort(), ['factory', 'id']);
 	assert.equal(typeof client.registration.factory, 'function');
 	assert.deepEqual(client.language, { id: 'ja', label: '日本語', fallback: 'en' });
@@ -226,7 +242,7 @@ test('pack-all publishes the locale only for the complete 64/2906 zero-fallback 
 	};
 
 	assert.equal(localePublishDecision(complete).publish, true);
-	assert.equal(tarballName(manifest), `rdsh-locale-ja-${manifest.version}.tgz`);
+	assert.equal(tarballName(manifest), `dsh-locale-ja-${manifest.version}.tgz`);
 
 	assert.equal(current.status, current.totals.fallback === 0 ? 'complete' : 'incomplete');
 	if (current.totals.fallback > 0) {
@@ -247,13 +263,13 @@ test('pack-all refuses an incomplete locale in practice and leaves no locale tar
 		cwd: repo,
 		encoding: 'utf8',
 	});
-	const tarballs = fs.readdirSync(path.join(repo, 'dist')).filter((file) => /^rdsh-locale-ja-.*\.tgz$/.test(file));
+	const tarballs = fs.readdirSync(path.join(repo, 'dist')).filter((file) => /^dsh-locale-ja-.*\.tgz$/.test(file));
 	if (status.status === 'complete' && status.totals.fallback === 0) {
 		assert.equal(result.status, 0, result.stderr);
 		assert.equal(tarballs.length, 1, 'a complete locale must produce exactly one tarball');
 	} else {
 		assert.equal(result.status, 1, 'an incomplete locale must fail under --require-locale');
-		assert.match(result.stdout, /REFUSED: not packing rdsh-locale-ja/);
+		assert.match(result.stdout, /REFUSED: not packing dsh-locale-ja/);
 		assert.match(result.stdout, /English fallback pack was produced/);
 		assert.deepEqual(tarballs, [], 'an incomplete locale produced a fallback tarball');
 	}
@@ -263,12 +279,12 @@ test('pack-all refuses an incomplete locale in practice and leaves no locale tar
 
 test('docs describe the optional local-tarball install and never a fake release asset', () => {
 	const readme = fs.readFileSync(path.join(packageDir, 'README.md'), 'utf8');
-	assert.doesNotMatch(readme, /releases\/download\/[^\s"']*rdsh-locale-ja/, 'the unreleased locale must not link a release asset');
-	assert.match(readme, /dsh plugin --profile web add \.\/dist\/rdsh-locale-ja-0\.1\.0\.tgz/);
+	assert.doesNotMatch(readme, /releases\/download\/[^\s"']*dsh-locale-ja/, 'the unreleased locale must not link a release asset');
+	assert.match(readme, /dsh plugin --profile web add \.\/dist\/dsh-locale-ja-0\.1\.0\.tgz/);
 	assert.match(readme, /REFUSED/);
 	assert.match(readme, /sole owner|only owner/i, 'the sole-owner migration must be explicit');
 	const rootReadme = fs.readFileSync(path.join(repo, 'README.md'), 'utf8');
-	assert.doesNotMatch(rootReadme, /releases\/download\/[^\s"']*rdsh-locale-ja/);
+	assert.doesNotMatch(rootReadme, /releases\/download\/[^\s"']*dsh-locale-ja/);
 	const jaUsage = fs.readFileSync(path.join(repo, 'packages', 'dsh-mobile-maxxing', 'docs', 'USAGE.ja.md'), 'utf8');
 	assert.doesNotMatch(jaUsage, /この端末では日本語も選べます/, 'the mobile docs still claim a built-in ja pack');
 	const issueNotes = fs.readFileSync(path.join(repo, 'packages', 'dsh-mobile-maxxing', 'docs', 'ISSUES.md'), 'utf8');

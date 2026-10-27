@@ -19,7 +19,7 @@ import { pathToFileURL } from "node:url";
 
 const root = new URL("..", import.meta.url).pathname;
 const dist = join(root, "dist");
-const localeDir = join(root, "packages", "rdsh-locale-ja");
+const localeDir = join(root, "packages", "dsh-locale-ja");
 const localeStatusFile = join(localeDir, "locale", "translation-status.json");
 
 /** The only translation state that may be published as a Japanese pack. */
@@ -132,7 +132,7 @@ function main() {
 			stale = true;
 		}
 		if (stale) {
-			console.log(`\nREFUSED: rdsh-locale-ja generated files are stale; no locale tarball was produced.`);
+			console.log(`\nREFUSED: dsh-locale-ja generated files are stale; no locale tarball was produced.`);
 			console.log("  Run node tools/build-client.mjs, review the diff, then retry.");
 			if (process.argv.includes("--require-locale")) process.exitCode = 1;
 		} else {
@@ -140,7 +140,7 @@ function main() {
 			packed.push(packDirectory(localeDir, localeManifest));
 		}
 	} else {
-		console.log(`\nREFUSED: not packing rdsh-locale-ja — ${decision.reason}.`);
+		console.log(`\nREFUSED: not packing dsh-locale-ja — ${decision.reason}.`);
 		console.log("  Only a complete 64-namespace / 2906-key ja catalog with zero English");
 		console.log("  fallback may be published. No English fallback pack was produced.");
 		if (process.argv.includes("--require-locale")) process.exitCode = 1;

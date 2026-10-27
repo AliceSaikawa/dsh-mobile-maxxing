@@ -1278,9 +1278,9 @@ async function pushDelivery(page, report) {
 	}))`);
 	report.observe("push: registration", { registrationId, registrations, swState, exceptions });
 
-	// First exercise the page half directly: the worker's handOff is a
-	// MessageEvent with a transferred port. If this cannot render, the push
-	// transport is not the problem.
+	// First exercise the page half directly: the page still reads a notify
+	// MessageEvent and acks an optional transferred port. If this cannot
+	// render, the push transport is not the problem.
 	await page.eval(`(() => {
 		globalThis.__qaPushAck = false;
 		const channel = new MessageChannel();

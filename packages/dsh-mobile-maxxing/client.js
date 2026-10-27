@@ -9897,6 +9897,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       { id: "left", textKey: "terminalKeys.left", labelKey: "terminalKeys.arrowLeft" },
       { id: "right", textKey: "terminalKeys.right", labelKey: "terminalKeys.arrowRight" },
       { id: "ctrl", textKey: "terminalKeys.ctrl", labelKey: "terminalKeys.control" },
+      { id: "wide", textKey: "terminalKeys.wide", labelKey: "terminalKeys.wide" },
     ];
 
     /**
@@ -10035,6 +10036,27 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     function activateSpecialKey(state, key) {
       if (key === "ctrl") {
         setSpecialKeyControl(state, !state.control);
+        return;
+      }
+      if (key === "wide") {
+        const section = state.section;
+        const next = !section.hasAttribute("data-rdsh-terminal-virtual");
+        section.toggleAttribute("data-rdsh-terminal-virtual", next);
+        const mount = section.querySelector(".xterm")?.parentElement;
+        if (mount) {
+          if (next) {
+            // Estimate 120 columns from the current char width.
+            const rect = mount.getBoundingClientRect();
+            const cols = 120;
+            const charWidth = rect.width > 0 ? rect.width / 80 : 8;
+            mount.style.width = `${Math.round(cols * charWidth)}px`;
+            mount.style.overflowX = "auto";
+          } else {
+            mount.style.removeProperty("width");
+            mount.style.removeProperty("overflow-x");
+          }
+        }
+        scheduleTerminalFit();
         return;
       }
       const control = state.control;

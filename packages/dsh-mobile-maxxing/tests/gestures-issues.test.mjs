@@ -1844,7 +1844,7 @@ test("#78 the mobile terminal gets one labelled, ordered key row above xterm", (
 	assert.ok(terminal.section.children.indexOf(row) < terminal.section.children.indexOf(terminal.screen), "the row is not above the xterm mount");
 	assert.equal(row.getAttribute("role"), "group");
 	assert.equal(row.getAttribute("aria-label"), COPY.en["terminalKeys.label"]);
-	assert.deepEqual(row.children.map((button) => button.getAttribute("data-rdsh-terminal-key")), ["escape", "tab", "up", "down", "left", "right", "ctrl"]);
+	assert.deepEqual(row.children.map((button) => button.getAttribute("data-rdsh-terminal-key")), ["escape", "tab", "up", "down", "left", "right", "ctrl", "wide"]);
 	assert.equal(terminalKeyButton(row, "escape").textContent, "Esc");
 	assert.equal(terminalKeyButton(row, "tab").textContent, "Tab");
 	assert.equal(terminalKeyButton(row, "up").getAttribute("aria-label"), "Arrow up");

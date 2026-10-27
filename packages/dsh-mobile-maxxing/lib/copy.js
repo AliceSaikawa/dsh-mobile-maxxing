@@ -69,6 +69,7 @@ export const COPY = {
 		"terminalKeys.arrowRight": "Arrow right",
 		"terminalKeys.ctrl": "Ctrl",
 		"terminalKeys.control": "Control",
+		"terminalKeys.wide": "Wide",
 
 		// --- PWA section ----------------------------------------------------
 		"pwa.install.promptable": "Install DSH as an app",
@@ -358,6 +359,7 @@ export const COPY = {
 		"terminalKeys.arrowRight": "右矢印",
 		"terminalKeys.ctrl": "Ctrl",
 		"terminalKeys.control": "コントロール",
+		"terminalKeys.wide": "広域",
 
 		// --- PWA section ----------------------------------------------------
 		"pwa.install.promptable": "DSH をアプリとしてインストールできます",

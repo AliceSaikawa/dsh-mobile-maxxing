@@ -37,7 +37,7 @@ dsh plugin --profile web add ./dist/dsh-locale-ja-0.1.0.tgz
 
 ### チャットの表を変更する場合（任意）
 
-独立した `dsh-md-rendering` を追加すると、モバイル表示のチャットの表を Project Hub 風に表示できます。PC にはスタイルを適用せず、モバイル本体にも含まれず、自動で有効にはなりません。インストール方法は [`packages/dsh-md-rendering/README.md`](packages/dsh-md-rendering/README.md) を参照してください。
+上記の `dsh-mobile-maxxing` のURL 1つに、モバイル表示専用の表スタイル `dsh-md-rendering` も同梱しています。PC にはスタイルを適用しません。独立パッケージとして個別に導入・削除することもできます。詳しくは [`packages/dsh-md-rendering/README.md`](packages/dsh-md-rendering/README.md) を参照してください。
 
 ## できること
 
@@ -131,7 +131,7 @@ While it is incomplete, `pack-all` prints `REFUSED` and produces no locale tarba
 
 ### Optional chat table styling
 
-The independent [`dsh-md-rendering` package](packages/dsh-md-rendering/README.md) styles chat tables in the Project Hub style only on mobile. Desktop is a hard no-op. It is not included in or automatically enabled by the mobile bundle.
+The same `dsh-mobile-maxxing` URL also bundles [`dsh-md-rendering`](packages/dsh-md-rendering/README.md) for Project Hub style chat tables on mobile only. Desktop is a hard no-op. It remains available as a separate optional package too.
 
 ## What it does
 

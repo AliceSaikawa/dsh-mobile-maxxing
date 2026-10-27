@@ -51,6 +51,13 @@ test('mobile registers a stylesheet only inside the mobile chat', () => {
   assert.match(style.children[0], /overflow-x: auto/);
 });
 
+test('the mobile URL carries the table style without a second dependency', () => {
+  const mobile = readFileSync(new URL('../../dsh-mobile-maxxing/client.js', import.meta.url), 'utf8');
+  assert.match(mobile, /data-dsh-md-rendering/);
+  assert.match(mobile, /id: "dsh-md-rendering-table-styles"/);
+  assert.match(mobile, /html\[data-rdsh-device-mode="mobile"\] \[data-chat-flow-kind="assistant-step"\] div > table th/);
+});
+
 test('bundle exports its client and distribution resources', () => {
   assert.equal(manifest.dsh.bundle.patch, './cordis.patch.yml');
   assert.equal(manifest.exports['./client'], './client.js');

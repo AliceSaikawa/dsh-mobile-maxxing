@@ -4,9 +4,10 @@
  * The release attaches these tarballs, and each package's README points at
  * them, so the file names have to be predictable: `<name>-<version>.tgz`.
  *
- * Two artifacts exist:
+ * Three artifacts exist:
  *
  * - the mobile package (the repository root), always packed;
+ * - the independent Markdown table package, always packed;
  * - the optional Japanese locale package, packed only when its generated
  *   translation-status.json reports the complete 64 namespaces / 2906 keys
  *   with zero English fallback. An incomplete locale is refused loudly: the
@@ -114,6 +115,10 @@ function main() {
 	copyFileSync(join(dist, mobile.file), join(dist, mobile.alias));
 	console.log(`packed ${mobile.file} (+ ${mobile.alias})`);
 	packed.push(mobile);
+
+	const markdownDir = join(root, "packages", "dsh-md-rendering");
+	const markdownManifest = JSON.parse(readFileSync(join(markdownDir, "package.json"), "utf8"));
+	packed.push(packDirectory(markdownDir, markdownManifest));
 
 	let localeStatus;
 	try {

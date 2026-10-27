@@ -35,6 +35,10 @@ dsh plugin --profile web add ./dist/dsh-locale-ja-0.1.0.tgz
 不完全な間は `pack-all` が `REFUSED` と表示し、locale の tarball を作りません。
 詳しくは [`packages/dsh-locale-ja/README.md`](packages/dsh-locale-ja/README.md) を参照してください。
 
+### チャットの表を変更する場合（任意）
+
+独立した `dsh-md-rendering` を追加すると、チャットの表を Project Hub 風に表示できます。モバイル本体には含まれず、自動で有効にはなりません。インストール方法は [`packages/dsh-md-rendering/README.md`](packages/dsh-md-rendering/README.md) を参照してください。
+
 ## できること
 
 | 機能 | 内容 |
@@ -124,6 +128,10 @@ dsh plugin --profile web add ./dist/dsh-locale-ja-0.1.0.tgz
 
 While it is incomplete, `pack-all` prints `REFUSED` and produces no locale tarball. See
 [`packages/dsh-locale-ja/README.md`](packages/dsh-locale-ja/README.md) for details.
+
+### Optional chat table styling
+
+The independent [`dsh-md-rendering` package](packages/dsh-md-rendering/README.md) styles chat tables in the Project Hub style. It is not included in or automatically enabled by the mobile bundle.
 
 ## What it does
 

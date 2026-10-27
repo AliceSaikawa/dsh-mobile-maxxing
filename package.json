@@ -27,7 +27,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node --test packages/dsh-mobile-maxxing/tests/*.test.mjs",
+    "test": "node --test packages/dsh-mobile-maxxing/tests/*.test.mjs packages/dsh-md-rendering/tests/*.test.mjs",
     "test:locale": "node --test packages/dsh-locale-ja/test/*.test.mjs",
     "extract:locale": "node tools/extract-upstream.mjs",
     "check:locale": "node tools/extract-upstream.mjs --check",

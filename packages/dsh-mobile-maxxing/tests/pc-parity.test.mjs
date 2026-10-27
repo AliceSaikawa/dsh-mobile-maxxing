@@ -32,6 +32,10 @@ function arrayLiteral(name) {
 }
 
 
+test("the retired device-turn checkbox stays out of mobile settings", () => {
+	assert.doesNotMatch(functionBody("MobileSection"), /mux\.notify\.deviceTurns|writeNotifyDeviceTurns/);
+});
+
 test("the update action has a labelled, touch-sized control", () => {
 	const body = functionBody("UpdateSettingsSection");
 	assert.match(body, /className: "rdsh-update-launch"/);
@@ -138,11 +142,10 @@ test("a desktop is a hard no-op, opt-ins included", () => {
 		const first = CLIENT.indexOf(call);
 		assert.ok(first === -1 || first > at, `${call} runs before the desktop gate`);
 	}
-	// The host default (mobile-only turns) is unchanged; the desktop opt-in
-	// settings still exist for a mobile browser that later uses this profile.
+	// The host default and any previously saved opt-in stay unchanged; only
+	// the retired settings control is gone.
 	assert.match(HOST, /onlyMobileTurns: true/, "the host default must stay mobile-only");
 	assert.match(functionBody("readNotifyDeviceTurns"), /NOTIFY_DEVICE_TURNS_KEY/);
-	assert.match(functionBody("MobileSection"), /writeNotifyDeviceTurns\(event\.target\.checked\)/, "the setting has no control");
 });
 
 test("the bootstrap is the only mode source and width never selects it", () => {

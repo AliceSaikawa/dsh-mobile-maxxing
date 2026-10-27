@@ -1931,17 +1931,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       }
     }
 
-    function writeNotifyDeviceTurns(value) {
-      try {
-        if (value) localStorage.setItem(NOTIFY_DEVICE_TURNS_KEY, "1");
-        else localStorage.removeItem(NOTIFY_DEVICE_TURNS_KEY);
-      } catch {
-        /* private mode: the choice lasts for this page */
-      }
-      emit({ notifyDeviceTurns: value });
-      scheduleDecorate();
-    }
-
     /** The live value of the #15 opt-in (the store copy only drives the UI). */
     function notifyDeviceTurns() {
       return readNotifyDeviceTurns();
@@ -12993,18 +12982,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
               onPointerUp: () => playNoticeSound(sound, volume),
             }),
             h("span", { className: "rdsh-mux-slider-value" }, `${Math.round(volume * 100)}%`),
-          ),
-          // #15: the host defaults to `onlyMobileTurns: true`, so a desktop
-          // send is never notified unless this browser opts in.
-          h(
-            "label",
-            { className: "rdsh-mux-check" },
-            h("input", {
-              type: "checkbox",
-              checked: s.notifyDeviceTurns === true,
-              onChange: (event) => writeNotifyDeviceTurns(event.target.checked),
-            }),
-            t("mux.notify.deviceTurns"),
           ),
           message !== "" ? h("p", { className: "rdsh-mux-note" }, message) : null,
         ),

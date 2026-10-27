@@ -165,7 +165,7 @@ function assertMobileHead(result, label) {
 		assert.equal(node.attributes.get(key), expected, `${label}: node ${index} ${key}`);
 	});
 	assert.equal(result.appended[0].attributes.get("content"), "yes");
-	assert.equal(result.appended[1].attributes.get("content"), "black-translucent");
+	assert.equal(result.appended[1].attributes.get("content"), "default");
 	assert.equal(result.appended[2].attributes.get("content"), "telephone=no");
 	assert.equal(result.appended[3].attributes.get("href"), "pwa/apple-touch-icon.png");
 	assert.equal(result.appended[4].attributes.get("href"), MANIFEST_FILE,

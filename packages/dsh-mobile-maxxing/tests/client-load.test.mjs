@@ -695,6 +695,44 @@ test("isIos trusts Apple platform strings but not Windows or Android", () => {
 	assert.equal(iosOf({ userAgent: "Mozilla/5.0 (Linux; Android 14; Pixel 8) Chrome/120 Mobile Safari/537.36", platform: "Linux armv8l", maxTouchPoints: 5 }), false, "an Android phone was treated as iOS");
 });
 
+/** Boot with a body that records what the client appends to it. */
+function bootRecordingBody(options) {
+	const appended = [];
+	const booted = bootClient({
+		...options,
+		configureDocument(doc) {
+			doc.body.appendChild = (node) => {
+				appended.push(node);
+				return node;
+			};
+		},
+	});
+	return { ...booted, appended };
+}
+
+test("a mobile boot mounts one empty top-edge box and its dispose removes it", () => {
+	// iOS 27 standalone blurs the top edge unless a fixed box sits there; the
+	// stylesheet turns this node into that box. It must stay empty: a text
+	// node would give background-clip: text something to paint.
+	const { appended, disposeAll } = bootRecordingBody({ mode: "mobile", narrow: true, standalone: true });
+	const edges = appended.filter((node) => node.className === "dsh-mobile-maxxing-top-edge");
+	assert.equal(edges.length, 1, "expected exactly one top-edge box");
+	const [edge] = edges;
+	assert.equal(edge.getAttribute("aria-hidden"), "true", "screen readers can reach the top-edge box");
+	assert.equal(edge.textContent, "", "the top-edge box has text to paint");
+	let removed = 0;
+	edge.remove = () => {
+		removed += 1;
+	};
+	assert.deepEqual(disposeAll(), []);
+	assert.equal(removed, 1, "the top-edge box outlived the boot effect");
+});
+
+test("a desktop boot mounts no top-edge box", () => {
+	const { appended } = bootRecordingBody({ mode: "desktop", narrow: false, standalone: true });
+	assert.equal(appended.some((node) => node.className === "dsh-mobile-maxxing-top-edge"), false, "a desktop got the iOS top-edge box");
+});
+
 test("the device-turn opt-in is read on mobile and never boots a desktop", () => {
 	const off = bootClient({ mode: "mobile" });
 	assert.equal(off.sandbox.__RDSH_MOBILE_UX__.state.notifyDeviceTurns, false, "phone-only stays the default");

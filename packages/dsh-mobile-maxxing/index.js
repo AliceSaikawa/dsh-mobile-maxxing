@@ -85,9 +85,8 @@ export const DEFAULTS = {
 	display: "standalone",
 	themeColor: "#151517",
 	backgroundColor: "#151517",
-	// Restores the split-plugin default. `default` (dark glyphs) is still
-	// available for a light-only profile.
-	appleStatusBarStyle: "black-translucent",
+	// Lets iOS use the fixed top-edge element instead of forcing edge-to-edge.
+	appleStatusBarStyle: "default",
 	enableServiceWorker: true,
 	navigationTimeoutMs: 1500,
 };

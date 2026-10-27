@@ -1514,6 +1514,50 @@ test("#76 a keyboard-shrunk layout height is not published as a native gap", () 
 	booted.disposeAll();
 });
 
+/**
+ * Measure an installed iPhone whose web view is one 47px status bar shorter
+ * than the 844px screen, under the given status-bar meta.
+ */
+function nativeGapUnder(statusBarStyle) {
+	const meta = new FakeElement("meta");
+	meta.setAttribute("name", "apple-mobile-web-app-status-bar-style");
+	meta.setAttribute("content", statusBarStyle);
+	const booted = bootGestures({
+		narrow: true,
+		configureDocument(doc) {
+			doc.querySelector = (selector) => (selector === 'meta[name="apple-mobile-web-app-status-bar-style"]' ? meta : null);
+		},
+	});
+	booted.drainFrames();
+	const bootNavigator = booted.sandbox.window.navigator;
+	booted.sandbox.window.navigator = new Proxy(bootNavigator, {
+		get(target, key) {
+			if (key === "standalone") return true;
+			return Reflect.get(target, key);
+		},
+	});
+	booted.sandbox.window.innerHeight = 797;
+	booted.sandbox.innerHeight = 797;
+	booted.visualViewport.height = 797;
+	const resize = [...booted.windowHandlers].reverse().find(([type]) => type === "resize")?.[1];
+	assert.equal(typeof resize, "function", "resize is not watched");
+	resize();
+	const html = booted.doc.documentElement;
+	const measured = { gap: html.hasAttribute("data-rdsh-native-gap"), px: html.style.getPropertyValue("--rdsh-native-gap-px") };
+	booted.disposeAll();
+	return measured;
+}
+
+test("a status-bar-sized shortfall is an unpainted bottom strip only under a translucent status bar", () => {
+	// black-translucent draws the page under the clock, so the missing 47px is
+	// the strip below the web view (iOS 26).
+	assert.deepEqual(nativeGapUnder("black-translucent"), { gap: true, px: "47px" });
+	// Any other style starts the web view below the status bar: the 47px is the
+	// status bar itself, and the home indicator is inside the page.
+	assert.deepEqual(nativeGapUnder("default"), { gap: false, px: "0px" }, "default kept the bottom padding off");
+	assert.deepEqual(nativeGapUnder("black"), { gap: false, px: "0px" }, "black kept the bottom padding off");
+});
+
 test("#76 a recovery pass does not disturb the rotation follow-up", () => {
 	const booted = bootGestures({ narrow: true });
 	booted.drainFrames();

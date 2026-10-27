@@ -3723,6 +3723,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       disposeTerminalKeys();
       clearTerminalFit();
       removeRightPanelHeading();
+      clearFloatShelf();
     }
 
     /**
@@ -4530,61 +4531,130 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       }
     }
 
-    /** The one reset-floats button, rebuilt when the panel changes. */
-    let resetFloatsButton = null;
+    // Store floats once most of the window leaves the screen; keep their content mounted.
+    const storedFloats = new Map();
+    let floatShelf = null;
+    let tabFloatMenu = null;
 
-    function ensureResetFloatsButton() {
-      if (!phone()) return;
-      const panel = document.querySelector("[data-sidebar-right-panel]");
-      if (panel === null || panel === undefined) return;
-      const collapse = panel.querySelector("[data-sidebar-right-toggle]");
-      if (collapse === null || collapse === undefined) return;
-      if (resetFloatsButton !== null && resetFloatsButton.isConnected && resetFloatsButton.parentElement === collapse.parentElement) return;
-      if (resetFloatsButton !== null) resetFloatsButton.remove();
+    function clearFloatShelf() {
+      for (const float of storedFloats.keys()) float.removeAttribute("data-rdsh-float-stored");
+      storedFloats.clear();
+      floatShelf?.remove();
+      floatShelf = null;
+      tabFloatMenu?.remove();
+      tabFloatMenu = null;
+    }
+
+    function updateFloatShelf() {
+      if (!live || !phone()) return;
+      for (const stale of document.querySelectorAll(".rdsh-mux-reset-floats")) stale.remove();
+      for (const [float] of storedFloats) if (!float.isConnected) storedFloats.delete(float);
+      for (const float of document.querySelectorAll("[data-dockkit-float]")) {
+        if (storedFloats.has(float) || float.closest("[hidden]") !== null) continue;
+        const rect = float.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0 && (rect.left <= -rect.width / 2 || rect.right >= window.innerWidth + rect.width / 2 || rect.top <= -rect.height / 2 || rect.bottom >= window.innerHeight + rect.height / 2)) {
+          storedFloats.set(float, (float.querySelector("[data-dockkit-float-title]")?.textContent || t("mux.floatingWindows")).trim());
+          float.setAttribute("data-rdsh-float-stored", "");
+        }
+      }
+      const current = [...storedFloats].filter(([float]) => float.closest("[hidden]") === null);
+      if (!current.length) { floatShelf?.remove(); floatShelf = null; return; }
+      if (!floatShelf) {
+        floatShelf = document.createElement("div");
+        floatShelf.className = "rdsh-float-shelf";
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "rdsh-float-shelf-button";
+        button.setAttribute("aria-label", t("mux.floatingWindows"));
+        button.setAttribute("aria-expanded", "false");
+        button.textContent = "▣";
+        const list = document.createElement("div");
+        list.className = "rdsh-float-shelf-list";
+        list.hidden = true;
+        let suppressClick = false;
+        button.addEventListener("click", () => {
+          if (suppressClick) { suppressClick = false; return; }
+          list.hidden = !list.hidden;
+          button.setAttribute("aria-expanded", String(!list.hidden));
+          const rect = button.getBoundingClientRect();
+          list.style.left = Math.max(8, Math.min(window.innerWidth - 180, rect.left)) + "px";
+          list.style.top = Math.max(8, Math.min(window.innerHeight - Math.min(window.innerHeight / 2, list.children.length * 40 + 12) - 8, rect.bottom + 4)) + "px";
+        });
+        let drag = null;
+        button.addEventListener("pointerdown", (event) => { suppressClick = false; drag = { x: event.clientX, y: event.clientY, left: floatShelf.getBoundingClientRect().left, top: floatShelf.getBoundingClientRect().top, moved: false }; button.setPointerCapture?.(event.pointerId); });
+        button.addEventListener("pointermove", (event) => {
+          if (!drag) return;
+          const dx = event.clientX - drag.x, dy = event.clientY - drag.y;
+          if (Math.abs(dx) + Math.abs(dy) < 8 && !drag.moved) return;
+          drag.moved = true;
+          floatShelf.style.left = Math.max(0, Math.min(window.innerWidth - 48, drag.left + dx)) + "px";
+          floatShelf.style.top = Math.max(0, Math.min(window.innerHeight - 48, drag.top + dy)) + "px";
+        });
+        button.addEventListener("pointerup", (event) => { if (drag?.moved) { event.preventDefault(); suppressClick = true; } drag = null; });
+        button.addEventListener("pointercancel", () => { drag = null; });
+        floatShelf.append(button, list);
+        document.body.append(floatShelf);
+      }
+      const list = floatShelf.querySelector(".rdsh-float-shelf-list");
+      if (list._rdshFloats?.length === current.length && current.every(([float, title], i) => list._rdshFloats[i][0] === float && list._rdshFloats[i][1] === title)) return;
+      list._rdshFloats = current;
+      list.replaceChildren();
+      for (const [float, title] of current) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = title;
+        button.addEventListener("click", () => {
+          const rect = float.getBoundingClientRect();
+          const parent = float.offsetParent?.getBoundingClientRect() || { left: 0, top: 0 };
+          const x = Math.max(0, Math.min(window.innerWidth - rect.width, rect.left));
+          const y = Math.max(0, Math.min(window.innerHeight - rect.height, rect.top));
+          const service = optionalService("sidebarRight");
+          const session = float.closest("[data-sidebar-right-session]")?.getAttribute("data-sidebar-right-session");
+          const pane = float.getAttribute("data-dockkit-float");
+          const actions = service?.actionsFor?.(session);
+          float.style.left = (x - parent.left) + "px";
+          float.style.top = (y - parent.top) + "px";
+          if (actions?.resizeFloat && pane && (rect.width > window.innerWidth || rect.height > window.innerHeight)) {
+            actions.resizeFloat(session, pane, { x: x - parent.left, y: y - parent.top, width: Math.min(rect.width, window.innerWidth), height: Math.min(rect.height, window.innerHeight) });
+          } else if (actions?.moveFloat && pane) {
+            actions.moveFloat(session, pane, x - parent.left, y - parent.top);
+          } else {
+            if (rect.width > window.innerWidth) float.style.width = window.innerWidth + "px";
+            if (rect.height > window.innerHeight) float.style.height = window.innerHeight + "px";
+          }
+          storedFloats.delete(float);
+          float.removeAttribute("data-rdsh-float-stored");
+          list.hidden = true;
+          updateFloatShelf();
+        });
+        list.append(button);
+      }
+    }
+
+    function openTabFloatMenu(tab) {
+      tabFloatMenu?.remove();
+      const menu = document.createElement("div");
+      menu.className = "rdsh-tab-float-menu";
       const button = document.createElement("button");
       button.type = "button";
-      button.className = "rdsh-mux-reset-floats";
-      button.setAttribute("aria-label", t("mux.resetFloats"));
-      button.textContent = "⌖";
-      button.addEventListener("click", () => resetFloatingPanels());
-      if (collapse.parentElement && typeof collapse.parentElement.insertBefore === "function") {
-        collapse.parentElement.insertBefore(button, collapse.nextSibling ?? null);
-      } else {
-        collapse.parentElement?.append?.(button);
-      }
-      resetFloatsButton = button;
+      button.textContent = t("mux.showWindow");
+      button.addEventListener("click", () => {
+        const service = optionalService("sidebarRight");
+        const id = tab.getAttribute("data-dockkit-tab");
+        if (id && service?.float) {
+          const panel = tab.closest("[data-sidebar-right-panel]")?.getBoundingClientRect() || { left: 0, top: 0 };
+          service.float(id, { x: Math.max(0, 12 - panel.left), y: Math.max(0, 60 - panel.top), width: Math.max(240, window.innerWidth - 24), height: Math.max(200, Math.floor(window.innerHeight / 2)) });
+        }
+        menu.remove();
+        tabFloatMenu = null;
+      });
+      menu.append(button);
+      document.body.append(menu);
+      const rect = tab.getBoundingClientRect();
+      menu.style.left = Math.max(8, Math.min(window.innerWidth - 180, rect.left)) + "px";
+      menu.style.top = Math.max(8, Math.min(window.innerHeight - 60, rect.bottom)) + "px";
+      tabFloatMenu = menu;
     }
-
-    /**
-     * #111: bring every floating panel back inside the viewport. Called by a
-     * button in the panel chrome instead of running on every pass.
-     */
-    function resetFloatingPanels() {
-      if (!phone()) return;
-      for (const float of document.querySelectorAll("[data-dockkit-float]")) {
-        if (float.closest("[hidden]") !== null) continue;
-        const rect = float.getBoundingClientRect();
-        if (rect.width <= 0 || rect.height <= 0) continue;
-        const vw = window.innerWidth;
-        const vh = window.innerHeight;
-        let left = rect.left;
-        let top = rect.top;
-        const style = float.style;
-        const inlineLeft = Number.parseFloat(style.left);
-        const inlineTop = Number.parseFloat(style.top);
-        if (Number.isFinite(inlineLeft)) left = inlineLeft;
-        if (Number.isFinite(inlineTop)) top = inlineTop;
-        let nextLeft = left;
-        let nextTop = top;
-        if (left + rect.width > vw) nextLeft = Math.max(0, vw - rect.width);
-        if (left < 0) nextLeft = 0;
-        if (top + rect.height > vh) nextTop = Math.max(0, vh - rect.height);
-        if (top < 0) nextTop = 0;
-        if (nextLeft !== left) style.left = `${nextLeft}px`;
-        if (nextTop !== top) style.top = `${nextTop}px`;
-      }
-    }
-
     /** Remove headings left by a previous client after an in-place update. */
     function removeRightPanelHeading() {
       for (const stale of document.querySelectorAll("[data-rdsh-panel-heading]")) {
@@ -7259,7 +7329,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       decorateLightbox();
       decorateRightPanel();
       decorateRightPanelTabs();
-      ensureResetFloatsButton();
+      updateFloatShelf();
 
       decorateTerminalKeys();
       decorateWorkspaceFiles();
@@ -9246,6 +9316,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       candidate.held = true;
       candidate.blocking = false;
       candidate.tab.setAttribute("data-rdsh-tab-hold", "");
+      openTabFloatMenu(candidate.tab);
     }
 
 
@@ -9286,6 +9357,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     function onPointerDown(event) {
       if (!phone()) return;
+      if (tabFloatMenu && !tabFloatMenu.contains(event.target)) { tabFloatMenu.remove(); tabFloatMenu = null; }
+      for (const state of TERMINAL_KEY_ROWS.values()) {
+        if (state.menu && !state.menu.contains(event.target) && !state.row.contains(event.target)) { state.menu.remove(); state.menu = null; }
+      }
       // A new primary contact starts a new gesture: drop a stale strip pan,
       // a pending tab tap replay and an old tab hold. Secondary fingers must
       // not disturb the first pointer.
@@ -9410,6 +9485,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           }
           // Do not write scrollLeft here: the browser owns normal swipes.
         }
+        if (tabMove.held && Math.abs(event.clientX - tabMove.x) + Math.abs(event.clientY - tabMove.y) > TAB_HOLD_SLOP_PX && tabFloatMenu) { tabFloatMenu.remove(); tabFloatMenu = null; }
         if (tabMove.blocking) {
           // Reaches dockkit's window-level pointermove before it can start the
           // 4px drag. The original pointerdown is untouched, so a held finger
@@ -9427,6 +9503,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     function onPointerUp(event) {
+      if (phone() && event.target?.closest?.("[data-dockkit-float]")) setTimeout(updateFloatShelf, 100);
       cancelQueuePress();
       cancelLongPress();
       if (stripPanCandidate !== null && (stripPanCandidate.pointerId === undefined || event.pointerId === undefined || event.pointerId === stripPanCandidate.pointerId)) {
@@ -9937,7 +10014,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       { id: "left", textKey: "terminalKeys.left", labelKey: "terminalKeys.arrowLeft" },
       { id: "right", textKey: "terminalKeys.right", labelKey: "terminalKeys.arrowRight" },
       { id: "ctrl", textKey: "terminalKeys.ctrl", labelKey: "terminalKeys.control" },
-      { id: "wide", textKey: "terminalKeys.wide", labelKey: "terminalKeys.wide" },
+      { id: "menu", textKey: "terminalKeys.menu", labelKey: "terminalKeys.menu" },
     ];
 
     /**
@@ -10078,25 +10155,42 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         setSpecialKeyControl(state, !state.control);
         return;
       }
-      if (key === "wide") {
-        const section = state.section;
-        const next = !section.hasAttribute("data-rdsh-terminal-virtual");
-        section.toggleAttribute("data-rdsh-terminal-virtual", next);
-        const mount = section.querySelector(".xterm")?.parentElement;
-        if (mount) {
-          if (next) {
-            // Estimate 120 columns from the current char width.
-            const rect = mount.getBoundingClientRect();
-            const cols = 120;
-            const charWidth = rect.width > 0 ? rect.width / 80 : 8;
-            mount.style.width = `${Math.round(cols * charWidth)}px`;
-            mount.style.overflowX = "auto";
-          } else {
-            mount.style.removeProperty("width");
-            mount.style.removeProperty("overflow-x");
-          }
-        }
-        scheduleTerminalFit();
+      if (key === "menu") {
+        if (state.menu) { state.menu.remove(); state.menu = null; return; }
+        const menu = document.createElement("div");
+        menu.className = "rdsh-terminal-menu";
+        const toggle = document.createElement("button");
+        toggle.type = "button";
+        toggle.textContent = t("terminalKeys.virtualWindow");
+        toggle.setAttribute("aria-pressed", String(state.section.hasAttribute("data-rdsh-terminal-virtual")));
+        const label = document.createElement("label");
+        label.textContent = t("terminalKeys.scale");
+        const slider = document.createElement("input");
+        slider.type = "range";
+        slider.min = "30"; slider.max = "100"; slider.step = "5";
+        slider.value = String(state.scale || 50);
+        slider.setAttribute("aria-label", t("terminalKeys.scale"));
+        const applyScale = () => {
+          const mount = state.section.querySelector(".xterm")?.parentElement;
+          if (!mount) return;
+          const enabled = state.section.hasAttribute("data-rdsh-terminal-virtual");
+          toggle.setAttribute("aria-pressed", String(enabled));
+          slider.disabled = !enabled;
+          if (enabled) { mount.style.zoom = String(state.scale / 100); mount.style.width = "100%"; mount.style.maxWidth = "none"; mount.style.boxSizing = "border-box"; }
+          else { mount.style.removeProperty("zoom"); mount.style.removeProperty("width"); mount.style.removeProperty("max-width"); mount.style.removeProperty("box-sizing"); }
+          scheduleTerminalFit();
+        };
+        state.scale ||= 50;
+        toggle.addEventListener("click", () => { state.section.toggleAttribute("data-rdsh-terminal-virtual"); applyScale(); });
+        slider.addEventListener("input", () => { state.scale = Number(slider.value); applyScale(); });
+        label.append(slider);
+        menu.append(toggle, label);
+        document.body.append(menu);
+        const rect = state.row.getBoundingClientRect();
+        menu.style.left = Math.max(8, Math.min(window.innerWidth - 220, rect.right - 220)) + "px";
+        menu.style.top = Math.max(8, Math.min(window.innerHeight - 120, rect.bottom)) + "px";
+        slider.disabled = !state.section.hasAttribute("data-rdsh-terminal-virtual");
+        state.menu = menu;
         return;
       }
       const control = state.control;
@@ -10117,7 +10211,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (event.button !== undefined && event.button !== 0) return;
       if (event.cancelable) event.preventDefault();
       if (typeof event.stopPropagation === "function") event.stopPropagation();
-      focusTerminalInput(state.section);
+      if (button.getAttribute("data-rdsh-terminal-key") !== "menu") focusTerminalInput(state.section);
       activateSpecialKey(state, button.getAttribute("data-rdsh-terminal-key"));
     }
 
@@ -10237,6 +10331,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       section.removeEventListener("keydown", onSpecialKeyTextKeyDown, true);
       section.removeEventListener("beforeinput", onSpecialKeyBeforeInput, true);
       if (typeof state.disposeAutofocus === "function") state.disposeAutofocus();
+      state.menu?.remove();
+      const mount = section.querySelector(".xterm")?.parentElement;
+      if (mount && section.hasAttribute("data-rdsh-terminal-virtual")) { mount.style.removeProperty("zoom"); mount.style.removeProperty("width"); mount.style.removeProperty("max-width"); mount.style.removeProperty("box-sizing"); section.removeAttribute("data-rdsh-terminal-virtual"); }
       state.row.remove();
       return true;
     }
@@ -14473,6 +14570,15 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
     padding-right: env(safe-area-inset-right, 0px) !important;
   }
 
+  [data-rdsh-float-stored] { visibility: hidden !important; pointer-events: none !important; }
+  .rdsh-float-shelf { position: fixed; z-index: 2147483000; left: 12px; top: 100px; }
+  .rdsh-float-shelf-button { width: 48px; height: 48px; border-radius: 50%; touch-action: none; font-size: 22px; }
+  .rdsh-float-shelf-list, .rdsh-tab-float-menu, .rdsh-terminal-menu { position: fixed; z-index: 2147483001; min-width: 170px; max-width: calc(100vw - 16px); max-height: 50vh; overflow: auto; padding: 6px; border-radius: 10px; background: var(--dsw-alias-bg-l2, #232324); color: var(--dsw-alias-label-primary, #fff); box-shadow: 0 3px 16px #0008; }
+  .rdsh-float-shelf-list[hidden] { display: none; }
+  .rdsh-float-shelf-list button, .rdsh-tab-float-menu button, .rdsh-terminal-menu button { display: block; width: 100%; min-height: 40px; border: 0; border-radius: 6px; padding: 8px; text-align: left; background: transparent; color: inherit; font: inherit; }
+  .rdsh-terminal-menu label { display: flex; gap: 8px; align-items: center; padding: 8px; }
+  .rdsh-terminal-menu input { width: 120px; }
+
   /* Right panel: never wider than the phone, wide tables scroll inside it. */
   [data-rdsh-rightpanel] {
     max-width: 100vw !important; overflow-x: hidden;
@@ -14492,12 +14598,6 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   /* #97: the panel toggle's label is localised, so the stable upstream
      attribute carries the glyph swap; the English label stays for an older
      shell that does not emit it. */
-  .rdsh-mux-reset-floats {
-    width: 28px; height: 28px; padding: 0; border: 0; border-radius: 6px;
-    background: transparent; color: var(--dsw-alias-label-secondary, #a1a1aa);
-    font-size: 16px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
-  }
-  .rdsh-mux-reset-floats:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,.08)); }
   [data-rdsh-rightpanel] [data-sidebar-right-toggle] svg,
   [data-sidebar-right-toggle] svg,
   [aria-label="Collapse right sidebar"] svg { display: none !important; }
@@ -15022,6 +15122,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           // Diagnostics used by the unit tests: the layout predicate and the
           // restored scroll hooks have to be observable without a browser.
           decorateNow: decorate,
+          updateFloatShelf,
           specialKeys: {
             decorate: decorateTerminalKeys,
             sequence: terminalKeySequence,

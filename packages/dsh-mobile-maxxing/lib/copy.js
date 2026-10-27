@@ -69,8 +69,11 @@ export const COPY = {
 		"terminalKeys.arrowRight": "Arrow right",
 		"terminalKeys.ctrl": "Ctrl",
 		"terminalKeys.control": "Control",
-		"terminalKeys.wide": "Wide",
-		"mux.resetFloats": "Bring floating panels back",
+		"terminalKeys.menu": "Menu",
+		"terminalKeys.virtualWindow": "Virtual window",
+		"terminalKeys.scale": "Scale",
+		"mux.floatingWindows": "Floating windows",
+		"mux.showWindow": "Show in window",
 
 		// --- PWA section ----------------------------------------------------
 		"pwa.install.promptable": "Install DSH as an app",
@@ -361,8 +364,11 @@ export const COPY = {
 		"terminalKeys.arrowRight": "右矢印",
 		"terminalKeys.ctrl": "Ctrl",
 		"terminalKeys.control": "コントロール",
-		"terminalKeys.wide": "広域",
-		"mux.resetFloats": "フローティングパネルを戻す",
+		"terminalKeys.menu": "メニュー",
+		"terminalKeys.virtualWindow": "仮想ウィンドウ",
+		"terminalKeys.scale": "縮尺",
+		"mux.floatingWindows": "フロートウィンドウ",
+		"mux.showWindow": "ウィンドウで表示",
 
 		// --- PWA section ----------------------------------------------------
 		"pwa.install.promptable": "DSH をアプリとしてインストールできます",

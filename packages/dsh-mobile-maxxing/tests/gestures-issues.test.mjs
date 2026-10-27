@@ -480,6 +480,7 @@ function bootGestures({ narrow = true, mode = narrow ? "mobile" : "desktop", wid
 
 	return {
 		sandbox,
+		ctx,
 		doc,
 		visualViewport,
 		timers,
@@ -1845,7 +1846,7 @@ test("#78 the mobile terminal gets one labelled, ordered key row above xterm", (
 	assert.ok(terminal.section.children.indexOf(row) < terminal.section.children.indexOf(terminal.screen), "the row is not above the xterm mount");
 	assert.equal(row.getAttribute("role"), "group");
 	assert.equal(row.getAttribute("aria-label"), COPY.en["terminalKeys.label"]);
-	assert.deepEqual(row.children.map((button) => button.getAttribute("data-rdsh-terminal-key")), ["escape", "tab", "up", "down", "left", "right", "ctrl", "wide"]);
+	assert.deepEqual(row.children.map((button) => button.getAttribute("data-rdsh-terminal-key")), ["escape", "tab", "up", "down", "left", "right", "ctrl", "menu"]);
 	assert.equal(terminalKeyButton(row, "escape").textContent, "Esc");
 	assert.equal(terminalKeyButton(row, "tab").textContent, "Tab");
 	assert.equal(terminalKeyButton(row, "up").getAttribute("aria-label"), "Arrow up");
@@ -1857,6 +1858,74 @@ test("#78 the mobile terminal gets one labelled, ordered key row above xterm", (
 	assert.equal(api.specialKeys.sequence("up", false, false), "\x1b[A");
 	assert.equal(api.specialKeys.sequence("up", true, false), "\x1bOA");
 	assert.equal(api.specialKeys.controlByte("c"), "\x03");
+	booted.disposeAll();
+});
+
+test("terminal menu scales the xterm surface without focusing the keyboard", () => {
+	const booted = bootGestures({ narrow: true });
+	const terminal = terminalFixture(booted.doc, panelFixture(booted.doc), keyEmulator());
+	booted.drainFrames();
+	const row = terminalKeyRow(terminal);
+	pressTerminalKey(row, "menu");
+	const menu = booted.doc.body.children.find((node) => node.className === "rdsh-terminal-menu");
+	assert.ok(menu);
+	assert.equal(terminal.textarea.focusCount, 0);
+	const [toggle, label] = menu.children;
+	const slider = label.children[0];
+	assert.equal(slider.disabled, true);
+	toggle.dispatchEvent(new FakeEvent("click"));
+	assert.equal(terminal.screen.style.zoom, "0.5");
+	assert.equal(terminal.screen.style.width, "100%");
+	assert.equal(slider.disabled, false);
+	slider.value = "40";
+	slider.dispatchEvent(new FakeEvent("input"));
+	assert.equal(terminal.screen.style.zoom, "0.4");
+	assert.equal(terminal.screen.style.width, "100%");
+	toggle.dispatchEvent(new FakeEvent("click"));
+	assert.equal(terminal.section.hasAttribute("data-rdsh-terminal-virtual"), false);
+	booted.disposeAll();
+});
+
+test("off-screen floats are stored and restored through the session store", () => {
+	const booted = bootGestures({ narrow: true });
+	const float = new FakeElement("div");
+	float.setAttribute("data-dockkit-float", "pane-1");
+	float._rect = () => { const left = Number.parseFloat(float.style.left ?? "-160"); return { left, right: left + 300, top: 30, bottom: 330, width: 300, height: 300 }; };
+	const title = new FakeElement("span"); title.textContent = "Terminal";
+	float._querySelector = (s) => s === "[data-dockkit-float-title]" ? title : null;
+	const owner = new FakeElement("div"); owner.setAttribute("data-sidebar-right-session", "session-1");
+	float._closest = (s) => s === "[data-sidebar-right-session]" ? owner : null;
+	const oldQuery = booted.doc.querySelectorAll;
+	booted.doc.querySelectorAll = (s) => s === "[data-dockkit-float]" ? [float] : oldQuery(s);
+	const create = booted.doc.createElement;
+	booted.doc.createElement = (tag) => { const node = create(tag); node._querySelector = (s) => s === ".rdsh-float-shelf-list" ? node.children.find((c) => c.className === "rdsh-float-shelf-list") : null; return node; };
+	const moves = [];
+	booted.ctx.get = (name) => name === "sidebarRight" ? { actionsFor: () => ({ moveFloat: (...args) => moves.push(args) }) } : undefined;
+	booted.sandbox.__RDSH_MOBILE_UX__.updateFloatShelf();
+	assert.equal(float.hasAttribute("data-rdsh-float-stored"), true);
+	const shelf = booted.doc.body.children.find((node) => node.className === "rdsh-float-shelf");
+	assert.ok(shelf);
+	const list = shelf.children[1];
+	assert.equal(list.children[0].textContent, "Terminal");
+	booted.sandbox.__RDSH_MOBILE_UX__.updateFloatShelf();
+	assert.equal(list.children.length, 1);
+	list.children[0].dispatchEvent(new FakeEvent("click"));
+	assert.equal(float.hasAttribute("data-rdsh-float-stored"), false);
+	assert.deepEqual(moves[0], ["session-1", "pane-1", 0, 30]);
+	booted.disposeAll();
+});
+
+test("holding a tab without dragging opens its window menu", () => {
+	const booted = bootGestures({ narrow: true });
+	booted.drainFrames();
+	const { tab, target } = tabFixture();
+	tab.setAttribute("data-dockkit-tab", "tab-1");
+	booted.handler("pointerdown", "onPointerDown")(pointerEvent(target, 100, 50));
+	booted.runTimers(450);
+	const menu = booted.doc.body.children.find((node) => node.className === "rdsh-tab-float-menu");
+	assert.ok(menu);
+	assert.equal(menu.children[0].textContent, COPY.en["mux.showWindow"]);
+	booted.handler("pointerup", "onPointerUp")(pointerEvent(target, 100, 50));
 	booted.disposeAll();
 });
 

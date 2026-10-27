@@ -1,15 +1,54 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
 
 const client = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
 const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
-test('table styles stay scoped to assistant chat and use one cell background', () => {
-  assert.match(client, /\[data-chat-flow-kind="assistant-step"\] div > table th/);
-  assert.match(client, /background: var\(--dsw-alias-bg-base\)/);
-  assert.doesNotMatch(client, /tr:nth-child\(even\)|opacity:\s*\.7/);
-  assert.match(client, /overflow-x: auto/);
+function boot(mode) {
+  let definition;
+  const sandbox = {
+    window: { __ModuleLoader__: { load(value) { definition = value; } } },
+    document: { documentElement: { getAttribute: () => mode } },
+  };
+  sandbox.globalThis = sandbox;
+  if (mode !== undefined) sandbox.__RDSH_DEVICE_MODE__ = mode;
+  vm.createContext(sandbox);
+  vm.runInContext(client, sandbox);
+  const registrations = [];
+  const required = [];
+  const ctx = { slots: {
+    inject(name, callback) { callback(); },
+    register(options, component) { registrations.push({ options, component }); },
+  } };
+  const plugin = definition.factory((name) => {
+    required.push(name);
+    if (name === 'react') return { createElement: (type, props, ...children) => ({ type, props, children }) };
+    throw new Error(`unexpected module ${name}`);
+  });
+  plugin.apply(ctx);
+  return { plugin, registrations, required };
+}
+
+test('desktop is a hard no-op, including an unknown device mode', () => {
+  for (const mode of ['desktop', undefined]) {
+    const { plugin, registrations, required } = boot(mode);
+    assert.deepEqual(required, [], 'desktop must not require React');
+    assert.deepEqual(registrations, [], 'desktop must not register a stylesheet');
+    assert.doesNotThrow(() => plugin.apply({}));
+  }
+});
+
+test('mobile registers a stylesheet only inside the mobile chat', () => {
+  const { registrations } = boot('mobile');
+  assert.equal(registrations.length, 1);
+  const style = registrations[0].component();
+  assert.equal(style.type, 'style');
+  assert.match(style.children[0], /html\[data-rdsh-device-mode="mobile"\] \[data-chat-flow-kind="assistant-step"\] div > table th/);
+  assert.match(style.children[0], /background: var\(--dsw-alias-bg-base\)/);
+  assert.doesNotMatch(style.children[0], /tr:nth-child\(even\)|opacity:\s*\.7/);
+  assert.match(style.children[0], /overflow-x: auto/);
 });
 
 test('bundle exports its client and distribution resources', () => {

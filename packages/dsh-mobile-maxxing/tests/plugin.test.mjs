@@ -653,11 +653,8 @@ test("release check validates GitHub response and compares numeric versions", as
   assert.equal(compareReleaseVersions("0.6.1", "v0.10.0"), -1);
   assert.equal(compareReleaseVersions("0.6.1", "v0.6.1"), 0);
   assert.equal(compareReleaseVersions("0.7.0", "v0.6.1"), 1);
-  assert.equal(compareReleaseVersions("1.0.0", "v1.00"), 0);
-  assert.equal(compareReleaseVersions("1.0.0", "v1.01"), -1);
   assert.throws(() => compareReleaseVersions("unknown", "v0.6.1"));
   assert.equal(await fetchLatestRelease(async () => ({ ok: true, json: async () => ({ tag_name: "v0.8.0" }) })), "v0.8.0");
-  assert.equal(await fetchLatestRelease(async () => ({ ok: true, json: async () => ({ tag_name: "v1.00" }) })), "v1.00");
   await assert.rejects(fetchLatestRelease(async () => ({ ok: false, status: 503 })), /503/);
   await assert.rejects(fetchLatestRelease(async () => ({ ok: true, json: async () => ({ tag_name: "../../evil" }) })), /Invalid release/);
   await assert.rejects(fetchLatestRelease(async () => ({ ok: true, json: async () => ({ tag_name: "v0.8.0", prerelease: true }) })), /Invalid release/);

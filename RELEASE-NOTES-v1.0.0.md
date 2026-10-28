@@ -1,4 +1,4 @@
-# dsh-mobile-maxxing v1.00 リリースノート
+# dsh-mobile-maxxing v1.0.0 リリースノート
 
 公開日: 2026-10-28
 
@@ -39,7 +39,7 @@
 
 | コンポーネント | 版 |
 | --- | --- |
-| dsh-mobile-maxxing | 1.0.0（GitHub タグ: v1.00） |
+| dsh-mobile-maxxing | 1.0.0（GitHub タグ: v1.0.0） |
 | dsh-md-rendering | 0.1.3 |
 | dsh-locale-ja | 0.1.1 |
 

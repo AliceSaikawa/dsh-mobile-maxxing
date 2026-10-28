@@ -2,9 +2,17 @@ window.__ModuleLoader__.load({
   id: 'dsh-md-rendering',
   factory(require) {
     const bootMode = globalThis.__RDSH_DEVICE_MODE__;
-    const mode = bootMode === "mobile" || bootMode === "desktop"
-      ? bootMode
-      : document.documentElement.getAttribute("data-rdsh-device-mode");
+    const attrMode = document.documentElement.getAttribute("data-rdsh-device-mode");
+    const nav = typeof navigator === "object" && navigator !== null ? navigator : {};
+    const ua = typeof nav.userAgent === "string" ? nav.userAgent : "";
+    const platform = typeof nav.platform === "string" ? nav.platform : "";
+    let hints;
+    try { hints = nav.userAgentData; } catch { hints = undefined; }
+    const mobile = hints?.mobile === true || /iPhone|iPod|iPad/i.test(ua) || /iPhone|iPod|iPad/i.test(platform)
+      || (platform === "MacIntel" && typeof nav.maxTouchPoints === "number" && nav.maxTouchPoints > 1)
+      || /Android/i.test(ua) || hints?.platform === "Android";
+    const mode = bootMode === "mobile" || bootMode === "desktop" ? bootMode
+      : attrMode === "mobile" || attrMode === "desktop" ? attrMode : mobile ? "mobile" : "desktop";
     if (mode !== "mobile") return { apply() {} };
 
     const React = require('react');
@@ -59,7 +67,7 @@ window.__ModuleLoader__.load({
         font-size: .82em;
         font-family: "SF Mono", "Fira Code", "Cascadia Code", "JetBrains Mono", Menlo, monospace;
       }
-    `;
+    `.replaceAll('html[data-rdsh-device-mode="mobile"]', attrMode === "mobile" ? 'html[data-rdsh-device-mode="mobile"]' : "html");
     function TableStyles() {
       return React.createElement('style', { 'data-dsh-md-rendering': '' }, css);
     }

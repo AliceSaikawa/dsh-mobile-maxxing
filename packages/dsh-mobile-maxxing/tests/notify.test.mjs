@@ -257,7 +257,7 @@ test("a phone send marks the next turn; a desktop send does not", async () => {
 			on(event, handler) { listeners.set(event, handler); return () => {}; },
 			effect(fn) { return scope.effect(fn); },
 		};
-		applyNotify(ctx, { onlyMobileTurns: true });
+		applyNotify(ctx, { onlyMobileTurns: true }, { transport: (...args) => globalThis.fetch(...args) });
 		const mobileSend = routes.get("/api/dsh-mobile-maxxing/push/mobile-send");
 		const post = async (path, body) => {
 			const req = Readable.from([Buffer.from(JSON.stringify(body))]);
@@ -336,7 +336,7 @@ test("notification fan-out targets the app that started the turn or request, nev
 			on(event, handler) { listeners.set(event, handler); return () => {}; },
 			effect(fn) { return scope.effect(fn); },
 		};
-		applyNotify(ctx, { onlyMobileTurns: true });
+		applyNotify(ctx, { onlyMobileTurns: true }, { transport: (...args) => globalThis.fetch(...args) });
 		return { routes, listeners };
 	};
 	const request = async (target, path, { method = "POST", body = undefined, origin = undefined, capture = undefined } = {}) => {
@@ -573,7 +573,7 @@ function acknowledgementHarness(endpoints) {
 	};
 	// The host half already returns its seams; keep them so a test can drive one
 	// event and read its own result instead of counting pushes.
-	const api = applyNotify(ctx, { onlyMobileTurns: false });
+	const api = applyNotify(ctx, { onlyMobileTurns: false }, { transport: (...args) => globalThis.fetch(...args) });
 	const post = async (path, body) => {
 		const text = body === undefined ? "" : JSON.stringify(body);
 		const req = Readable.from(text === "" ? [] : [Buffer.from(text)]);

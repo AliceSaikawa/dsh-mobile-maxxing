@@ -144,7 +144,7 @@ function makeInstance({ getOrigin = INTERNAL_ORIGIN, config = {}, rejection = un
 		},
 		effect: (fn) => scope.effect(fn),
 	};
-	applyNotify(ctx, { onlyMobileTurns: true, ...config });
+	applyNotify(ctx, { onlyMobileTurns: true, ...config }, { transport: (...args) => globalThis.fetch(...args) });
 	return {
 		listeners,
 		routes,

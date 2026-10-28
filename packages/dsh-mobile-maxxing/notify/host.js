@@ -28,6 +28,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { copyFor } from "../lib/copy.js";
+import { securePushRequest } from "./secure-push.js";
 
 /** How long a push stays queued when the phone is offline. */
 const PUSH_TTL_SECONDS = 600;
@@ -229,7 +230,7 @@ export function describePushError(error) {
  * @param {string} options.subject - VAPID contact.
  * @returns {Promise<{ok: boolean, status: number, gone: boolean}>}
  */
-export async function sendWebPush(subscription, payload, { keys, subject }) {
+export async function sendWebPush(subscription, payload, { keys, subject, transport = securePushRequest }) {
 	const audience = endpointAudience(subscription.endpoint);
 	if (audience === "") return { ok: false, status: 0, gone: true };
 
@@ -241,14 +242,13 @@ export async function sendWebPush(subscription, payload, { keys, subject }) {
 		return { ok: false, status: 0, gone: true };
 	}
 
-	const response = await fetch(subscription.endpoint, {
+	const response = await transport(subscription.endpoint, {
 		method: "POST",
 		headers: {
 			authorization: vapidAuthorization({ keys, audience, subject }),
 			"content-encoding": "aes128gcm",
 			"content-type": "application/octet-stream",
-			// content-length is deliberately left to fetch: a manual value on a
-			// Buffer body made undici reject every send (#85).
+			// Let the HTTP transport frame the encrypted bytes (#85).
 			ttl: String(PUSH_TTL_SECONDS),
 			urgency: "high",
 		},
@@ -733,7 +733,7 @@ async function readJsonBody(req) {
  * @param {object} ctx - plugin context.
  * @param {object} config - normalized notification config.
  */
-export function applyNotify(ctx, config) {
+export function applyNotify(ctx, config, { transport = securePushRequest } = {}) {
 	const store = new PushStore(join(stateDirectory(), "push.json"));
 	const copy = normalizeNotifyConfig(config);
 	/** Sessions whose next turn was started from the phone. One-shot. */
@@ -924,7 +924,7 @@ export function applyNotify(ctx, config) {
 			// Only an acknowledged notice suppresses this particular endpoint.
 			if (pending?.acked.has(subscription.endpoint)) return { status: 0, ok: true, skipped: "acknowledged" };
 			try {
-				const result = await sendWebPush(subscription, payload, { keys: store.keys(), subject });
+				const result = await sendWebPush(subscription, payload, { keys: store.keys(), subject, transport });
 				if (result.gone) store.remove(subscription.endpoint);
 				return { status: result.status, ok: result.ok };
 			} catch (error) {

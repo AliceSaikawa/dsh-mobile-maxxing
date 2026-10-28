@@ -266,7 +266,7 @@ function makeInstance() {
 			return scope.effect(fn);
 		},
 	};
-	applyNotify(ctx, { onlyMobileTurns: false });
+	applyNotify(ctx, { onlyMobileTurns: false }, { transport: (...args) => globalThis.fetch(...args) });
 	return { listeners, routes };
 }
 

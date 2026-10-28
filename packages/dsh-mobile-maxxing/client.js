@@ -13755,6 +13755,14 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
 
   /* #59: a two-column dock created in landscape stays two columns after
      rotation. Stack its two hosts in portrait without changing the saved layout. */
+  @media (orientation: landscape) {
+    [data-window-drag] { height: 0 !important; min-height: 0 !important; padding: 0 !important; border: 0 !important; }
+    [data-window-drag] [class*="_titleRow"] { display: none !important; }
+    [data-window-drag] [class*="_headerCorner"] {
+      position: fixed !important; z-index: 70 !important;
+      top: var(--rdsh-safe-top, 0px) !important; right: var(--rdsh-safe-right, 0px) !important;
+    }
+  }
   @media (orientation: portrait) and (max-width: 767px) {
     [data-sidebar-right-panel] [data-dockkit-split]:has(> [data-dockkit-host][data-dockkit-column="1"]) {
       grid-template-columns: minmax(0, 1fr) !important;

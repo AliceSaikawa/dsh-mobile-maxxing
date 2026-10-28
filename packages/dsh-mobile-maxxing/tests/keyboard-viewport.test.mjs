@@ -63,6 +63,12 @@ test("a dialog keeps its own keyboard and scroll geometry", () => {
 	assert.deepEqual(pinFor({ height: 480, offsetTop: 150, scale: 1 }, { dialog: true }).attributes, []);
 });
 
+test("landscape hides the session title bar but keeps the panel corner", () => {
+	assert.match(CLIENT, /@media \(orientation: landscape\)[\s\S]*?\[data-window-drag\] \{ height: 0 !important;/);
+	assert.match(CLIENT, /\[data-window-drag\] \[class\*="_titleRow"\] \{ display: none !important; \}/);
+	assert.match(CLIENT, /\[data-window-drag\] \[class\*="_headerCorner"\] \{[\s\S]*?position: fixed !important;/);
+});
+
 test("the pin is torn down with the phone hooks", () => {
 	const release = CLIENT.slice(CLIENT.indexOf("    function releaseSafeArea()"), CLIENT.indexOf("    let heightProbe = null;"));
 	assert.match(release, /removeAttribute\("data-rdsh-keyboard"\)/);

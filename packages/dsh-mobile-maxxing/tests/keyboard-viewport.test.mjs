@@ -63,10 +63,12 @@ test("a dialog keeps its own keyboard and scroll geometry", () => {
 	assert.deepEqual(pinFor({ height: 480, offsetTop: 150, scale: 1 }, { dialog: true }).attributes, []);
 });
 
-test("landscape hides the session title bar but keeps the panel corner", () => {
-	assert.match(CLIENT, /@media \(orientation: landscape\)[\s\S]*?\[data-window-drag\] \{ height: 0 !important;/);
-	assert.match(CLIENT, /\[data-window-drag\] \[class\*="_titleRow"\] \{ display: none !important; \}/);
-	assert.match(CLIENT, /\[data-window-drag\] \[class\*="_headerCorner"\] \{[\s\S]*?position: fixed !important;/);
+test("landscape hides only the conversation title bar and keeps right-panel tabs", () => {
+	const landscape = CLIENT.slice(CLIENT.indexOf("  @media (orientation: landscape)"), CLIENT.indexOf("  @media (orientation: portrait)"));
+	assert.match(landscape, /header\[data-window-drag\]:has\(\[data-conversation-header-leading\]\) \{ height: 0 !important;/);
+	assert.match(landscape, /header\[data-window-drag\]:has\(\[data-conversation-header-leading\]\) \[class\*="_titleRow"\] \{ display: none !important; \}/);
+	assert.match(landscape, /header\[data-window-drag\]:has\(\[data-conversation-header-leading\]\) \[class\*="_headerCorner"\] \{[\s\S]*?position: fixed !important;/);
+	assert.doesNotMatch(landscape, /^    \[data-window-drag\]/m, "the right panel's dock strip must not be selected");
 });
 
 test("only deliberate focus is kept, including slash command editing", () => {

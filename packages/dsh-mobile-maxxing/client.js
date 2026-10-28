@@ -11949,6 +11949,17 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * device's own previous endpoint and never another device's.
      */
     const PUSH_ENDPOINT_KEY = "rdsh-mobile-ux:push-endpoint";
+    const PUSH_ENABLED_KEY = "rdsh-mobile-ux:push-enabled";
+    function pushEnabled() {
+      try {
+        const value = localStorage.getItem(PUSH_ENABLED_KEY);
+        return value === "true" ? true : value === "false" ? false : null;
+      } catch { return null; }
+    }
+    function setPushEnabled(enabled) {
+      try { localStorage.setItem(PUSH_ENABLED_KEY, String(enabled)); } catch { /* private mode */ }
+    }
+    let pushSyncTask = null;
 
     /** The endpoint this browser registered last, or "". */
     function readPushEndpoint() {
@@ -12002,6 +12013,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (typeof Notification === "undefined") throw new Error(t("notify.unsupported"));
       const permission = await Notification.requestPermission();
       if (permission !== "granted") throw new Error(t("notify.permissionMissing"));
+      if (pushSyncTask !== null) await pushSyncTask;
+      setPushEnabled(true);
       const registration = await navigator.serviceWorker.ready;
       const response = await fetch(`${PUSH_API}/vapid`, { cache: "no-store" });
       if (!response.ok) throw new Error(t("notify.unavailable"));
@@ -12015,32 +12028,45 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       await refreshNotificationStatus();
     }
 
-    /**
-     * Re-register this browser's existing subscription on every launch (#98).
-     *
-     * A browser can rotate its registration, and the host retires the old
-     * endpoint only when a page names it. Nothing is created here — without
-     * permission or an existing subscription there is nothing to send.
-     */
-    async function syncPushSubscription() {
-      if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
-      if (!("serviceWorker" in navigator)) return;
-      try {
-        const registration = await navigator.serviceWorker.getRegistration();
-        const subscription = registration === null || registration === undefined
-          ? null
-          : await registration.pushManager.getSubscription();
-        if (subscription === null || subscription === undefined) return;
-        await savePushSubscription(subscription);
-      } catch {
-        // A failed sync leaves the stored entry alone; Settings can retry.
-      }
+    /** Retry on launch, reconnect and return to the visible app. */
+    function syncPushSubscription() {
+      if (pushSyncTask !== null) return pushSyncTask;
+      pushSyncTask = (async () => {
+        if (typeof Notification === "undefined" || Notification.permission !== "granted" || pushEnabled() === false) return;
+        if (!("serviceWorker" in navigator)) return;
+        try {
+          const registration = await navigator.serviceWorker.getRegistration();
+          if (!live || registration === null || registration === undefined || pushEnabled() === false) return;
+          let subscription = await registration.pushManager.getSubscription();
+          if (!live || pushEnabled() === false) return;
+          if (subscription === null || subscription === undefined) {
+            // Legacy disabled and never-enabled browsers are indistinguishable: do not opt them in.
+            if (pushEnabled() !== true) return;
+            const response = await fetch(`${PUSH_API}/vapid`, { cache: "no-store" });
+            if (!response.ok || !live || pushEnabled() !== true) return;
+            const { publicKey } = await response.json();
+            if (!live || pushEnabled() !== true) return;
+            subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(publicKey) });
+          }
+          if (!live || pushEnabled() === false) return;
+          const saved = await savePushSubscription(subscription);
+          if (saved.ok && live && pushEnabled() !== false) setPushEnabled(true);
+        } catch {
+          // Retry on the next launch, reconnect or foreground event.
+        }
+      })().finally(() => { pushSyncTask = null; });
+      return pushSyncTask;
+    }
+    function onPushVisible() {
+      if (document.visibilityState === "visible") void syncPushSubscription();
     }
 
     async function disableNotifications() {
+      setPushEnabled(false);
+      if (pushSyncTask !== null) await pushSyncTask;
       const registration = await navigator.serviceWorker.getRegistration();
       const subscription = registration === null || registration === undefined ? null : await registration.pushManager.getSubscription();
-      if (subscription !== null) {
+      if (subscription !== null && subscription !== undefined) {
         try {
           await fetch(`${PUSH_API}/unsubscribe`, {
             method: "POST",
@@ -15258,6 +15284,8 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         // #98: re-assert this device's subscription so a rotated endpoint
         // retires the one it replaced, and the host sees this device as live.
         void syncPushSubscription();
+        window.addEventListener("online", syncPushSubscription);
+        document.addEventListener("visibilitychange", onPushVisible);
 
         globalThis.__RDSH_MOBILE_UX__ = {
           get state() { return { ...state }; },
@@ -15330,6 +15358,8 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             get top() { return drawerScrollTop; },
           },
           enableNotifications,
+          disableNotifications,
+          syncPushSubscription,
           sendTestNotification,
         };
 
@@ -15358,6 +15388,8 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             removeHeightProbe();
             document.removeEventListener("focusout", onKeyboardFocusOut, true);
             document.removeEventListener("visibilitychange", onKeyboardVisibility);
+            document.removeEventListener("visibilitychange", onPushVisible);
+            window.removeEventListener("online", syncPushSubscription);
             window.removeEventListener("blur", scheduleKeyboardRecovery);
             window.removeEventListener("focus", scheduleKeyboardRecovery);
             if (keyboardRecoveryFrame !== 0) {

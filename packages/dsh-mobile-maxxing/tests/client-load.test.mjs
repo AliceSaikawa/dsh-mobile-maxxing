@@ -3981,12 +3981,18 @@ function localNoticeHarness({
 	pushTest = "ok",
 	notification = null,
 	storage = null,
+	recoverEndpoint = "",
+	subscribeStatuses = [],
+	subscribeGate = null,
 } = {}) {
 	const rendered = [];
 	const roots = [];
 	const ackPosts = [];
 	const testPushes = [];
 	const subscribePosts = [];
+	const windowHandlers = new Map();
+	let activeEndpoint = endpoint;
+	let subscribeAttempts = 0;
 	let latestBanner = null;
 	let lastKey = null;
 	let mountedOnce = false;
@@ -4005,7 +4011,16 @@ function localNoticeHarness({
 			getSubscription: async () => {
 				if (subscriptionGate !== null) await subscriptionGate;
 				// A real PushSubscription serializes itself for /subscribe.
-				return endpoint === "" ? null : { endpoint, toJSON: () => ({ endpoint }) };
+				if (activeEndpoint === "") return null;
+				const value = activeEndpoint;
+				return { endpoint: value, toJSON: () => ({ endpoint: value }), unsubscribe: async () => { activeEndpoint = ""; return true; } };
+			},
+			subscribe: async () => {
+				subscribeAttempts++;
+				if (subscribeGate !== null) await subscribeGate;
+				if (recoverEndpoint === "") throw new Error("no recovery endpoint");
+				activeEndpoint = recoverEndpoint;
+				return { endpoint: activeEndpoint, toJSON: () => ({ endpoint: activeEndpoint }), unsubscribe: async () => { activeEndpoint = ""; return true; } };
 			},
 		},
 	};
@@ -4036,17 +4051,22 @@ function localNoticeHarness({
 		},
 		globals: {
 			__RDSH_NOTICE_TEST__: {},
+			atob: (value) => Buffer.from(value, "base64").toString("binary"),
 			location: { origin: "https://app.example:8446", href: "https://app.example:8446/" },
 		},
 		notification,
 		storage,
+		windowAdd: (type, handler) => windowHandlers.set(type, handler),
+		windowRemove: (type, handler) => { if (windowHandlers.get(type) === handler) windowHandlers.delete(type); },
 		fetchImpl: async (url, options) => {
 			const target = String(url);
 			if (target.endsWith("/push/ack")) ackPosts.push({ url: target, options });
 			if (target.endsWith("/push/subscribe")) {
 				subscribePosts.push({ url: target, options });
-				return { status: 200, ok: true, json: async () => ({ ok: true, count: 1 }) };
+				const status = subscribeStatuses.shift() ?? 200;
+				return { status, ok: status >= 200 && status < 300, json: async () => ({ ok: status === 200, count: 1 }) };
 			}
+			if (target.endsWith("/push/vapid")) return { status: 200, ok: true, json: async () => ({ publicKey: "AQ" }) };
 			if (target.endsWith("/push/config")) {
 				// The real route answers with the host's copy, which carries
 				// onlyMobileTurns. An absent key is the host default (true).
@@ -4109,6 +4129,9 @@ function localNoticeHarness({
 		ackPosts,
 		testPushes,
 		subscribePosts,
+		windowHandlers,
+		get subscribeAttempts() { return subscribeAttempts; },
+		get activeEndpoint() { return activeEndpoint; },
 		api,
 		// A turn this browser sent is the one the host will route back to it.
 		markSend: (sessionId) => api.markMobileSession(sessionId),
@@ -4521,6 +4544,59 @@ test("a launch without permission or a subscription registers nothing", async ()
 	await settleNoticeWork();
 	assert.deepEqual(noSubscription.subscribePosts, [], "a launch with no subscription posted one");
 	noSubscription.booted.disposeAll();
+});
+
+test("an opted-in missing subscription is recreated and its old endpoint retired", async () => {
+	const old = "https://web.push.apple.com/old", replacement = "https://web.push.apple.com/new";
+	const h = localNoticeHarness({ endpoint: "", recoverEndpoint: replacement, notification: { permission: "granted" }, storage: { "rdsh-mobile-ux:push-enabled": "true", "rdsh-mobile-ux:push-endpoint": old } });
+	await h.api.syncPushSubscription();
+	assert.equal(h.subscribeAttempts, 1);
+	assert.equal(h.subscribePosts.length, 1);
+	assert.equal(JSON.parse(h.subscribePosts[0].options.body).previousEndpoint, old);
+	assert.equal(h.booted.sandbox.localStorage.getItem("rdsh-mobile-ux:push-endpoint"), replacement);
+	h.booted.disposeAll();
+	assert.equal(h.windowHandlers.has("online"), false);
+});
+
+test("a failed server registration retries on reconnect", async () => {
+	const replacement = "https://web.push.apple.com/new";
+	const h = localNoticeHarness({ endpoint: "", recoverEndpoint: replacement, notification: { permission: "granted" }, storage: { "rdsh-mobile-ux:push-enabled": "true" }, subscribeStatuses: [503, 200] });
+	await h.api.syncPushSubscription();
+	assert.equal(h.subscribePosts.length, 1);
+	assert.equal(h.booted.sandbox.localStorage.getItem("rdsh-mobile-ux:push-endpoint"), null);
+	h.windowHandlers.get("online")();
+	await h.api.syncPushSubscription();
+	assert.equal(h.subscribePosts.length, 2);
+	assert.equal(h.subscribeAttempts, 1, "the existing browser subscription should be reused");
+	assert.equal(h.booted.sandbox.localStorage.getItem("rdsh-mobile-ux:push-endpoint"), replacement);
+	h.booted.disposeAll();
+});
+
+test("disabled or legacy-unsubscribed browsers are never re-enabled automatically", async () => {
+	for (const enabled of [undefined, "false"]) {
+		const storage = { "rdsh-mobile-ux:push-endpoint": "https://web.push.apple.com/old" };
+		if (enabled !== undefined) storage["rdsh-mobile-ux:push-enabled"] = enabled;
+		const h = localNoticeHarness({ endpoint: "", recoverEndpoint: "https://web.push.apple.com/new", notification: { permission: "granted" }, storage });
+		await h.api.syncPushSubscription();
+		assert.equal(h.subscribeAttempts, 0);
+		assert.equal(h.subscribePosts.length, 0);
+		h.booted.disposeAll();
+	}
+});
+
+test("disabling during a pending re-subscribe leaves notifications disabled", async () => {
+	let release;
+	const gate = new Promise((resolve) => { release = resolve; });
+	const h = localNoticeHarness({ endpoint: "", recoverEndpoint: "https://web.push.apple.com/new", notification: { permission: "granted" }, storage: { "rdsh-mobile-ux:push-enabled": "true" }, subscribeGate: gate });
+	await settleNoticeWork();
+	assert.equal(h.subscribeAttempts, 1);
+	const disabling = h.api.disableNotifications();
+	release();
+	await disabling;
+	assert.equal(h.activeEndpoint, "");
+	assert.equal(h.booted.sandbox.localStorage.getItem("rdsh-mobile-ux:push-enabled"), "false");
+	assert.equal(h.subscribePosts.length, 0);
+	h.booted.disposeAll();
 });
 
 test("a local-only notice still marks the banner for the worker hand-off", async () => {

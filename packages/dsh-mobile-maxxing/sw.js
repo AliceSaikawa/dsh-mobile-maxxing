@@ -344,7 +344,7 @@ self.addEventListener("pushsubscriptionchange", (event) => {
 	event.waitUntil((async () => {
 		try {
 			const response = await fetch(new URL("api/dsh-mobile-maxxing/push/vapid", SCOPE), { cache: "no-store" });
-			if (!response.ok) return;
+			if (!response.ok) throw new Error("push key unavailable");
 			const { publicKey } = await response.json();
 			const padding = "=".repeat((4 - (publicKey.length % 4)) % 4);
 			const raw = atob((publicKey + padding).replace(/-/g, "+").replace(/_/g, "/"));
@@ -354,7 +354,7 @@ self.addEventListener("pushsubscriptionchange", (event) => {
 			// page keeps its own copy in localStorage, which a worker cannot
 			// read, so the replaced registration is named here instead.
 			const previousEndpoint = typeof event.oldSubscription?.endpoint === "string" ? event.oldSubscription.endpoint : "";
-			await fetch(new URL("api/dsh-mobile-maxxing/push/subscribe", SCOPE), {
+			const saved = await fetch(new URL("api/dsh-mobile-maxxing/push/subscribe", SCOPE), {
 				method: "POST",
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({
@@ -364,8 +364,9 @@ self.addEventListener("pushsubscriptionchange", (event) => {
 					previousEndpoint,
 				}),
 			});
+			if (!saved.ok) throw new Error("push subscription registration failed");
 		} catch {
-			/* the Settings button remains the manual recovery path */
+			console.warn("[dsh-mobile-maxxing] push subscription rotation failed; the app will retry");
 		}
 	})());
 });

@@ -897,11 +897,11 @@ class FakeCacheStorage {
 }
 
 /** Load sw.js into a sandbox that looks like one service-worker global. */
-function loadServiceWorker({ origin, build = "build-a", cacheStorage, network = "ok", clients = [], timers = {} }) {
+function loadServiceWorker({ origin, build = "build-a", cacheStorage, network = "ok", clients = [], timers = {}, fetchImpl = null, pushManager = null, log = console }) {
 	const listeners = new Map();
 	const shown = [];
 	const self = {
-		registration: { scope: `${origin}/`, showNotification: async (...args) => { shown.push(args); } },
+		registration: { scope: `${origin}/`, pushManager, showNotification: async (...args) => { shown.push(args); } },
 		location: { origin },
 		clients: { matchAll: async () => clients, claim: async () => {} },
 		addEventListener(type, handler) {
@@ -920,11 +920,13 @@ function loadServiceWorker({ origin, build = "build-a", cacheStorage, network = 
 				return { error: true };
 			}
 		},
-		fetch: async (url) => {
+		fetch: fetchImpl ?? (async (url) => {
 			if (network !== "ok") throw new Error("network down");
 			return { ok: true, type: "basic", clone() { return this; }, url: String(url) };
-		},
-		console,
+		}),
+		console: log,
+		atob: (value) => Buffer.from(value, "base64").toString("binary"),
+		navigator: { userAgent: "test-device" },
 		setTimeout: timers.setTimeout ?? setTimeout,
 		clearTimeout: timers.clearTimeout ?? clearTimeout,
 	};
@@ -932,6 +934,26 @@ function loadServiceWorker({ origin, build = "build-a", cacheStorage, network = 
 	new vm.Script(SW_SOURCE, { filename: "sw.js" }).runInContext(context);
 	return { listeners, self, shown };
 }
+
+test("worker reports failed rotation and preserves the previous endpoint", async () => {
+	const posts = [], warnings = [];
+	const worker = loadServiceWorker({
+		origin: NEW_ORIGIN, cacheStorage: new FakeCacheStorage(),
+		pushManager: { subscribe: async () => ({ toJSON: () => ({ endpoint: "https://web.push.apple.com/new" }) }) },
+		fetchImpl: async (url, options) => {
+			if (String(url).endsWith("/vapid")) return { ok: true, json: async () => ({ publicKey: "AQ" }) };
+			posts.push(JSON.parse(options.body));
+			return { ok: false, status: 503 };
+		},
+		log: { warn: (...args) => warnings.push(args) },
+	});
+	let work;
+	worker.listeners.get("pushsubscriptionchange")({ oldSubscription: { endpoint: "https://web.push.apple.com/old" }, waitUntil(promise) { work = promise; } });
+	await work;
+	assert.equal(posts.length, 1);
+	assert.equal(posts[0].previousEndpoint, "https://web.push.apple.com/old");
+	assert.equal(warnings.length, 1);
+});
 
 /** Run one lifecycle event and wait for its work. */
 async function fire(listeners, type, data) {

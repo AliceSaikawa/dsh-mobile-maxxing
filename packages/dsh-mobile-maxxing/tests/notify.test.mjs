@@ -611,6 +611,24 @@ const ACK = "/api/dsh-mobile-maxxing/push/ack";
 const TEST_PUSH = "/api/dsh-mobile-maxxing/push/test";
 const TEST_ORIGIN = "https://app.example:8446";
 
+test("a slow endpoint does not delay starting other push deliveries", async () => {
+	const slow = "https://web.push.apple.com/slow", fast = "https://web.push.apple.com/fast";
+	const harness = acknowledgementHarness([fast, slow]);
+	const started = [];
+	let finishSlow;
+	globalThis.fetch = (url, options) => {
+		started.push(String(url));
+		assert.ok(options.signal instanceof AbortSignal);
+		return String(url) === slow ? new Promise((resolve) => { finishSlow = resolve; }) : Promise.resolve({ status: 201 });
+	};
+	try {
+		const pending = harness.fanOut({ kind: "test", title: "test" }, { origin: TEST_ORIGIN });
+		assert.deepEqual(started.sort(), [fast, slow].sort(), "both endpoints must start before the slow one completes");
+		finishSlow({ status: 201 });
+		assert.equal((await pending).ok, true);
+	} finally { harness.restore(); }
+});
+
 test("only the endpoint that acknowledged this notice skips push", async () => {
 	const visibleEndpoint = "https://web.push.apple.com/visible";
 	const otherEndpoint = "https://web.push.apple.com/other";

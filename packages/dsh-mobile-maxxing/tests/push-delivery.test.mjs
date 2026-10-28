@@ -63,6 +63,8 @@ test("sendWebPush lets fetch frame the body and reports the push status", async 
 		assert.equal(calls[0].url, target.endpoint);
 		const { options } = calls[0];
 		assert.equal(options.method, "POST");
+		assert.equal(options.redirect, "error");
+		assert.ok(options.signal instanceof AbortSignal);
 		assertNoForbiddenHeaders(options.headers);
 		assert.equal(options.headers["content-encoding"], "aes128gcm");
 		assert.equal(options.headers["content-type"], "application/octet-stream");

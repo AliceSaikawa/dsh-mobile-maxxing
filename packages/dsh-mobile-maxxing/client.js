@@ -11992,12 +11992,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * Re-register this browser's existing subscription on every launch (#98).
      *
      * A browser can rotate its registration, and the host retires the old
-     * endpoint only when a page names it. Registering again also refreshes the
-     * entry's timestamp, which is the host's evidence that this device still
-     * holds that endpoint: the stale-entry valve keys on it, so an entry is
-     * never pruned while its device keeps opening the app. Nothing is created
-     * here — without permission or an existing subscription there is nothing
-     * to send.
+     * endpoint only when a page names it. Nothing is created here — without
+     * permission or an existing subscription there is nothing to send.
      */
     async function syncPushSubscription() {
       if (typeof Notification === "undefined" || Notification.permission !== "granted") return;

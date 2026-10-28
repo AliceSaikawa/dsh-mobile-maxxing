@@ -6,9 +6,8 @@
  * after silent pushes). A registration the browser replaced is unreachable
  * from the page but still reaches the same phone, so a store that keeps it
  * turns one foreground event into a banner plus a system notification. These
- * tests pin the two mechanisms that retire it — the endpoint a browser names
- * as its previous one, and the age-based valve for entries no page can name —
- * and the multi-device rules that must survive them: an endpoint is one
+ * tests pin the explicit endpoint a browser names as its previous one
+ * and the multi-device rules that must survive it: an endpoint is one
  * browser registration, while an origin is shared by every device using it.
  *
  * The route tests drive the real handlers and the real store; only `fetch` is
@@ -138,8 +137,8 @@ test("two devices with the same user agent are both kept", withHome(async (file)
 	const second = subscription("https://web.push.apple.com/second");
 
 	// Identical labels are possible (two phones on one iOS version), so the
-	// label is not an identity: only a named previous endpoint or age removes
-	// anything, and a registration this fresh is never stale.
+	// label is not an identity: only a named previous endpoint removes
+	// another entry during registration.
 	store.add(first, { label: LABEL_PHONE, origin: ORIGIN_A });
 	store.add(second, { label: LABEL_PHONE, origin: ORIGIN_A, previousEndpoint: first.endpoint });
 	assert.deepEqual(endpoints(file), [second.endpoint]);
@@ -160,22 +159,21 @@ test("re-registering the same endpoint stores it once", withHome(async (file) =>
 }));
 
 // ---------------------------------------------------------------------------
-// Store: the age-based valve
+// Store: inactive devices and capacity
 // ---------------------------------------------------------------------------
 
-test("an entry this device has not refreshed for a week is retired", withHome(async (file) => {
+test("an inactive device with the same user agent is not retired", withHome(async (file) => {
 	const store = new PushStore(file);
 	const leftover = subscription("https://web.push.apple.com/left-behind");
 	const live = subscription("https://web.push.apple.com/phone");
 	store.add(leftover, { label: LABEL_PHONE, origin: ORIGIN_A });
 	age(file, leftover.endpoint, 8);
-	// A reinstall clears localStorage, so the page cannot name its old
-	// endpoint; age plus this device's label is the remaining evidence.
+	// A different phone may have the same user agent and not open for a week.
 	store.add(live, { label: LABEL_PHONE, origin: ORIGIN_A, previousEndpoint: "" });
-	assert.deepEqual(endpoints(file), [live.endpoint]);
+	assert.deepEqual(endpoints(file).sort(), [leftover.endpoint, live.endpoint].sort());
 }));
 
-test("the valve keeps a fresh entry of the same label and an old one of another origin", withHome(async (file) => {
+test("registration keeps other devices and origins", withHome(async (file) => {
 	const store = new PushStore(file);
 	const otherDevice = subscription("https://web.push.apple.com/other-device");
 	const otherApp = subscription("https://web.push.apple.com/other-app");
@@ -193,7 +191,7 @@ test("the valve keeps a fresh entry of the same label and an old one of another 
 	);
 }));
 
-test("a legacy entry without an origin is not pruned by the valve", withHome(async (file) => {
+test("a legacy entry without an origin is not pruned by registration", withHome(async (file) => {
 	const store = new PushStore(file);
 	const legacy = subscription("https://web.push.apple.com/legacy");
 	const live = subscription("https://web.push.apple.com/phone");
@@ -203,6 +201,17 @@ test("a legacy entry without an origin is not pruned by the valve", withHome(asy
 	age(file, legacy.endpoint, 30);
 	store.add(live, { label: LABEL_PHONE, origin: ORIGIN_A });
 	assert.deepEqual(endpoints(file).sort(), [legacy.endpoint, live.endpoint].sort());
+}));
+
+test("at capacity a new device is rejected without evicting existing devices", withHome(async (file) => {
+	const store = new PushStore(file);
+	for (let i = 0; i < 32; i++) store.add(subscription(`https://web.push.apple.com/${i}`), { label: LABEL_PHONE, origin: ORIGIN_A });
+	const before = endpoints(file);
+	assert.throws(() => store.add(subscription("https://web.push.apple.com/new"), { label: LABEL_PHONE, origin: ORIGIN_A }), /subscription limit/);
+	assert.deepEqual(endpoints(file), before);
+	store.add(subscription("https://web.push.apple.com/new"), { label: LABEL_PHONE, origin: ORIGIN_A, previousEndpoint: before[0] });
+	assert.equal(endpoints(file).length, 32);
+	assert.equal(endpoints(file).includes(before[0]), false);
 }));
 
 // ---------------------------------------------------------------------------

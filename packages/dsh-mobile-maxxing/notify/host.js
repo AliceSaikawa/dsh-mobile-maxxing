@@ -33,17 +33,10 @@ import { copyFor } from "../lib/copy.js";
 const PUSH_TTL_SECONDS = 600;
 /** VAPID tokens are short-lived on purpose; 12h is the common ceiling. */
 const VAPID_TTL_SECONDS = 12 * 60 * 60;
-/** How many subscriptions one store keeps; the oldest is dropped past this. */
+/** Refuse new subscriptions at capacity instead of dropping another device. */
 const MAX_SUBSCRIPTIONS = 32;
-/**
- * How long one device's registration stays trusted while it is never refreshed.
- *
- * A browser re-registers on every launch, so a live device keeps its entry
- * fresh. An entry this old belongs to a registration the device no longer
- * holds — typically left behind by a reinstall that cleared its storage, which
- * also clears the endpoint it would otherwise name (#98).
- */
-const STALE_SUBSCRIPTION_MS = 7 * 24 * 60 * 60 * 1000;
+/** A slow or unreachable push service must not delay delivery indefinitely. */
+const PUSH_TIMEOUT_MS = 10_000;
 
 // ---------------------------------------------------------------------------
 // Small helpers
@@ -260,6 +253,8 @@ export async function sendWebPush(subscription, payload, { keys, subject }) {
 			urgency: "high",
 		},
 		body,
+		redirect: "error",
+		signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
 	});
 	// 404 and 410 are the two ways a push service retires a subscription.
 	return { ok: response.status >= 200 && response.status < 300, status: response.status, gone: response.status === 404 || response.status === 410 };
@@ -580,11 +575,9 @@ export class PushStore {
 	 * notification from the stale copy (#98). The page names the endpoint it
 	 * held last, and only that exact entry is dropped.
 	 *
-	 * The endpoint is per browser registration, not per origin: two devices can
-	 * serve the same origin, and a device that reinstalled can name nothing.
-	 * An entry left without a `previousEndpoint` is therefore only dropped once
-	 * it has not been refreshed for {@link STALE_SUBSCRIPTION_MS} and carries
-	 * this device's label — a live device refreshes its entry on every launch.
+	 * The endpoint is per browser registration, not per origin or user agent.
+	 * If a device cannot name its old endpoint, only an explicit unsubscribe
+	 * or a 404/410 from the push service can safely retire it.
 	 *
 	 * @param {object} subscription - `{ endpoint, keys }` from the browser.
 	 * @param {object} [meta] - `{ label, origin, previousEndpoint }` for the
@@ -622,21 +615,8 @@ export class PushStore {
 		if (previous !== "" && previous !== endpoint) {
 			kept = kept.filter((item) => !(item.endpoint === previous && sameOrigin(item.origin, entry.origin)));
 		}
-		// The safety valve for entries no client can name. It is scoped to this
-		// origin and this label, so another origin (or a device with a different
-		// label) is never touched; a live device resets its own `addedAt` at
-		// every launch, which is what keeps it out of this filter.
-		if (entry.origin !== "" && entry.label !== "") {
-			const cutoff = entry.addedAt - STALE_SUBSCRIPTION_MS;
-			kept = kept.filter((item) => !(
-				item.endpoint !== endpoint
-				&& item.label === entry.label
-				&& sameOrigin(item.origin, entry.origin)
-				&& Number.isFinite(item.addedAt)
-				&& item.addedAt <= cutoff
-			));
-		}
-		this.state.subscriptions = [entry, ...kept].slice(0, MAX_SUBSCRIPTIONS);
+		if (kept.length >= MAX_SUBSCRIPTIONS) throw new Error("push subscription limit reached; remove an obsolete subscription first");
+		this.state.subscriptions = [entry, ...kept];
 		this.save();
 		return this.state.subscriptions.length;
 	}
@@ -940,25 +920,17 @@ export function applyNotify(ctx, config) {
 				pendingNotices.delete(pending);
 			}
 		}
-		for (const subscription of subscriptions) {
-			// Skip only after this particular notice was rendered and acknowledged.
-			// A suspended page, failed request, or missing UI always gets normal
-			// push instead of losing the notification behind a stale visibility lease.
-			if (pending?.acked.has(subscription.endpoint)) {
-				results.push({ status: 0, ok: true, skipped: "acknowledged" });
-				continue;
-			}
+		results.push(...await Promise.all(subscriptions.map(async (subscription) => {
+			// Only an acknowledged notice suppresses this particular endpoint.
+			if (pending?.acked.has(subscription.endpoint)) return { status: 0, ok: true, skipped: "acknowledged" };
 			try {
 				const result = await sendWebPush(subscription, payload, { keys: store.keys(), subject });
-				results.push({ status: result.status, ok: result.ok });
-				// 404/410 is how a push service retires a registration; an app
-				// deleted without /unsubscribe is only discoverable this way.
 				if (result.gone) store.remove(subscription.endpoint);
+				return { status: result.status, ok: result.ok };
 			} catch (error) {
-				// The undici cause is the only diagnostic a failed fetch leaves.
-				results.push({ status: 0, ok: false, error: describePushError(error) });
+				return { status: 0, ok: false, error: describePushError(error) };
 			}
-		}
+		})));
 		const everyDelivered = results.every((item) => item.ok);
 		const skipped = results.length > 0 && results.every((item) => item.skipped === "acknowledged")
 			? "acknowledged"

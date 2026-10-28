@@ -606,7 +606,7 @@ window.__ModuleLoader__.load({
 .rdsh-update-launch:focus-visible { outline: 2px solid var(--dsw-alias-link, #4d6bfe); outline-offset: 2px; }
 .rdsh-update-launch svg { width: 19px; height: 19px; flex: none; }
 .rdsh-update-overlay { position: fixed; inset: 0; z-index: 2147483000; display: grid; place-items: center; padding: 20px; background: var(--dsw-alias-mask, rgba(0,0,0,.72)); }
-.rdsh-update-dialog { box-sizing: border-box; width: min(100%, 420px); padding: 28px; border-radius: 18px; background: var(--dsw-alias-bg-layer-2, #26262a); color: var(--dsw-alias-label-primary, #fff); text-align: center; box-shadow: 0 12px 40px #0008; overflow-wrap: anywhere; }
+.rdsh-update-dialog { box-sizing: border-box; width: min(100%, 420px); max-height: 100%; overflow-y: auto; overscroll-behavior: contain; padding: 28px; border-radius: 18px; background: var(--dsw-alias-bg-layer-2, #26262a); color: var(--dsw-alias-label-primary, #fff); text-align: center; box-shadow: 0 12px 40px #0008; overflow-wrap: anywhere; }
 .rdsh-update-dialog h2 { font-size: 19px; line-height: 1.4; }
 .rdsh-update-dialog a { color: var(--dsw-alias-link, #8ca6ff); }
 .rdsh-update-check { width: 64px; height: 64px; color: var(--dsw-alias-label-positive, #59c88d); }

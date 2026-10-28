@@ -43,6 +43,10 @@ test("the update action has a labelled, touch-sized control", () => {
 	assert.match(CLIENT, /\.rdsh-update-launch \{[^}]*min-height: 48px/);
 });
 
+test("the update dialog keeps its actions reachable on short screens", () => {
+	assert.match(CLIENT, /\.rdsh-update-dialog \{[^}]*max-height: 100%; overflow-y: auto;/);
+});
+
 test("hiding follows the device mode, not the window width", () => {
 	const body = functionBody("applyHideList");
 	assert.match(body, /const hideOnThisDevice = !disabled && phone\(\);/, "the hide decision ignores the mode");

@@ -2022,11 +2022,63 @@ test("mobile-send carries the page origin so the host can route the turn back", 
 	});
 	booted.sandbox.location = { origin: "https://app.example:8446", href: "https://app.example:8446/" };
 	booted.sandbox.window.location = booted.sandbox.location;
-	booted.sandbox.__RDSH_MOBILE_UX__.markMobileSession("session-1");
+	booted.sandbox.__RDSH_MOBILE_UX__.markMobileSession("session-1", "request-1");
 	const call = calls.find((entry) => entry.url.endsWith("api/dsh-mobile-maxxing/push/mobile-send"));
 	assert.ok(call, "mobile-send was not called");
-	assert.deepEqual(JSON.parse(call.body), { sessionId: "session-1", origin: "https://app.example:8446" });
+	assert.deepEqual(JSON.parse(call.body), { sessionId: "session-1", requestId: "request-1", origin: "https://app.example:8446" });
 	booted.disposeAll();
+});
+
+test("conversation submits only after the matching notification marker resolves", async () => {
+	const calls = [];
+	let finishMark;
+	const booted = bootClient({ mode: "mobile", narrow: true, fetchImpl(url, options) {
+		if (!String(url).endsWith("/push/mobile-send")) return Promise.resolve(stub());
+		calls.push(JSON.parse(options.body));
+		return new Promise((resolve) => { finishMark = resolve; });
+	} });
+	booted.sandbox.location = { origin: "https://app.example", href: "https://app.example/" };
+	let promptCalls = 0;
+	class Session {
+		#value = 42;
+		get sessionId() { return "s1"; }
+		beginSubmission() { assert.equal(this.#value, 42); return { requestId: "rpc-1" }; }
+		prompt(_content, _mode, _signal, id) { assert.equal(this.#value, 42); promptCalls++; return Promise.resolve(id); }
+	}
+	const conversation = { async sendSession(session) { const submission = session.beginSubmission(); return session.prompt([], "queue", undefined, submission.requestId); } };
+	const original = conversation.sendSession;
+	const dispose = booted.sandbox.__RDSH_MOBILE_UX__.installConversationMarking(conversation);
+	const submitted = conversation.sendSession(new Session());
+	assert.equal(promptCalls, 0);
+	assert.deepEqual(calls, [{ sessionId: "s1", requestId: "rpc-1", origin: "https://app.example" }]);
+	finishMark({ ok: true });
+	assert.equal(await submitted, "rpc-1");
+	assert.equal(promptCalls, 1);
+	dispose();
+	assert.equal(conversation.sendSession, original);
+	booted.disposeAll();
+});
+
+test("a failed marker never blocks the user's prompt", async () => {
+	const booted = bootClient({ mode: "mobile", narrow: true, fetchImpl(url) {
+		return String(url).endsWith("/push/mobile-send") ? Promise.reject(new Error("offline")) : Promise.resolve(stub());
+	} });
+	const conversation = { sendSession: (session) => session.prompt([], "queue", undefined, "rpc-2") };
+	const dispose = booted.sandbox.__RDSH_MOBILE_UX__.installConversationMarking(conversation);
+	const result = await conversation.sendSession({ sessionId: "s1", prompt: () => Promise.resolve("sent") });
+	assert.equal(result, "sent");
+	dispose(); booted.disposeAll();
+});
+
+test("a timed-out marker still allows prompt submission", async () => {
+	const booted = bootClient({ mode: "mobile", narrow: true, schedule: (fn) => setTimeout(fn, 0), fetchImpl(url, options) {
+		if (!String(url).endsWith("/push/mobile-send")) return Promise.resolve(stub());
+		return new Promise((_resolve, reject) => options.signal.addEventListener("abort", () => reject(new Error("timeout")), { once: true }));
+	} });
+	const conversation = { sendSession: (session) => session.prompt([], "queue", undefined, "rpc-timeout") };
+	const dispose = booted.sandbox.__RDSH_MOBILE_UX__.installConversationMarking(conversation);
+	assert.equal(await conversation.sendSession({ sessionId: "s1", prompt: () => Promise.resolve("sent") }), "sent");
+	dispose(); booted.disposeAll();
 });
 
 /**
@@ -3981,12 +4033,18 @@ function localNoticeHarness({
 	pushTest = "ok",
 	notification = null,
 	storage = null,
+	recoverEndpoint = "",
+	subscribeStatuses = [],
+	subscribeGate = null,
 } = {}) {
 	const rendered = [];
 	const roots = [];
 	const ackPosts = [];
 	const testPushes = [];
 	const subscribePosts = [];
+	const windowHandlers = new Map();
+	let activeEndpoint = endpoint;
+	let subscribeAttempts = 0;
 	let latestBanner = null;
 	let lastKey = null;
 	let mountedOnce = false;
@@ -4005,7 +4063,16 @@ function localNoticeHarness({
 			getSubscription: async () => {
 				if (subscriptionGate !== null) await subscriptionGate;
 				// A real PushSubscription serializes itself for /subscribe.
-				return endpoint === "" ? null : { endpoint, toJSON: () => ({ endpoint }) };
+				if (activeEndpoint === "") return null;
+				const value = activeEndpoint;
+				return { endpoint: value, toJSON: () => ({ endpoint: value }), unsubscribe: async () => { activeEndpoint = ""; return true; } };
+			},
+			subscribe: async () => {
+				subscribeAttempts++;
+				if (subscribeGate !== null) await subscribeGate;
+				if (recoverEndpoint === "") throw new Error("no recovery endpoint");
+				activeEndpoint = recoverEndpoint;
+				return { endpoint: activeEndpoint, toJSON: () => ({ endpoint: activeEndpoint }), unsubscribe: async () => { activeEndpoint = ""; return true; } };
 			},
 		},
 	};
@@ -4036,17 +4103,22 @@ function localNoticeHarness({
 		},
 		globals: {
 			__RDSH_NOTICE_TEST__: {},
+			atob: (value) => Buffer.from(value, "base64").toString("binary"),
 			location: { origin: "https://app.example:8446", href: "https://app.example:8446/" },
 		},
 		notification,
 		storage,
+		windowAdd: (type, handler) => windowHandlers.set(type, handler),
+		windowRemove: (type, handler) => { if (windowHandlers.get(type) === handler) windowHandlers.delete(type); },
 		fetchImpl: async (url, options) => {
 			const target = String(url);
 			if (target.endsWith("/push/ack")) ackPosts.push({ url: target, options });
 			if (target.endsWith("/push/subscribe")) {
 				subscribePosts.push({ url: target, options });
-				return { status: 200, ok: true, json: async () => ({ ok: true, count: 1 }) };
+				const status = subscribeStatuses.shift() ?? 200;
+				return { status, ok: status >= 200 && status < 300, json: async () => ({ ok: status === 200, count: 1 }) };
 			}
+			if (target.endsWith("/push/vapid")) return { status: 200, ok: true, json: async () => ({ publicKey: "AQ" }) };
 			if (target.endsWith("/push/config")) {
 				// The real route answers with the host's copy, which carries
 				// onlyMobileTurns. An absent key is the host default (true).
@@ -4109,6 +4181,9 @@ function localNoticeHarness({
 		ackPosts,
 		testPushes,
 		subscribePosts,
+		windowHandlers,
+		get subscribeAttempts() { return subscribeAttempts; },
+		get activeEndpoint() { return activeEndpoint; },
 		api,
 		// A turn this browser sent is the one the host will route back to it.
 		markSend: (sessionId) => api.markMobileSession(sessionId),
@@ -4521,6 +4596,87 @@ test("a launch without permission or a subscription registers nothing", async ()
 	await settleNoticeWork();
 	assert.deepEqual(noSubscription.subscribePosts, [], "a launch with no subscription posted one");
 	noSubscription.booted.disposeAll();
+});
+
+test("an opted-in missing subscription is recreated and its old endpoint retired", async () => {
+	const old = "https://web.push.apple.com/old", replacement = "https://web.push.apple.com/new";
+	const h = localNoticeHarness({ endpoint: "", recoverEndpoint: replacement, notification: { permission: "granted" }, storage: { "rdsh-mobile-ux:push-enabled": "true", "rdsh-mobile-ux:push-endpoint": old } });
+	await h.api.syncPushSubscription();
+	assert.equal(h.subscribeAttempts, 1);
+	assert.equal(h.subscribePosts.length, 1);
+	assert.equal(JSON.parse(h.subscribePosts[0].options.body).previousEndpoint, old);
+	assert.equal(h.booted.sandbox.localStorage.getItem("rdsh-mobile-ux:push-endpoint"), replacement);
+	h.booted.disposeAll();
+	assert.equal(h.windowHandlers.has("online"), false);
+});
+
+test("a failed server registration retries on reconnect", async () => {
+	const replacement = "https://web.push.apple.com/new";
+	const h = localNoticeHarness({ endpoint: "", recoverEndpoint: replacement, notification: { permission: "granted" }, storage: { "rdsh-mobile-ux:push-enabled": "true" }, subscribeStatuses: [503, 200] });
+	await h.api.syncPushSubscription();
+	assert.equal(h.subscribePosts.length, 1);
+	assert.equal(h.booted.sandbox.localStorage.getItem("rdsh-mobile-ux:push-endpoint"), null);
+	h.windowHandlers.get("online")();
+	await h.api.syncPushSubscription();
+	assert.equal(h.subscribePosts.length, 2);
+	assert.equal(h.subscribeAttempts, 1, "the existing browser subscription should be reused");
+	assert.equal(h.booted.sandbox.localStorage.getItem("rdsh-mobile-ux:push-endpoint"), replacement);
+	h.booted.disposeAll();
+});
+
+test("disabled or legacy-unsubscribed browsers are never re-enabled automatically", async () => {
+	for (const enabled of [undefined, "false"]) {
+		const storage = { "rdsh-mobile-ux:push-endpoint": "https://web.push.apple.com/old" };
+		if (enabled !== undefined) storage["rdsh-mobile-ux:push-enabled"] = enabled;
+		const h = localNoticeHarness({ endpoint: "", recoverEndpoint: "https://web.push.apple.com/new", notification: { permission: "granted" }, storage });
+		await h.api.syncPushSubscription();
+		assert.equal(h.subscribeAttempts, 0);
+		assert.equal(h.subscribePosts.length, 0);
+		h.booted.disposeAll();
+	}
+});
+
+test("disabling during a pending re-subscribe leaves notifications disabled", async () => {
+	let release;
+	const gate = new Promise((resolve) => { release = resolve; });
+	const h = localNoticeHarness({ endpoint: "", recoverEndpoint: "https://web.push.apple.com/new", notification: { permission: "granted" }, storage: { "rdsh-mobile-ux:push-enabled": "true" }, subscribeGate: gate });
+	await settleNoticeWork();
+	assert.equal(h.subscribeAttempts, 1);
+	const disabling = h.api.disableNotifications();
+	release();
+	await disabling;
+	assert.equal(h.activeEndpoint, "");
+	assert.equal(h.booted.sandbox.localStorage.getItem("rdsh-mobile-ux:push-enabled"), "false");
+	assert.equal(h.subscribePosts.length, 0);
+	h.booted.disposeAll();
+});
+
+test("disabling while the permission prompt is open does not opt back in", async () => {
+	let resolvePermission;
+	const permission = new Promise((resolve) => { resolvePermission = resolve; });
+	const h = localNoticeHarness({ endpoint: "", recoverEndpoint: "https://web.push.apple.com/new", notification: { permission: "granted", requestPermission: () => permission }, storage: { "rdsh-mobile-ux:push-enabled": "false" } });
+	const enabling = h.api.enableNotifications();
+	await h.api.disableNotifications();
+	resolvePermission("granted");
+	await enabling;
+	assert.equal(h.subscribeAttempts, 0);
+	assert.equal(h.booted.sandbox.localStorage.getItem("rdsh-mobile-ux:push-enabled"), "false");
+	h.booted.disposeAll();
+});
+
+test("disabling waits for an explicit enable in flight and removes its subscription", async () => {
+	let release;
+	const gate = new Promise((resolve) => { release = resolve; });
+	const h = localNoticeHarness({ endpoint: "", recoverEndpoint: "https://web.push.apple.com/new", notification: { permission: "granted", requestPermission: async () => "granted" }, storage: { "rdsh-mobile-ux:push-enabled": "false" }, subscribeGate: gate });
+	const enabling = h.api.enableNotifications();
+	await settleNoticeWork();
+	assert.equal(h.subscribeAttempts, 1);
+	const disabling = h.api.disableNotifications();
+	release();
+	await Promise.all([enabling, disabling]);
+	assert.equal(h.activeEndpoint, "");
+	assert.equal(h.booted.sandbox.localStorage.getItem("rdsh-mobile-ux:push-enabled"), "false");
+	h.booted.disposeAll();
 });
 
 test("a local-only notice still marks the banner for the worker hand-off", async () => {
@@ -5033,6 +5189,49 @@ function enterKey(overrides = {}) {
 	};
 	return event;
 }
+
+test("question listeners detach on field replacement, card removal and plugin disposal", () => {
+	const booted = bootClient({ mode: "mobile", narrow: true });
+	const behavior = booted.sandbox.__RDSH_MOBILE_UX__.questionCard;
+	const eventTarget = () => {
+		const listeners = new Map();
+		return {
+			listeners,
+			addEventListener(type, fn) { if (!listeners.has(type)) listeners.set(type, new Set()); listeners.get(type).add(fn); },
+			removeEventListener(type, fn) { listeners.get(type)?.delete(fn); },
+			emit(type, event) { for (const fn of listeners.get(type) ?? []) fn(event); },
+		};
+	};
+	const field1 = eventTarget(), field2 = eventTarget();
+	let currentField = field1;
+	const submit = {};
+	const card = Object.assign(eventTarget(), {
+		querySelector(selector) {
+			if (selector === "textarea") return currentField;
+			if (selector.includes("_options")) return {};
+			if (selector.includes("_footerActions")) return { querySelectorAll: () => [submit] };
+			return null;
+		},
+		removeAttribute() {}, setAttribute() {}, contains() { return false; },
+	});
+	behavior.install(card);
+	behavior.install(card);
+	assert.equal(field1.listeners.get("keydown").size, 1);
+	const first = enterKey(); field1.emit("keydown", first);
+	assert.equal(first.stopped, 1);
+	currentField = field2; behavior.install(card);
+	assert.equal(field1.listeners.get("keydown").size, 0);
+	assert.equal(field2.listeners.get("keydown").size, 1);
+	behavior.clear(card);
+	assert.equal(field2.listeners.get("keydown").size, 0);
+	assert.equal(card.listeners.get("click").size, 0);
+	behavior.install(card);
+	booted.disposeAll();
+	assert.equal(field2.listeners.get("keydown").size, 0);
+	assert.equal(card.listeners.get("focusin").size, 0);
+	const after = enterKey(); field2.emit("keydown", after);
+	assert.equal(after.stopped, 0, "disposed plugin must not intercept Enter");
+});
 
 test("#26 a question with options needs one selected, a free-text question does not", () => {
 	const booted = bootClient({ mode: "mobile", narrow: true });

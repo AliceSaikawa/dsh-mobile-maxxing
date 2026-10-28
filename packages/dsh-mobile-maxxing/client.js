@@ -11115,6 +11115,50 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       sendSettleTimer = setTimeout(settle, 0);
     }
 
+    /**
+     * Finish the command chip's two-step deletion on mobile browsers.
+     *
+     * The second deletion clears the upstream highlight, but its native edit
+     * leaves the decorator node in place (and the next one only highlights it
+     * again). Remove that same node through its owning Lexical editor instead.
+     * Keydown covers hardware keyboards; beforeinput covers iOS virtual keys
+     * that arrive as "Unidentified". If an upstream build does not expose the
+     * editor internals, leave the event untouched for its stock handler.
+     */
+    function deleteSelectedCommandChip(event) {
+      if (!phone()) return false;
+      const isBackward = event.type === "beforeinput"
+        ? event.inputType === "deleteContentBackward"
+        : event.key === "Backspace";
+      const isForward = event.type === "beforeinput"
+        ? event.inputType === "deleteContentForward"
+        : event.key === "Delete";
+      if (!isBackward && !isForward) return false;
+      const target = event.target;
+      if (target === null || target === undefined || target.closest === undefined) return false;
+      const root = target.closest("[data-composer-input]");
+      if (root === null || !root.hasAttribute("data-composer-chip-selected")) return false;
+      const chip = root.querySelector("[data-composer-command][data-selected]");
+      if (chip === null) return false;
+      const editor = root.__lexicalEditor;
+      const keyName = Object.getOwnPropertyNames(chip).find((name) => name.startsWith("__lexicalKey"));
+      if (editor === null || editor === undefined || typeof editor.update !== "function" || keyName === undefined) return false;
+      const key = chip[keyName];
+      let removed = false;
+      editor.update(() => {
+        const node = editor.getEditorState()?._nodeMap?.get(key);
+        if (node?.getType?.() !== "command-chip") return;
+        node.remove();
+        removed = true;
+      });
+      if (!removed) return false;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      allowFocusElement = root;
+      root.focus({ preventScroll: true });
+      return true;
+    }
+
     function onKeyDown(event) {
       if (event.key === "Tab") {
         allowFocusElement = textBoxOf(event.target);
@@ -15143,6 +15187,8 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         document.addEventListener("touchend", onEdgeSwipeEnd, true);
         document.addEventListener("touchcancel", onEdgeSwipeEnd, true);
         document.addEventListener("keydown", onKeyDown);
+        document.addEventListener("keydown", deleteSelectedCommandChip, true);
+        document.addEventListener("beforeinput", deleteSelectedCommandChip, true);
         document.addEventListener("pointerdown", onFocusPointer, true);
         document.addEventListener("focusin", onFocusInGuard, true);
         if (phone()) {
@@ -15289,6 +15335,8 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             document.removeEventListener("touchend", onEdgeSwipeEnd, true);
             document.removeEventListener("touchcancel", onEdgeSwipeEnd, true);
             document.removeEventListener("keydown", onKeyDown);
+            document.removeEventListener("keydown", deleteSelectedCommandChip, true);
+            document.removeEventListener("beforeinput", deleteSelectedCommandChip, true);
             document.removeEventListener("pointerdown", onFocusPointer, true);
             document.removeEventListener("focusin", onFocusInGuard, true);
             // Added at boot alongside the rest; without these two a re-mount

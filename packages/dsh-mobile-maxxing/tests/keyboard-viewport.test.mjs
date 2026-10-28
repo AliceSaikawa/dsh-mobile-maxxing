@@ -75,6 +75,47 @@ test("only deliberate focus is kept, including slash command editing", () => {
 	assert.doesNotMatch(CLIENT, /allowFocusUntil/);
 });
 
+test("a selected command chip is deleted through its editor for key and virtual-key input", () => {
+	const start = CLIENT.indexOf("    function deleteSelectedCommandChip(event)");
+	const end = CLIENT.indexOf("    function onKeyDown(event)", start);
+	assert.ok(start !== -1 && end > start, "the mobile chip deletion handler is in the bundle");
+	for (const event of [
+		{ type: "keydown", key: "Backspace" },
+		{ type: "beforeinput", inputType: "deleteContentBackward" },
+	]) {
+		let removed = false;
+		let prevented = false;
+		let stopped = false;
+		let focused = false;
+		const node = { getType: () => "command-chip", remove() { removed = true; } };
+		const editor = { update(fn) { fn(); }, getEditorState: () => ({ _nodeMap: new Map([["3", node]]) }) };
+		const chip = { __lexicalKey_test: "3" };
+		const root = {
+			__lexicalEditor: editor,
+			hasAttribute: () => true,
+			querySelector: () => chip,
+			focus: () => { focused = true; },
+		};
+		const sandbox = {
+			phone: () => true,
+			allowFocusElement: null,
+			event: {
+				...event,
+				target: { closest: () => root },
+				preventDefault() { prevented = true; },
+				stopImmediatePropagation() { stopped = true; },
+			},
+		};
+		vm.runInNewContext(CLIENT.slice(start, end) + "\nresult = deleteSelectedCommandChip(event);", sandbox);
+		assert.equal(sandbox.result, true);
+		assert.equal(removed, true);
+		assert.equal(prevented, true);
+		assert.equal(stopped, true);
+		assert.equal(focused, true);
+		assert.equal(sandbox.allowFocusElement, root);
+	}
+});
+
 test("the pin is torn down with the phone hooks", () => {
 	const release = CLIENT.slice(CLIENT.indexOf("    function releaseSafeArea()"), CLIENT.indexOf("    let heightProbe = null;"));
 	assert.match(release, /removeAttribute\("data-rdsh-keyboard"\)/);

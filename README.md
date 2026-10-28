@@ -206,6 +206,7 @@ pnpm は URL 単位でキャッシュします。版なし URL の内容だけ�
 - [Detailed usage (English)](packages/dsh-mobile-maxxing/docs/USAGE.en.md)
 - [本体パッケージの README](packages/dsh-mobile-maxxing/README.md)
 - [開発メモ](CONTRIBUTING.md)
+- [実装の参考元](CONTRIBUTING.md#実装の参考元)
 - [v1.0.0 リリースノート](RELEASE-NOTES-v1.0.0.md)
 
 ## 開発

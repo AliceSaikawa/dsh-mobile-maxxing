@@ -62,13 +62,16 @@ node --test packages/dsh-mobile-maxxing/tests/plugin.test.mjs   # 1ファイル�
 別 tarball として `dist/` に出ます。不完全な間は `REFUSED` と表示して作らないので、英語
 フォールバックの pack を配布しないでください。
 
-## 元になったリポジトリ
+## 実装の参考元
 
-統合前の履歴は以下に残しています。
+このパッケージは次の実装を設計の参考にしています。コードを流用したものではなく、通知は RFC、UI は DSH の構造から独立に実装しています。
 
-- `kuraneko1/DSH-PWA`（アーカイブ済み）— `rdsh-pwa` / `rdsh-mobile-ux`
-- `kuraneko1/rdsh-markdown-cjk`
-- ローカルのみだったもの: `rdsh-session-id-copy`
+- [`hikarioyama/Smart-DSH`](https://github.com/hikarioyama/Smart-DSH) — `dsh-notify-push` の通知設計と、モバイルレイアウトの原案
+- [`jimoto-no-llm/rustdsh`](https://github.com/jimoto-no-llm/rustdsh) — `rdsh-mobile-ui` のモバイルレイアウト実装（移植: lasder-ca）
+- [`cwd514/dsh-sound-notifications`](https://github.com/cwd514/dsh-sound-notifications) — イベント種別ごとの効果音と前面判定の設計
+- [`kuraneko1/rdsh-markdown-cjk`](https://github.com/kuraneko1/rdsh-markdown-cjk) — CJK の自動リンク修正。PC の描画を変えないため独立パッケージとして維持
+- [`web-push`](https://github.com/web-push-libs/web-push) — RFC 8291 / 8292 の解釈確認
+- ローカルのみだった `rdsh-session-id-copy`
 
 `rdsh-open-with` はデスクトップ向けの右クリック操作なので外しました。
 `rdsh-answer-guard` と `dsh-esc-stop` も含めていません。前者は上流修正で不要になる

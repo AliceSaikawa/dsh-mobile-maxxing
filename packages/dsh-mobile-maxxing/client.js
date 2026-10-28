@@ -14517,6 +14517,12 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   [data-rdsh-question-card] > [class*="_strip"] { padding: 10px 12px !important; }
   [data-rdsh-question-card] > [class*="_summary"] { padding: 12px 16px !important; }
   [data-rdsh-question-card] > [class*="_footer"] { padding: 8px 10px 10px !important; }
+  [data-chat-flow-kind="assistant-step"] [class*="_root"]:has([class*="_leading"]) { flex-wrap: wrap; }
+  [data-chat-flow-kind="assistant-step"] [class$="_summary"],
+  [data-chat-flow-kind="assistant-step"] [class*="_heading"] [class$="_text"] {
+    flex: 1 0 100%; min-width: 0;
+    white-space: normal; overflow-wrap: break-word; word-break: normal;
+  }
   [data-rdsh-question-card] [class*="_options"] { padding: 4px 8px !important; }
   [data-rdsh-question-card] [class*="_options"] > button[class*="_option"],
   [data-rdsh-question-card] [class*="_options"] > [class*="_customRow"] { padding: 8px !important; }

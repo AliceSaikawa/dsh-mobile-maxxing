@@ -347,7 +347,7 @@ export const RELEASE_URL = "https://github.com/kuraneko1/dsh-mobile-maxxing/rele
 const RELEASE_API = "https://api.github.com/repos/kuraneko1/dsh-mobile-maxxing/releases/latest";
 
 export function compareReleaseVersions(current, latest) {
-  const parse = (value) => /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(value)?.slice(1).map(Number);
+  const parse = (value) => /^v?(0|[1-9]\d*)\.(\d+)(?:\.(\d+))?$/.exec(value)?.slice(1).map((part) => Number(part ?? 0));
   const a = parse(current), b = parse(latest);
   if (!a || !b || [...a, ...b].some((part) => !Number.isSafeInteger(part))) throw new Error("Unsupported release version");
   for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] < b[i] ? -1 : 1;
@@ -358,7 +358,7 @@ export async function fetchLatestRelease(fetcher = fetch) {
   const response = await fetcher(RELEASE_API, { headers: { accept: "application/vnd.github+json" }, cache: "no-store", signal: AbortSignal.timeout(15000) });
   if (!response.ok) throw new Error("GitHub HTTP " + response.status);
   const data = await response.json();
-  if (data.draft || data.prerelease || typeof data.tag_name !== "string" || !/^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(data.tag_name)) throw new Error("Invalid release tag");
+  if (data.draft || data.prerelease || typeof data.tag_name !== "string" || !/^v?(0|[1-9]\d*)\.(\d+)(?:\.(\d+))?$/.test(data.tag_name)) throw new Error("Invalid release tag");
   return data.tag_name;
 }
 

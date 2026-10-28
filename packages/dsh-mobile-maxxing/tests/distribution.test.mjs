@@ -13,6 +13,7 @@ import { readFile, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { compareReleaseVersions } from "../index.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const packageDir = join(here, "..");
@@ -82,7 +83,7 @@ test("the nested manifest and the README install URLs match the root version", a
 	)];
 	assert.ok(installs.length >= 1, "the implementation README has to show a versioned install URL");
 	for (const [, version, file] of installs) {
-		assert.equal(version, manifest.version, `the download path says v${version}`);
+		assert.equal(compareReleaseVersions(manifest.version, `v${version}`), 0, `the download path says v${version}`);
 		assert.equal(file, `${manifest.name}-${manifest.version}.tgz`, `the download file says ${file}`);
 	}
 });

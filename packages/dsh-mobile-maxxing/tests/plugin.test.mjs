@@ -653,8 +653,11 @@ test("release check validates GitHub response and compares numeric versions", as
   assert.equal(compareReleaseVersions("0.6.1", "v0.10.0"), -1);
   assert.equal(compareReleaseVersions("0.6.1", "v0.6.1"), 0);
   assert.equal(compareReleaseVersions("0.7.0", "v0.6.1"), 1);
+  assert.equal(compareReleaseVersions("1.0.0", "v1.00"), 0);
+  assert.equal(compareReleaseVersions("1.0.0", "v1.01"), -1);
   assert.throws(() => compareReleaseVersions("unknown", "v0.6.1"));
   assert.equal(await fetchLatestRelease(async () => ({ ok: true, json: async () => ({ tag_name: "v0.8.0" }) })), "v0.8.0");
+  assert.equal(await fetchLatestRelease(async () => ({ ok: true, json: async () => ({ tag_name: "v1.00" }) })), "v1.00");
   await assert.rejects(fetchLatestRelease(async () => ({ ok: false, status: 503 })), /503/);
   await assert.rejects(fetchLatestRelease(async () => ({ ok: true, json: async () => ({ tag_name: "../../evil" }) })), /Invalid release/);
   await assert.rejects(fetchLatestRelease(async () => ({ ok: true, json: async () => ({ tag_name: "v0.8.0", prerelease: true }) })), /Invalid release/);
@@ -673,7 +676,10 @@ test("confirmed update installs only the checked release in the active profile",
   const output = join(dir, "args");
   await writeFile(join(dir, "dsh"), '#!/bin/sh\nprintf "%s\\n" "$@" > "$TEST_UPDATE_ARGS"\n', { mode: 0o755 });
   const originalFetch = globalThis.fetch, oldPath = process.env.PATH, oldOutput = process.env.TEST_UPDATE_ARGS;
-  globalThis.fetch = async () => ({ ok: true, json: async () => ({ tag_name: "v0.8.0" }) });
+  const rootManifest = JSON.parse(await readFile(new URL("../../../package.json", import.meta.url), "utf8"));
+  const [major, minor, patch] = rootManifest.version.split(".").map(Number);
+  const nextTag = `v${major}.${minor}.${patch + 1}`;
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({ tag_name: nextTag }) });
   process.env.PATH = dir + ":" + oldPath;
   process.env.TEST_UPDATE_ARGS = output;
   try {
@@ -681,14 +687,13 @@ test("confirmed update installs only the checked release in the active profile",
     const check = await call(routes.get("/dsh-mobile-maxxing/plugin-version"));
     assert.equal(check.status, 200);
     assert.equal(JSON.parse(check.text).available, true);
-    const rootManifest = JSON.parse(await readFile(new URL("../../../package.json", import.meta.url), "utf8"));
     assert.equal(JSON.parse(check.text).current, rootManifest.version);
     assert.equal((await call(routes.get("/dsh-mobile-maxxing/update-plugins"), "POST", undefined, { "x-dsh-release": "v9.9.9" })).status, 409);
-    const result = await call(routes.get("/dsh-mobile-maxxing/update-plugins"), "POST", undefined, { "x-dsh-release": "v0.8.0" });
+    const result = await call(routes.get("/dsh-mobile-maxxing/update-plugins"), "POST", undefined, { "x-dsh-release": nextTag });
     assert.equal(result.status, 200);
-    assert.deepEqual(JSON.parse(result.text), { ok: true, version: "v0.8.0" });
-    assert.deepEqual((await readFile(output, "utf8")).trim().split("\n"), ["plugin", "--profile", "test", "add", "github:kuraneko1/dsh-mobile-maxxing#v0.8.0"]);
-    assert.equal((await call(routes.get("/dsh-mobile-maxxing/update-plugins"), "POST", undefined, { "x-dsh-release": "v0.8.0" })).status, 409);
+    assert.deepEqual(JSON.parse(result.text), { ok: true, version: nextTag });
+    assert.deepEqual((await readFile(output, "utf8")).trim().split("\n"), ["plugin", "--profile", "test", "add", `github:kuraneko1/dsh-mobile-maxxing#${nextTag}`]);
+    assert.equal((await call(routes.get("/dsh-mobile-maxxing/update-plugins"), "POST", undefined, { "x-dsh-release": nextTag })).status, 409);
   } finally {
     globalThis.fetch = originalFetch;
     process.env.PATH = oldPath;

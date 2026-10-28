@@ -69,8 +69,10 @@ test("landscape hides the session title bar but keeps the panel corner", () => {
 	assert.match(CLIENT, /\[data-window-drag\] \[class\*="_headerCorner"\] \{[\s\S]*?position: fixed !important;/);
 });
 
-test("the composer keeps focus when a slash command is edited", () => {
-	assert.match(CLIENT, /if \(field.matches\("\[data-composer-input\]"\)\) return;/);
+test("only deliberate focus is kept, including slash command editing", () => {
+	assert.match(CLIENT, /if \(field === allowFocusElement\) return;/);
+	assert.match(CLIENT, /if \(event.key === "Tab"\) \{\s*allowFocusElement = textBoxOf\(event.target\);/);
+	assert.doesNotMatch(CLIENT, /allowFocusUntil/);
 });
 
 test("the pin is torn down with the phone hooks", () => {

@@ -11020,7 +11020,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     // Focus: opening a session must not steal the composer
     // ---------------------------------------------------------------------
     let allowFocusElement = null;
-    let allowFocusUntil = 0;
 
     function textBoxOf(element) {
       if (!(element instanceof Element)) return null;
@@ -11038,7 +11037,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (!phone()) return;
       const field = textBoxOf(event.target);
       allowFocusElement = field;
-      allowFocusUntil = field === null ? 0 : Date.now() + 1500;
     }
 
     function onModelFocusOut(event) {
@@ -11062,14 +11060,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (!phone()) return;
       const field = textBoxOf(event.target);
       if (field === null) return;
-      // Lexical re-focuses the composer after turning a slash command into a
-      // chip. Blurring it here makes Backspace/Delete stop working entirely.
-      if (field.matches("[data-composer-input]")) return;
-      // Popovers (the model picker's search, dialogs, etc.) focus their own
-      // inputs programmatically. Blurring those closes the popover because the
-      // menu's onBlur sees no related focus target.
-      if (field.closest('[role="menu"], [role="dialog"], [role="listbox"], [class*="_menu"], .xterm, [class*="xterm"]') !== null) return;
-      if (field === allowFocusElement && Date.now() <= allowFocusUntil) return;
+      // Only a field deliberately chosen by pointer or Tab may keep focus.
+      // App/session opening and programmatic refocusing do not open a keyboard.
+      if (field === allowFocusElement) return;
       // Deferred: Safari/the app re-focuses synchronously from its onFocus
       // handler, so an immediate blur() recurses until the stack overflows.
       setTimeout(() => {
@@ -11123,6 +11116,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     function onKeyDown(event) {
+      if (event.key === "Tab") {
+        allowFocusElement = textBoxOf(event.target);
+        return;
+      }
       if (event.key === "Escape") {
         document.querySelector(".rdsh-mux-titlepop")?.remove();
         closeDetailPopover();
@@ -13068,6 +13065,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const phone = store.phone;
       const [speed, setSpeed] = useState(null);
       useEffect(() => {
+        allowFocusElement = null;
         currentSessionId = typeof sessionId === "string" && sessionId !== "" ? sessionId : null;
         return () => {
           if (currentSessionId === sessionId) currentSessionId = null;

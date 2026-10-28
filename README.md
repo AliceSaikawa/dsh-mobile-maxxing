@@ -22,13 +22,11 @@ dsh plugin --profile web add https://github.com/kuraneko1/dsh-mobile-maxxing
 ### 日本語 UI を追加する場合（任意）
 
 日本語の共有 UI は別パッケージ `dsh-locale-ja` が唯一の所有者です。モバイル本体の
-tarball には含まれず、依存にも bundle にも自動で入りません。翻訳が 2906/2906・
-fallback 0 になった tarball だけを、リポジトリで作ってローカルから入れます
-（未公開のため release URL はありません）。
+tarball には含まれず、依存にも bundle にも自動で入りません。現行DSH向けの
+翻訳は 2915/2915、英語フォールバックは 0 です。独立したリポジトリから導入できます。
 
 ```sh
-node scripts/pack-all.mjs
-dsh plugin --profile web add ./dist/dsh-locale-ja-0.1.0.tgz
+dsh plugin --profile web add github:kuraneko1/dsh-locale-ja
 # DSH を再起動
 ```
 
@@ -56,7 +54,7 @@ curl -fsSL https://raw.githubusercontent.com/kuraneko1/dsh-mobile-maxxing/main/s
 | チャット表示（この端末のみ） | 作業の詳細・完了ターンの折りたたみ・実行中の Enter・性能表示を、この端末だけ上書き（共有設定は変更しない） |
 | モバイル操作の細部 | ターミナルだけダーク、上端スクロールで過去ログを自動読み込み、Trajectory タブの非表示、右パネルの見出し、ファイル検索のクリア、モデルメニューのセーフエリア、左端スワイプで戻る |
 | CJK 表示の修正（任意） | 別パッケージ `rdsh-markdown-cjk` を入れた場合のみ。このパッケージ本体は PC 側を変えないため、Markdown レンダラを書き換えません |
-| 日本語 UI（任意） | 別パッケージ `dsh-locale-ja` をローカルの tarball から入れた場合のみ。モバイル本体には含まれず、自動で有効になりません |
+| 日本語 UI（任意） | 別パッケージ `dsh-locale-ja` を個別に導入した場合のみ。モバイル本体には含まれず、自動で有効になりません |
 
 ## もっと詳しく
 
@@ -122,13 +120,12 @@ push library are needed.
 ### Optional Japanese UI
 
 The separate `dsh-locale-ja` package is the only owner of the shared Japanese UI. It is
-not in the mobile tarball, not a dependency and not auto-enabled. Install it only from a
-tarball whose catalog is complete (2906/2906, zero English fallback), built locally
-(there is no release URL while the package is unreleased):
+not in the mobile tarball, not a dependency and not auto-enabled. Install it from
+the separate GitHub repository. The current catalog covers 2915/2915 keys with
+zero English fallbacks:
 
 ```sh
-node scripts/pack-all.mjs
-dsh plugin --profile web add ./dist/dsh-locale-ja-0.1.0.tgz
+dsh plugin --profile web add github:kuraneko1/dsh-locale-ja
 # then restart DSH
 ```
 

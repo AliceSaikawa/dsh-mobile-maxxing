@@ -9,10 +9,10 @@ copyright notices above the permission notice and disclaimer.
 English snapshot
 ----------------
 locale/upstream.json and locale/namespaces/en/*.json reproduce the English
-locale dictionaries shipped in DeepSeek Harness 0.2.1-rc.2. They were extracted
+locale dictionaries shipped in DeepSeek Harness 0.2.1-rc.3. They were extracted
 unchanged from the @deepseek-ai/* client packages recorded as owners and
 sources in locale/upstream.json, including @deepseek-ai/dsh-client-locale
-0.2.1-rc.2. No English value was authored or reworded here.
+0.2.1-rc.3. No English value was authored or reworded here.
 
 Japanese translations
 ---------------------

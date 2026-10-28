@@ -4,7 +4,7 @@
  * The English snapshot (stage 1 of #80) is the source of keys and English
  * values. The Japanese source files hold only reviewed translations; every
  * key absent from them is generated as a development-only English fallback so
- * the package can register a complete dictionary for all 64 namespaces
+ * the package can register a complete dictionary for all 65 namespaces
  * without claiming a translation that does not exist.
  *
  * Nothing in this module writes the English snapshot. The only writes are the
@@ -19,8 +19,8 @@ import { fileURLToPath } from 'node:url';
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const DEFAULT_PACKAGE_DIR = path.join(REPO_ROOT, 'packages', 'dsh-locale-ja');
 export const LANGUAGE = Object.freeze({ id: 'ja', label: '日本語', fallback: 'en' });
-export const EXPECTED_NAMESPACES = 64;
-export const EXPECTED_KEYS = 2906;
+export const EXPECTED_NAMESPACES = 65;
+export const EXPECTED_KEYS = 2915;
 export const BATCH_MIN = 40;
 export const BATCH_MAX = 50;
 export const STATUS_SCHEMA = 1;
@@ -545,6 +545,7 @@ export function renderManifest(meta, upstream) {
 		'README.md',
 		'LICENSE',
 		'NOTICE',
+		'cordis.patch.yml',
 	];
 	const manifest = {
 		name: meta.name,
@@ -571,6 +572,7 @@ export function renderManifest(meta, upstream) {
 				immediately: true,
 				inject: ['@deepseek-ai/dsh-client-locale'],
 			},
+			bundle: { patch: './cordis.patch.yml' },
 		},
 	};
 	if (meta.author !== undefined) manifest.author = meta.author;

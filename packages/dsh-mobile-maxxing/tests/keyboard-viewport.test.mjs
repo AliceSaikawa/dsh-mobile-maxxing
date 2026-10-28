@@ -69,7 +69,7 @@ test("only a landscape phone compacts the conversation header without overlappin
 	assert.match(landscape, /header\[data-window-drag\]:has\(\[data-conversation-header-leading\]\) \{ height: 0 !important;/);
 	assert.match(landscape, /header\[data-window-drag\]:has\(\[data-conversation-header-leading\]\) \[class\*="_titleRow"\] \{ display: none !important; \}/);
 	assert.match(landscape, /header\[data-window-drag\]:has\(\[data-conversation-header-leading\]\) \[class\*="_headerCorner"\] \{[\s\S]*?position: fixed !important;/);
-	assert.match(landscape, /\[class\*="_tabs"\]:has\(> \[data-conversation-tabs\]\) \{\s*box-sizing: border-box; padding-left: 48px !important;/);
+	assert.match(landscape, /\[class\*="_tabs"\]:has\(> \[data-conversation-tabs\]\) \{\s*box-sizing: border-box; padding-left: 64px !important;/);
 	assert.doesNotMatch(landscape, /^    \[data-window-drag\]/m, "the right panel's dock strip must not be selected");
 });
 
@@ -77,6 +77,39 @@ test("only deliberate focus is kept, including slash command editing", () => {
 	assert.match(CLIENT, /if \(field === allowFocusElement\) return;/);
 	assert.match(CLIENT, /if \(event.key === "Tab"\) \{\s*allowFocusElement = textBoxOf\(event.target\);/);
 	assert.doesNotMatch(CLIENT, /allowFocusUntil/);
+});
+
+test("terminal surface taps authorize the helper textarea without allowing automatic focus", () => {
+	const start = CLIENT.indexOf("    let allowFocusElement = null;");
+	const end = CLIENT.indexOf("    // Keyboard: a sent message", start);
+	assert.ok(start >= 0 && end > start);
+	let blurred = 0;
+	let queued = [];
+	class Element {
+		closest(selector) {
+			if (selector === ".xterm") return this.terminal ?? null;
+			if (selector.startsWith("input, textarea")) return this.field ?? null;
+			return null;
+		}
+	}
+	const input = new Element();
+	input.tagName = "TEXTAREA";
+	input.blur = () => { blurred++; };
+	const terminal = { querySelector: () => input };
+	const screen = new Element();
+	screen.terminal = terminal;
+	const sandbox = { Element, phone: () => true, document: { activeElement: input }, setTimeout: fn => queued.push(fn) };
+	vm.runInNewContext(CLIENT.slice(start, end) + "\nthis.guard = onFocusInGuard; this.pointer = onFocusPointer;", sandbox);
+	sandbox.guard({ target: Object.assign(input, { field: input }) });
+	queued.splice(0).forEach(fn => fn());
+	assert.equal(blurred, 1, "automatic focus must still be rejected");
+	sandbox.guard({ target: input });
+	sandbox.pointer({ target: screen });
+	queued.splice(0).forEach(fn => fn());
+	assert.equal(blurred, 1, "a pending blur must not cancel an intentional terminal tap");
+	sandbox.guard({ target: input });
+	queued.splice(0).forEach(fn => fn());
+	assert.equal(blurred, 1, "terminal focus remains authorized");
 });
 
 test("a selected command chip is deleted through its editor for key and virtual-key input", () => {

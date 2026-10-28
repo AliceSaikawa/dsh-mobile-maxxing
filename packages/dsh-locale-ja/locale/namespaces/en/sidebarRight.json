@@ -31,6 +31,7 @@
   "dock.splitPane": "Split",
   "dock.splitPaneDisabled": "Two panes is the limit",
   "dock.splitPaneNarrow": "Not enough width to split, widen the sidebar",
+  "tab.guide.more": "More tools",
   "tab.guide.title": "Start",
   "tab.unavailable": "Nothing here can view this kind of content yet."
 }

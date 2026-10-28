@@ -43,15 +43,15 @@ test('committed English snapshot reproduces from the installed runtime', (t) => 
 		t.skip('installed DSH ' + snapshot.upstream.dsh.version + ' differs from snapshot ' + committedUpstream.dsh.version + '; re-run the extractor');
 		return;
 	}
-	assert.equal(snapshot.upstream.totals.namespaces, 64, 'rc.2 must expose exactly 64 locale namespaces');
-	assert.equal(snapshot.upstream.totals.keys, 2906, 'rc.2 must expose exactly 2906 English keys');
-	assert.equal(snapshot.upstream.totals.locales.en, 2906);
-	assert.equal(snapshot.upstream.totals.locales.zh, 2906);
+	assert.equal(snapshot.upstream.totals.namespaces, 65, 'the current snapshot must expose exactly 65 locale namespaces');
+	assert.equal(snapshot.upstream.totals.keys, 2915, 'the current snapshot must expose exactly 2915 English keys');
+	assert.equal(snapshot.upstream.totals.locales.en, 2915);
+	assert.equal(snapshot.upstream.totals.locales.zh, 2915);
 	assert.deepEqual(snapshot.upstream, committedUpstream, 'locale/upstream.json must match a fresh extraction');
 	assert.deepEqual(checkSnapshot(snapshot, snapshotDir), [], 'committed English files must be byte-identical to a fresh extraction');
-	assert.equal(fs.readdirSync(englishDir).filter((file) => file.endsWith('.json')).length, 64);
-	assert.equal(Object.keys(committedUpstream.namespaces).length, 64);
-	assert.equal(Object.values(committedUpstream.namespaces).reduce((sum, entry) => sum + entry.keyCounts.en, 0), 2906);
+	assert.equal(fs.readdirSync(englishDir).filter((file) => file.endsWith('.json')).length, 65);
+	assert.equal(Object.keys(committedUpstream.namespaces).length, 65);
+	assert.equal(Object.values(committedUpstream.namespaces).reduce((sum, entry) => sum + entry.keyCounts.en, 0), 2915);
 	for (const [namespace, entry] of Object.entries(committedUpstream.namespaces)) {
 		assert.equal(entry.owners.length, 1, namespace + ' must name its owning package');
 		assert.equal(entry.sources.length >= 1, true, namespace + ' must record at least one source');
@@ -83,7 +83,7 @@ test('upstream English and Chinese key sets and placeholders agree', (t) => {
 			);
 		}
 	}
-	assert.equal(checked, 2906);
+	assert.equal(checked, 2915);
 });
 
 test('extractor follows spreads, templates, joins, comments, multi-namespace files and 3-argument registers', async () => {

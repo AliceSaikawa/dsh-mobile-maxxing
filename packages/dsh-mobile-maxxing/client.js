@@ -9466,10 +9466,13 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         }, LONG_PRESS_MS);
         return;
       }
-      const terminal = event.target.closest && event.target.closest(".xterm, [class*='xterm']");
-      if (terminal !== null) {
-        const input = terminal.querySelector("textarea.xterm-helper-textarea, textarea");
-        if (input !== null) input.focus({ preventScroll: true });
+      const terminal = event.target.closest?.(".xterm");
+      if (terminal) {
+        const input = terminal.querySelector("textarea.xterm-helper-textarea");
+        if (input) {
+          allowFocusElement = input;
+          input.focus({ preventScroll: true });
+        }
       }
       const send = event.target.closest && event.target.closest('[data-rdsh-composer-root] [class*="primary"]');
       if (send !== null && send !== undefined && send.disabled !== true && !STOP_PROBE.test(send.getAttribute("aria-label") || "")) {
@@ -10181,6 +10184,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const textarea = terminalTextarea(section);
       if (textarea === null) return null;
       if (typeof textarea.focus === "function") {
+        allowFocusElement = textarea;
         try {
           textarea.focus({ preventScroll: true });
         } catch (error) {
@@ -10352,7 +10356,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       let lastUserInteraction = 0;
       const onUserInteract = () => { lastUserInteraction = Date.now(); };
       const onFocusIn = (event) => {
-        if (Date.now() - lastUserInteraction > 500) {
+        if (event.target !== allowFocusElement && Date.now() - lastUserInteraction > 500) {
           const target = event.target;
           if (target && typeof target.blur === "function") target.blur();
         }
@@ -10920,10 +10924,13 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // xterm's helper textarea is the actual input; a click gesture focusing it
       // asks iOS to show the keyboard.
       if (phone()) {
-        const terminal = target.closest(".xterm, [class*='xterm']");
+        const terminal = target.closest(".xterm");
         if (terminal !== null) {
-          const input = terminal.querySelector("textarea.xterm-helper-textarea, textarea");
-          if (input !== null) input.focus({ preventScroll: true });
+          const input = terminal.querySelector("textarea.xterm-helper-textarea");
+          if (input !== null) {
+            allowFocusElement = input;
+            input.focus({ preventScroll: true });
+          }
         }
       }
       // Fallback for keyboard activation of the send/queue button, and the
@@ -11035,7 +11042,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     function onFocusPointer(event) {
       if (!phone()) return;
-      const field = textBoxOf(event.target);
+      const terminal = event.target?.closest?.(".xterm");
+      const field = textBoxOf(event.target) ?? terminal?.querySelector("textarea.xterm-helper-textarea") ?? null;
       allowFocusElement = field;
     }
 
@@ -11066,7 +11074,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // Deferred: Safari/the app re-focuses synchronously from its onFocus
       // handler, so an immediate blur() recurses until the stack overflows.
       setTimeout(() => {
-        if (document.activeElement === field) field.blur();
+        if (document.activeElement === field && field !== allowFocusElement) field.blur();
       }, 0);
     }
 
@@ -13767,7 +13775,7 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
     /* The floating drawer button occupies the first 40px at the same top
        inset. Move the whole tab row, including its overflow button, after it. */
     header[data-window-drag]:has([data-conversation-header-leading]) [class*="_tabs"]:has(> [data-conversation-tabs]) {
-      box-sizing: border-box; padding-left: 48px !important;
+      box-sizing: border-box; padding-left: 64px !important;
     }
   }
   @media (orientation: portrait) and (max-width: 767px) {

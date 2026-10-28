@@ -52,6 +52,8 @@ test('the package is a separate, private web client with its own exports', () =>
 	assert.equal(manifest.description, meta.description, 'the generated description drifted from package-meta.json');
 	assert.equal(manifest.dsh?.client?.platform, 'web', 'the locale pack must be usable on the web');
 	assert.equal(manifest.dsh?.client?.immediately, true);
+	assert.equal(manifest.dsh?.bundle?.patch, './cordis.patch.yml');
+	assert.ok(manifest.files.includes('cordis.patch.yml'));
 	assert.deepEqual(manifest.dsh?.client?.inject, ['@deepseek-ai/dsh-client-locale']);
 	assert.equal(manifest.peerDependencies?.['@deepseek-ai/dsh-client-locale'], upstream.dsh.version);
 	assert.equal(manifest.exports?.['.'], './index.js');
@@ -102,6 +104,7 @@ test('npm pack is a standalone install: no work directory and every export resol
 		'package/package.json',
 		'package/index.js',
 		'package/client.js',
+		'package/cordis.patch.yml',
 		'package/locale/translation-status.json',
 		'package/locale/namespaces/en/common.json',
 		'package/locale/namespaces/ja/common.json',
@@ -218,27 +221,27 @@ test('the installed client is the single ja owner and coexists/disposes cleanly'
 	client.apply(ctx);
 	assert.equal(languages.length, 1);
 	assert.deepEqual(languages[0], { id: 'ja', label: '日本語', fallback: 'en' });
-	assert.equal(registered.size, 65 + 1, '64 dictionaries, one language and the foreign namespace');
-	assert.equal(disposers.length, 65);
+	assert.equal(registered.size, 66 + 1, '65 dictionaries, one language and the foreign namespace');
+	assert.equal(disposers.length, 66);
 	for (const dispose of disposers) dispose();
 	assert.deepEqual([...registered.keys()], ['foreign.namespace'], 'dispose removed a foreign registration');
 	assert.equal(registered.get('foreign.namespace').untouched, 'yes');
 
 	// A second activation (HMR / plugin reload) is clean too.
 	client.apply(ctx);
-	assert.equal(registered.size, 65 + 1);
+	assert.equal(registered.size, 66 + 1);
 	for (const dispose of disposers) dispose();
 	assert.deepEqual([...registered.keys()], ['foreign.namespace'], 'a repeated dispose removed a foreign registration');
 });
 
-test('pack-all publishes the locale only for the complete 64/2906 zero-fallback status', () => {
-	assert.deepEqual(LOCALE_REQUIREMENTS, { namespaces: 64, keys: 2906, fallback: 0 });
+test('pack-all publishes the locale only for the complete 65/2915 zero-fallback status', () => {
+	assert.deepEqual(LOCALE_REQUIREMENTS, { namespaces: 65, keys: 2915, fallback: 0 });
 	const current = JSON.parse(fs.readFileSync(path.join(packageDir, 'locale', 'translation-status.json'), 'utf8'));
 	const complete = {
 		...current,
 		status: 'complete',
 		developmentOnlyEnglishFallback: false,
-		totals: { ...current.totals, translated: 2906, fallback: 0 },
+		totals: { ...current.totals, translated: 2915, fallback: 0 },
 	};
 
 	assert.equal(localePublishDecision(complete).publish, true);
@@ -250,8 +253,8 @@ test('pack-all publishes the locale only for the complete 64/2906 zero-fallback 
 		assert.equal(decision.publish, false, 'an incomplete locale must not be packed');
 		assert.match(decision.reason, /incomplete|fallback/);
 	}
-	assert.equal(localePublishDecision({ ...complete, totals: { ...complete.totals, translated: 2905, fallback: 1 } }).publish, false);
-	assert.equal(localePublishDecision({ ...complete, totals: { ...complete.totals, keys: 2905 } }).publish, false);
+	assert.equal(localePublishDecision({ ...complete, totals: { ...complete.totals, translated: 2914, fallback: 1 } }).publish, false);
+	assert.equal(localePublishDecision({ ...complete, totals: { ...complete.totals, keys: 2914 } }).publish, false);
 	assert.equal(localePublishDecision({ ...complete, locale: 'zh' }).publish, false);
 	assert.equal(localePublishDecision({ ...complete, developmentOnlyEnglishFallback: true }).publish, false);
 	assert.equal(localePublishDecision(null).publish, false);
@@ -280,7 +283,7 @@ test('pack-all refuses an incomplete locale in practice and leaves no locale tar
 test('docs describe the optional local-tarball install and never a fake release asset', () => {
 	const readme = fs.readFileSync(path.join(packageDir, 'README.md'), 'utf8');
 	assert.doesNotMatch(readme, /releases\/download\/[^\s"']*dsh-locale-ja/, 'the unreleased locale must not link a release asset');
-	assert.match(readme, /dsh plugin --profile web add \.\/dist\/dsh-locale-ja-0\.1\.0\.tgz/);
+	assert.match(readme, /dsh plugin --profile web add \.\/dist\/dsh-locale-ja-0\.1\.1\.tgz/);
 	assert.match(readme, /REFUSED/);
 	assert.match(readme, /sole owner|only owner/i, 'the sole-owner migration must be explicit');
 	const rootReadme = fs.readFileSync(path.join(repo, 'README.md'), 'utf8');

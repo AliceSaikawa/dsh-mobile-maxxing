@@ -264,6 +264,8 @@
   "search.paths": "{shown} paths",
   "search.paths.truncated": "Showing {shown} of {total} paths",
   "session.hierarchy": "Session hierarchy",
+  "session.moreViews": "More conversation views",
+  "session.moreViewsCurrent": "More conversation views · {name}",
   "settings.enter.description": "What Enter and the Send button do while the agent is running; Cmd/Ctrl+Enter uses the other behavior",
   "settings.enter.queue": "Queue",
   "settings.enter.steer": "Steer",

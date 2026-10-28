@@ -4,16 +4,16 @@
   "snapshotLocale": "en",
   "dsh": {
     "name": "@deepseek-ai/dsh",
-    "version": "0.2.1-rc.2"
+    "version": "0.2.1-rc.3"
   },
   "chunking": {
     "min": 40,
     "max": 50
   },
   "totals": {
-    "namespaces": 64,
-    "keys": 2906,
-    "batches": 97
+    "namespaces": 65,
+    "keys": 2915,
+    "batches": 98
   },
   "batches": [
     {
@@ -365,7 +365,7 @@
     {
       "id": "conversation-01",
       "namespace": "conversation",
-      "sourceHash": "sha256:e2a3c2c3930545ab4d703d5415e54ca8c2763a9b563319a474e170bd72efc5d5",
+      "sourceHash": "sha256:f77ddfa5e473863acf0fa0cb213a35205be76e14f9ca9629a653d9258a4674e6",
       "keys": [
         "ask.answered",
         "ask.cancelled",
@@ -419,7 +419,7 @@
     {
       "id": "conversation-02",
       "namespace": "conversation",
-      "sourceHash": "sha256:e2a3c2c3930545ab4d703d5415e54ca8c2763a9b563319a474e170bd72efc5d5",
+      "sourceHash": "sha256:f77ddfa5e473863acf0fa0cb213a35205be76e14f9ca9629a653d9258a4674e6",
       "keys": [
         "detail.field.depth",
         "detail.field.diagnostics",
@@ -473,7 +473,7 @@
     {
       "id": "conversation-03",
       "namespace": "conversation",
-      "sourceHash": "sha256:e2a3c2c3930545ab4d703d5415e54ca8c2763a9b563319a474e170bd72efc5d5",
+      "sourceHash": "sha256:f77ddfa5e473863acf0fa0cb213a35205be76e14f9ca9629a653d9258a4674e6",
       "keys": [
         "detail.goal.rounds",
         "detail.hours",
@@ -527,7 +527,7 @@
     {
       "id": "conversation-04",
       "namespace": "conversation",
-      "sourceHash": "sha256:e2a3c2c3930545ab4d703d5415e54ca8c2763a9b563319a474e170bd72efc5d5",
+      "sourceHash": "sha256:f77ddfa5e473863acf0fa0cb213a35205be76e14f9ca9629a653d9258a4674e6",
       "keys": [
         "detail.status.failed",
         "detail.status.idle",
@@ -581,7 +581,7 @@
     {
       "id": "conversation-05",
       "namespace": "conversation",
-      "sourceHash": "sha256:e2a3c2c3930545ab4d703d5415e54ca8c2763a9b563319a474e170bd72efc5d5",
+      "sourceHash": "sha256:f77ddfa5e473863acf0fa0cb213a35205be76e14f9ca9629a653d9258a4674e6",
       "keys": [
         "file.stillUploading",
         "file.uploadFailed",
@@ -635,7 +635,7 @@
     {
       "id": "conversation-06",
       "namespace": "conversation",
-      "sourceHash": "sha256:e2a3c2c3930545ab4d703d5415e54ca8c2763a9b563319a474e170bd72efc5d5",
+      "sourceHash": "sha256:f77ddfa5e473863acf0fa0cb213a35205be76e14f9ca9629a653d9258a4674e6",
       "keys": [
         "queue.remove",
         "queue.removeFailed",
@@ -667,6 +667,8 @@
         "search.paths",
         "search.paths.truncated",
         "session.hierarchy",
+        "session.moreViews",
+        "session.moreViewsCurrent",
         "settings.enter.description",
         "settings.enter.queue",
         "settings.enter.steer",
@@ -681,16 +683,16 @@
         "terminal.exitCode",
         "terminal.expandAria",
         "terminal.expandRest",
-        "terminal.failed",
-        "terminal.noExitCode",
-        "terminal.noOutput"
+        "terminal.failed"
       ]
     },
     {
       "id": "conversation-07",
       "namespace": "conversation",
-      "sourceHash": "sha256:e2a3c2c3930545ab4d703d5415e54ca8c2763a9b563319a474e170bd72efc5d5",
+      "sourceHash": "sha256:f77ddfa5e473863acf0fa0cb213a35205be76e14f9ca9629a653d9258a4674e6",
       "keys": [
+        "terminal.noExitCode",
+        "terminal.noOutput",
         "terminal.running",
         "terminal.sendInput",
         "terminal.session",
@@ -735,16 +737,16 @@
         "tool.title.getGoal",
         "tool.title.getTeamTask",
         "tool.title.glob",
-        "tool.title.grep",
-        "tool.title.hoverSymbol",
-        "tool.title.inspect"
+        "tool.title.grep"
       ]
     },
     {
       "id": "conversation-08",
       "namespace": "conversation",
-      "sourceHash": "sha256:e2a3c2c3930545ab4d703d5415e54ca8c2763a9b563319a474e170bd72efc5d5",
+      "sourceHash": "sha256:f77ddfa5e473863acf0fa0cb213a35205be76e14f9ca9629a653d9258a4674e6",
       "keys": [
+        "tool.title.hoverSymbol",
+        "tool.title.inspect",
         "tool.title.inspectPlugins",
         "tool.title.inspectProviders",
         "tool.title.interruptAgent",
@@ -1020,6 +1022,18 @@
       ]
     },
     {
+      "id": "entryCustomization-01",
+      "namespace": "entryCustomization",
+      "sourceHash": "sha256:d603f08e6fa764fe7ccf256773c468d2106086be3d071188a86bf905d8c980c3",
+      "keys": [
+        "create",
+        "createPrompt.conversation",
+        "createPrompt.rightbar",
+        "createPrompt.sidebar",
+        "install"
+      ]
+    },
+    {
       "id": "feedback-01",
       "namespace": "feedback",
       "sourceHash": "sha256:66c90ba8444a6146228455ffe7d7746c404020d8bfec7a21bb20e240597cff51",
@@ -1157,7 +1171,7 @@
     {
       "id": "open-in-app-01",
       "namespace": "open-in-app",
-      "sourceHash": "sha256:853b0c0f110fa440c7659f907a6a24e51a9d07fd16f8a09dea696162a153c72c",
+      "sourceHash": "sha256:188e94a64aa0b947615d44078a916373626aa78240fd18281de8ffaa7c260809",
       "keys": [
         "app.androidstudio",
         "app.cursor",
@@ -1257,7 +1271,7 @@
     {
       "id": "pluginManager-01",
       "namespace": "pluginManager",
-      "sourceHash": "sha256:4d6a7a50bf96bdea337ad5ce610d233ae1de7dd365b721376560de36e76fedff",
+      "sourceHash": "sha256:31977e874e9f66a443373627e14b5c9b0df3a258a5fe2418833d76d804684459",
       "keys": [
         "addPlugin",
         "backToList",
@@ -1309,7 +1323,7 @@
     {
       "id": "pluginManager-02",
       "namespace": "pluginManager",
-      "sourceHash": "sha256:4d6a7a50bf96bdea337ad5ce610d233ae1de7dd365b721376560de36e76fedff",
+      "sourceHash": "sha256:31977e874e9f66a443373627e14b5c9b0df3a258a5fe2418833d76d804684459",
       "keys": [
         "installChangeRegistry",
         "installChecking",
@@ -1361,7 +1375,7 @@
     {
       "id": "pluginManager-03",
       "namespace": "pluginManager",
-      "sourceHash": "sha256:4d6a7a50bf96bdea337ad5ce610d233ae1de7dd365b721376560de36e76fedff",
+      "sourceHash": "sha256:31977e874e9f66a443373627e14b5c9b0df3a258a5fe2418833d76d804684459",
       "keys": [
         "installLocation",
         "installPackageLabel",
@@ -1413,7 +1427,7 @@
     {
       "id": "pluginManager-04",
       "namespace": "pluginManager",
-      "sourceHash": "sha256:4d6a7a50bf96bdea337ad5ce610d233ae1de7dd365b721376560de36e76fedff",
+      "sourceHash": "sha256:31977e874e9f66a443373627e14b5c9b0df3a258a5fe2418833d76d804684459",
       "keys": [
         "partsCountOff",
         "partsCountRunning",
@@ -1465,7 +1479,7 @@
     {
       "id": "pluginManager-05",
       "namespace": "pluginManager",
-      "sourceHash": "sha256:4d6a7a50bf96bdea337ad5ce610d233ae1de7dd365b721376560de36e76fedff",
+      "sourceHash": "sha256:31977e874e9f66a443373627e14b5c9b0df3a258a5fe2418833d76d804684459",
       "keys": [
         "rowPhaseActive",
         "rowPhaseFailed",
@@ -2057,7 +2071,7 @@
     {
       "id": "settings-01",
       "namespace": "settings",
-      "sourceHash": "sha256:cc57648eb328350607f43aa6271f8ca71963d83d85791368aa99eb8245c9dc2c",
+      "sourceHash": "sha256:817f4c4e57d5fce3b35899fcbfd98a3af889f9b2d1c7414757a4f6fe310717e4",
       "keys": [
         "close",
         "connection.connected",
@@ -2105,7 +2119,7 @@
     {
       "id": "settings.account-01",
       "namespace": "settings.account",
-      "sourceHash": "sha256:67c0f6383687b975165c7e1fc549fbc75ef3f4bc354946b3c7cad52a55f09f20",
+      "sourceHash": "sha256:872cbe57beda00f197fbe84c05c7ea50e55e49ffa2d546fc9a9e9b7bc2eac997",
       "keys": [
         "accountInfo",
         "addApiKey",
@@ -2159,7 +2173,7 @@
     {
       "id": "settings.account-02",
       "namespace": "settings.account",
-      "sourceHash": "sha256:67c0f6383687b975165c7e1fc549fbc75ef3f4bc354946b3c7cad52a55f09f20",
+      "sourceHash": "sha256:872cbe57beda00f197fbe84c05c7ea50e55e49ffa2d546fc9a9e9b7bc2eac997",
       "keys": [
         "onboardingLater",
         "onboardingLoading",
@@ -2232,7 +2246,7 @@
     {
       "id": "settings.agentPreset-01",
       "namespace": "settings.agentPreset",
-      "sourceHash": "sha256:467243167483d8149eb735171387288efc4ee4a42dd616aa88f49aabb9f42f85",
+      "sourceHash": "sha256:5edd759901141cd1accb40f9ba41007fa241a36cc0cacee7cc9a7533efd31d4e",
       "keys": [
         "brokenBadge",
         "builtInGroup",
@@ -2742,9 +2756,10 @@
     {
       "id": "sidebar-01",
       "namespace": "sidebar",
-      "sourceHash": "sha256:8f3c3d7836adaf88f2cdbe9bbaa74781e9f941d8b154c535ddfe60a2150fdd07",
+      "sourceHash": "sha256:e3ebd6bb9a7baa52cde6fe8cb7728dfd02584f20ad0e2ca8263d970c1197ffa8",
       "keys": [
         "panels.label",
+        "panels.more",
         "session.new",
         "session.new.label",
         "toggle.collapse",
@@ -2934,7 +2949,7 @@
     {
       "id": "sidebarRight-01",
       "namespace": "sidebarRight",
-      "sourceHash": "sha256:19a3a692b8f82a8ba5271fc45bcd4b268a06a04a783ebf97d4e1b502995ae3ba",
+      "sourceHash": "sha256:1ab2914479bde6647c3af955ec68b41d00c340b0aa11363da999b3785b0ce158",
       "keys": [
         "chrome.collapse",
         "chrome.collapseAria",
@@ -2968,6 +2983,7 @@
         "dock.splitPane",
         "dock.splitPaneDisabled",
         "dock.splitPaneNarrow",
+        "tab.guide.more",
         "tab.guide.title",
         "tab.unavailable"
       ]
@@ -3464,7 +3480,7 @@
     {
       "id": "workspace-01",
       "namespace": "workspace",
-      "sourceHash": "sha256:75e02fb194691766dadd5c1bce79d5ba83ed91304d4b15b9f45903dd1758fa1a",
+      "sourceHash": "sha256:1730736401657d1377b8a62ba0582bd8ff68e1450b7ba0c8ec5c718fb45d9e09",
       "keys": [
         "actions.archive",
         "actions.newSession",
@@ -3511,7 +3527,7 @@
     {
       "id": "workspace-02",
       "namespace": "workspace",
-      "sourceHash": "sha256:75e02fb194691766dadd5c1bce79d5ba83ed91304d4b15b9f45903dd1758fa1a",
+      "sourceHash": "sha256:1730736401657d1377b8a62ba0582bd8ff68e1450b7ba0c8ec5c718fb45d9e09",
       "keys": [
         "group.ungrouped",
         "groupBy.flat",
@@ -3558,7 +3574,7 @@
     {
       "id": "workspace-03",
       "namespace": "workspace",
-      "sourceHash": "sha256:75e02fb194691766dadd5c1bce79d5ba83ed91304d4b15b9f45903dd1758fa1a",
+      "sourceHash": "sha256:1730736401657d1377b8a62ba0582bd8ff68e1450b7ba0c8ec5c718fb45d9e09",
       "keys": [
         "shortcut.noCompletedTurn",
         "shortcut.noPicker",

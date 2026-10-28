@@ -264,6 +264,8 @@
   "search.paths": "{shown} 件のパス",
   "search.paths.truncated": "{total} 件中 {shown} 件のパスを表示",
   "session.hierarchy": "セッション階層",
+  "session.moreViews": "その他の会話ビュー",
+  "session.moreViewsCurrent": "その他の会話ビュー · {name}",
   "settings.enter.description": "エージェントの実行中に Enter キーと送信ボタンが行う操作。Cmd/Ctrl+Enter はもう一方の動作になります",
   "settings.enter.queue": "キュー",
   "settings.enter.steer": "操作指示",

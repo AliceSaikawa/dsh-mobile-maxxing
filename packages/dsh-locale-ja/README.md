@@ -10,32 +10,25 @@ UI copy. This package is not installed or enabled by the mobile tarball, is
 not added to a profile automatically, and never writes the shared display
 language: the phone picker only projects the catalog for this device.
 
-**The `ja` catalog is complete (2026-10-26).** All **64 namespaces / 2906
-keys** have a reviewed Japanese value, and `locale/translation-status.json`
-reports `complete` with zero English fallback. The migrated seed of **83
-values** is unchanged, and the other **2823 keys were reviewed and merged in
-94 batches**. The package is still `private` and optional: it is not
-published, the local tarball is the only install path, and a production
-profile install and a device run remain unverified. The loader contract is
-verified in isolation; GUI evidence is tracked under #70, separately from
-production installs (see [Status and limits](#status-and-limits)).
+**Current catalog (2026-10-28):** DSH 0.2.1-rc.3, **65 namespaces / 2915
+keys**, with zero English fallback. The previous rc.2 snapshot had 64 / 2906;
+the nine added entries are translated in the current dictionaries. Device
+validation remains separate from automated tests. The historical notes below
+describe the earlier rc.2 snapshot unless otherwise stated.
 
 ## What the package contains
 
-- the stage-1 English snapshot: **64 namespaces / 2906 keys** from DSH
-  `0.2.1-rc.2`, unchanged;
+- the English snapshot: **65 namespaces / 2915 keys** from DSH
+  `0.2.1-rc.3`;
 - **83 Japanese values** migrated byte-for-byte from the removed mobile pack
   (`common` 41, `settings` 41, `settings.locale` 1). They are pinned by
   `test/fixtures/seed-ja-83.json` and its SHA-256, so a later edit cannot
   silently change a migrated value;
-- **2823 further reviewed Japanese values** for the remaining keys, merged
-  from 94 batches after independent review. Together with the seed they cover
-  every key, so the generated `client.js` contains no English fallback;
+- **2832 further Japanese values**, including nine added for rc.3. Together
+  with the seed they cover every key, with no generated English fallback;
 - a generated package manifest, host entry and browser client;
-- a reviewable batch manifest with **97 batches** of 40-50 keys (small
-  namespaces and final remainders may be shorter). 94 of them (2823 keys)
-  were reviewed and merged; the 3 batches whose keys are the migrated seed
-  (`common-01`, `settings-01`, `settings.locale-01`) were already satisfied;
+- a reviewable batch manifest with **98 batches** of 40-50 keys (small
+  namespaces and final remainders may be shorter);
 - `tools/build-client.mjs` and `tools/merge-batches.mjs`.
 
 ## Migration from the mobile pack (#80)
@@ -49,7 +42,7 @@ Consequences:
 - a phone without this package offers only the host's registered locales
   (`en`/`zh`); a stored `ja` choice is ignored instead of being guessed;
 - installing this package is the only way to add `ja`. It registers the
-  language and all 64 namespaces through the public locale API, and disposable
+  language and all 65 namespaces through the public locale API, and disposable
   effects restore the catalog on unload;
 - having both packages installed is safe now: the mobile half never calls
   `addLanguage`, so there is no second registration, and it does not own or
@@ -99,13 +92,13 @@ install it separately from that local file:
 
 ```sh
 node scripts/pack-all.mjs            # dist/dsh-locale-ja-<version>.tgz only when complete
-dsh plugin --profile web add ./dist/dsh-locale-ja-0.1.0.tgz
+dsh plugin --profile web add ./dist/dsh-locale-ja-0.1.1.tgz
 # restart DSH to load the client half
 ```
 
 The gate stays in place as a safeguard: `scripts/pack-all.mjs` refuses to
 create the locale tarball whenever `locale/translation-status.json` is not
-`complete` (zero fallback with full 64/2906 coverage). It prints `REFUSED`
+`complete` (zero fallback with full 65/2915 coverage). It prints `REFUSED`
 with the current counts and produces no locale tarball, so an English
 fallback pack can never be released as Japanese. Use `node
 scripts/pack-all.mjs --require-locale` to make that refusal fail the command.
@@ -244,12 +237,12 @@ JSON keys are hard errors.
 ## Status and limits
 
 - **Packing gate (safeguard):** a locale tarball is produced only when
-  `locale/translation-status.json` reports the complete 64 namespaces / 2906
+  `locale/translation-status.json` reports the complete 65 namespaces / 2915
   keys with zero English fallback. The current status already satisfies it;
   the gate remains so a future incomplete edit cannot be packed as Japanese.
-- **Current coverage (2026-10-26):** `complete` — 64 of 64 namespaces and
-  2906 of 2906 keys have a reviewed Japanese value; 0 fallback, 0 partial. 83
-  are the migrated seed and 2823 were reviewed and merged in 94 batches.
+- **Current coverage (2026-10-28):** `complete` — 65 of 65 namespaces and
+  2915 of 2915 keys have Japanese values; 0 fallback, 0 partial. The 83-key
+  seed is unchanged; nine entries were added for rc.3.
   `locale/translation-status.json` is the source of truth;
   `node tools/build-client.mjs --check` fails if the generated files drift
   from it.

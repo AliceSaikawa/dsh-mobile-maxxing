@@ -136,7 +136,7 @@ function englishFileHashes(packageDirectory) {
 	return hashes;
 }
 
-test('generated files are fresh and keep the stage-1 64/2906 snapshot', () => {
+test('generated files are fresh and keep the stage-1 65/2915 snapshot', () => {
 	const check = checkArtifacts({ packageDir });
 	assert.deepEqual(check.problems, []);
 	const { upstream, dictionaries: english } = loadEnglish(packageDir);
@@ -227,7 +227,7 @@ test('single ownership: dsh-locale-ja is the only ja owner', () => {
 	assert.equal(Object.keys(seedDictionaries()).length, 3, 'the immutable seed fixture must cover the three migrated namespaces');
 });
 
-test('apply registers all 64 dictionaries and every effect can dispose its registration', () => {
+test('apply registers all 65 dictionaries and every effect can dispose its registration', () => {
 	const registered = new Map();
 	const languages = [];
 	const disposers = [];
@@ -256,8 +256,8 @@ test('apply registers all 64 dictionaries and every effect can dispose its regis
 	apply(ctx);
 	assert.equal(languages.length, 1);
 	assert.deepEqual(languages[0], { id: 'ja', label: '日本語', fallback: 'en' });
-	assert.equal(registered.size, 65);
-	assert.equal(disposers.length, 65);
+	assert.equal(registered.size, EXPECTED_NAMESPACES + 1);
+	assert.equal(disposers.length, EXPECTED_NAMESPACES + 1);
 	for (const dispose of disposers) assert.equal(typeof dispose, 'function');
 	for (const namespace of Object.keys(dictionaries)) {
 		assert.equal(registered.has(namespace), true, 'missing registration for ' + namespace);
@@ -332,7 +332,7 @@ test('an explicit incomplete fixture generates fallback keys and an incomplete s
 	assert.equal(status.totals.fallback, EXPECTED_KEYS - 83);
 	assert.equal(status.totals.translatedNamespaces, 3);
 	assert.equal(status.totals.fallbackNamespaces, EXPECTED_NAMESPACES - 3);
-	assert.match(artifacts.files['client.js'], /DEVELOPMENT-ONLY ENGLISH FALLBACK: 83 of 2906/);
+	assert.match(artifacts.files['client.js'], /DEVELOPMENT-ONLY ENGLISH FALLBACK: 83 of 2915/);
 	assert.doesNotMatch(artifacts.files['client.js'], /COMPLETE:/);
 });
 
@@ -346,7 +346,7 @@ const KEEP_ENGLISH = [
 	['settings.account', 'onboardingArtworkLocale'],
 ];
 
-test('a complete 64-namespace ja fixture generates a complete status with zero fallback', (t) => {
+test('a complete 65-namespace ja fixture generates a complete status with zero fallback', (t) => {
 	const directory = copyPackageWithoutJapanese(t);
 	const { upstream, dictionaries: english } = loadEnglish(directory);
 	const jaDirectory = path.join(directory, 'locale', 'namespaces', 'ja');
@@ -392,7 +392,7 @@ test('a complete 64-namespace ja fixture generates a complete status with zero f
 	assert.equal(completeDictionaries.chat['message.stepProcess.sharedPrefix'], '');
 	assert.equal(completeDictionaries['schedule.catalog']['time.locale'], 'ja-JP');
 	assert.equal(completeDictionaries['schedule.manager']['time.locale'], 'ja-JP');
-	assert.match(artifacts.files['client.js'], /COMPLETE: all 2906 keys have a reviewed Japanese entry/);
+	assert.match(artifacts.files['client.js'], /COMPLETE: all 2915 keys have a reviewed Japanese entry/);
 	assert.doesNotMatch(artifacts.files['client.js'], /DEVELOPMENT-ONLY ENGLISH FALLBACK/);
 	assert.doesNotMatch(status.note, /development-only/i);
 });

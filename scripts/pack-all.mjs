@@ -9,7 +9,7 @@
  * - the mobile package (the repository root), always packed;
  * - the independent Markdown table package, always packed;
  * - the optional Japanese locale package, packed only when its generated
- *   translation-status.json reports the complete 64 namespaces / 2906 keys
+ *   translation-status.json reports the complete 65 namespaces / 2915 keys
  *   with zero English fallback. An incomplete locale is refused loudly: the
  *   release must never quietly ship an English fallback pack as Japanese.
  */
@@ -24,7 +24,7 @@ const localeDir = join(root, "packages", "dsh-locale-ja");
 const localeStatusFile = join(localeDir, "locale", "translation-status.json");
 
 /** The only translation state that may be published as a Japanese pack. */
-export const LOCALE_REQUIREMENTS = Object.freeze({ namespaces: 64, keys: 2906, fallback: 0 });
+export const LOCALE_REQUIREMENTS = Object.freeze({ namespaces: 65, keys: 2915, fallback: 0 });
 
 /**
  * Decide whether the locale package may be packed.
@@ -45,7 +45,7 @@ export function localePublishDecision(status) {
 		return { publish: false, reason: `translation-status.json is not for ja (${String(status.locale)})` };
 	}
 	if (totals.namespaces !== LOCALE_REQUIREMENTS.namespaces || totals.keys !== LOCALE_REQUIREMENTS.keys) {
-		return { publish: false, reason: `translation-status.json does not cover the 64/2906 snapshot (${summary})` };
+		return { publish: false, reason: `translation-status.json does not cover the 65/2915 snapshot (${summary})` };
 	}
 	if (status.status !== "complete" || status.developmentOnlyEnglishFallback !== false) {
 		return { publish: false, reason: `translation-status.json is incomplete (${summary})` };
@@ -146,7 +146,7 @@ function main() {
 		}
 	} else {
 		console.log(`\nREFUSED: not packing dsh-locale-ja — ${decision.reason}.`);
-		console.log("  Only a complete 64-namespace / 2906-key ja catalog with zero English");
+		console.log("  Only a complete 65-namespace / 2915-key ja catalog with zero English");
 		console.log("  fallback may be published. No English fallback pack was produced.");
 		if (process.argv.includes("--require-locale")) process.exitCode = 1;
 	}

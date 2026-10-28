@@ -7,14 +7,14 @@
   "note": "Every key has a reviewed Japanese entry; no value is an English fallback.",
   "dsh": {
     "name": "@deepseek-ai/dsh",
-    "version": "0.2.1-rc.2"
+    "version": "0.2.1-rc.3"
   },
   "totals": {
-    "namespaces": 64,
-    "keys": 2906,
-    "translated": 2906,
+    "namespaces": 65,
+    "keys": 2915,
+    "translated": 2915,
     "fallback": 0,
-    "translatedNamespaces": 64,
+    "translatedNamespaces": 65,
     "fallbackNamespaces": 0,
     "partialNamespaces": 0
   },
@@ -55,9 +55,9 @@
       "status": "translated"
     },
     "conversation": {
-      "sourceHash": "sha256:e2a3c2c3930545ab4d703d5415e54ca8c2763a9b563319a474e170bd72efc5d5",
-      "keys": 373,
-      "translated": 373,
+      "sourceHash": "sha256:f77ddfa5e473863acf0fa0cb213a35205be76e14f9ca9629a653d9258a4674e6",
+      "keys": 375,
+      "translated": 375,
       "fallback": 0,
       "status": "translated"
     },
@@ -110,6 +110,13 @@
       "fallback": 0,
       "status": "translated"
     },
+    "entryCustomization": {
+      "sourceHash": "sha256:d603f08e6fa764fe7ccf256773c468d2106086be3d071188a86bf905d8c980c3",
+      "keys": 5,
+      "translated": 5,
+      "fallback": 0,
+      "status": "translated"
+    },
     "feedback": {
       "sourceHash": "sha256:66c90ba8444a6146228455ffe7d7746c404020d8bfec7a21bb20e240597cff51",
       "keys": 20,
@@ -146,7 +153,7 @@
       "status": "translated"
     },
     "open-in-app": {
-      "sourceHash": "sha256:853b0c0f110fa440c7659f907a6a24e51a9d07fd16f8a09dea696162a153c72c",
+      "sourceHash": "sha256:188e94a64aa0b947615d44078a916373626aa78240fd18281de8ffaa7c260809",
       "keys": 45,
       "translated": 45,
       "fallback": 0,
@@ -167,7 +174,7 @@
       "status": "translated"
     },
     "pluginManager": {
-      "sourceHash": "sha256:4d6a7a50bf96bdea337ad5ce610d233ae1de7dd365b721376560de36e76fedff",
+      "sourceHash": "sha256:31977e874e9f66a443373627e14b5c9b0df3a258a5fe2418833d76d804684459",
       "keys": 221,
       "translated": 221,
       "fallback": 0,
@@ -230,14 +237,14 @@
       "status": "translated"
     },
     "settings": {
-      "sourceHash": "sha256:cc57648eb328350607f43aa6271f8ca71963d83d85791368aa99eb8245c9dc2c",
+      "sourceHash": "sha256:817f4c4e57d5fce3b35899fcbfd98a3af889f9b2d1c7414757a4f6fe310717e4",
       "keys": 41,
       "translated": 41,
       "fallback": 0,
       "status": "translated"
     },
     "settings.account": {
-      "sourceHash": "sha256:67c0f6383687b975165c7e1fc549fbc75ef3f4bc354946b3c7cad52a55f09f20",
+      "sourceHash": "sha256:872cbe57beda00f197fbe84c05c7ea50e55e49ffa2d546fc9a9e9b7bc2eac997",
       "keys": 94,
       "translated": 94,
       "fallback": 0,
@@ -251,7 +258,7 @@
       "status": "translated"
     },
     "settings.agentPreset": {
-      "sourceHash": "sha256:467243167483d8149eb735171387288efc4ee4a42dd616aa88f49aabb9f42f85",
+      "sourceHash": "sha256:5edd759901141cd1accb40f9ba41007fa241a36cc0cacee7cc9a7533efd31d4e",
       "keys": 47,
       "translated": 47,
       "fallback": 0,
@@ -342,9 +349,9 @@
       "status": "translated"
     },
     "sidebar": {
-      "sourceHash": "sha256:8f3c3d7836adaf88f2cdbe9bbaa74781e9f941d8b154c535ddfe60a2150fdd07",
-      "keys": 5,
-      "translated": 5,
+      "sourceHash": "sha256:e3ebd6bb9a7baa52cde6fe8cb7728dfd02584f20ad0e2ca8263d970c1197ffa8",
+      "keys": 6,
+      "translated": 6,
       "fallback": 0,
       "status": "translated"
     },
@@ -405,9 +412,9 @@
       "status": "translated"
     },
     "sidebarRight": {
-      "sourceHash": "sha256:19a3a692b8f82a8ba5271fc45bcd4b268a06a04a783ebf97d4e1b502995ae3ba",
-      "keys": 34,
-      "translated": 34,
+      "sourceHash": "sha256:1ab2914479bde6647c3af955ec68b41d00c340b0aa11363da999b3785b0ce158",
+      "keys": 35,
+      "translated": 35,
       "fallback": 0,
       "status": "translated"
     },
@@ -461,7 +468,7 @@
       "status": "translated"
     },
     "workspace": {
-      "sourceHash": "sha256:75e02fb194691766dadd5c1bce79d5ba83ed91304d4b15b9f45903dd1758fa1a",
+      "sourceHash": "sha256:1730736401657d1377b8a62ba0582bd8ff68e1450b7ba0c8ec5c718fb45d9e09",
       "keys": 119,
       "translated": 119,
       "fallback": 0,

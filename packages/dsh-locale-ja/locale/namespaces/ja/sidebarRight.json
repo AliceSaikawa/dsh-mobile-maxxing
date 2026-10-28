@@ -31,6 +31,7 @@
   "dock.splitPane": "分割",
   "dock.splitPaneDisabled": "ペインは 2 つまでです",
   "dock.splitPaneNarrow": "分割する幅が足りません。サイドバーを広げてください",
+  "tab.guide.more": "その他のツール",
   "tab.guide.title": "開始",
   "tab.unavailable": "この種類のコンテンツを表示できるものはまだありません。"
 }

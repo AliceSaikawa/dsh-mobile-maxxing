@@ -3266,7 +3266,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     function fitVisualViewport() {
       const root = document.documentElement;
       const viewport = window.visualViewport;
-      const open = phone() && viewport !== null && viewport !== undefined && keyboardOpen();
+      // Dialogs own their scroll and focus geometry; do not pin them to the
+      // keyboard-shrunk viewport or their URL fields disappear off-screen.
+      const open = phone() && viewport !== null && viewport !== undefined && document.querySelector('[role="dialog"]') === null && keyboardOpen();
       root.toggleAttribute("data-rdsh-keyboard", open);
       if (!open) return;
       root.style.setProperty("--rdsh-vv-top", `${Math.max(0, Math.round(viewport.offsetTop))}px`);
@@ -7348,6 +7350,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     function decorateFast() {
+      fitVisualViewport();
       // One mode decision per pass. Every tag below belongs to the mobile
       // surface; on desktop the same pass only removes leftovers, so a
       // MutationObserver firing between frames cannot re-create a hook.

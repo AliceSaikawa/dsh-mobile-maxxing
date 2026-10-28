@@ -7,7 +7,7 @@ import { createSafeLookup, createSecurePushTransport, isPublicPushAddress } from
 const options = { method: "POST", headers: {}, body: Buffer.from("test"), signal: AbortSignal.timeout(1000) };
 
 test("push IP policy rejects local, reserved and tunneled addresses", () => {
-  for (const address of ["127.0.0.1", "10.0.0.1", "100.64.1.2", "169.254.169.254", "172.31.0.1", "192.168.1.1", "198.18.0.1", "224.0.0.1", "::1", "fc00::1", "fe80::1", "::ffff:127.0.0.1", "2001:db8::1", "2001:2::1", "2002:7f00:1::", "not-an-ip"]) assert.equal(isPublicPushAddress(address), false, address);
+  for (const address of ["127.0.0.1", "10.0.0.1", "100.64.1.2", "169.254.169.254", "172.31.0.1", "192.168.1.1", "198.18.0.1", "224.0.0.1", "::1", "fc00::1", "fe80::1", "::ffff:127.0.0.1", "2001:db8::1", "2001:2::1", "2001:20::1", "2002:7f00:1::", "not-an-ip"]) assert.equal(isPublicPushAddress(address), false, address);
   for (const address of ["8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"]) assert.equal(isPublicPushAddress(address), true, address);
 });
 

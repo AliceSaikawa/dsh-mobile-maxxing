@@ -818,10 +818,10 @@ test("shipped code carries no personal provider or device identifiers", () => {
 			// codec names share this shape without being identifiers.
 			String.raw`(?<![\\#])\b(?!h26[45]\b|x26[45]\b)[a-z]{1,2}\d{3}\b`,
 			// RFC 1918 private and Tailscale CGNAT IPv4 literals
-			String.raw`\b10\.\d{1,3}\.\d{1,3}\.\d{1,3}\b`,
-			String.raw`\b192\.168\.\d{1,3}\.\d{1,3}\b`,
-			String.raw`\b172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}\b`,
-			String.raw`\b100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}\b`,
+			String.raw`\b10\.(?!0\.0\.0\b)\d{1,3}\.\d{1,3}\.\d{1,3}\b`,
+			String.raw`\b192\.168\.(?!0\.0\b)\d{1,3}\.\d{1,3}\b`,
+			String.raw`\b172\.(?:1[6-9]|2\d|3[01])\.(?!0\.0\b)\d{1,3}\.\d{1,3}\b`,
+			String.raw`\b100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.(?!0\.0\b)\d{1,3}\.\d{1,3}\b`,
 		].join("|"),
 	);
 	const detects = (sample) => personal.test(sample);
@@ -836,7 +836,7 @@ test("shipped code carries no personal provider or device identifiers", () => {
 	]) {
 		assert.ok(detects(sample), `the identifier shape ${sample} is not detected`);
 	}
-	for (const sample of ["icon-192", "sha256", "h264", "#ef4444", "p1363"]) {
+	for (const sample of ["icon-192", "sha256", "h264", "#ef4444", "p1363", "10.0.0.0", "172.16.0.0", "192.168.0.0", "100.64.0.0"]) {
 		assert.ok(!detects(sample), `the generic token ${sample} is a false positive`);
 	}
 	const offenders = [];

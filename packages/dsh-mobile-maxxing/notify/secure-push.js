@@ -11,7 +11,7 @@ for (const [network, prefix] of [
   ["198.51.100.0", 24], ["203.0.113.0", 24], ["224.0.0.0", 4], ["240.0.0.0", 4],
 ]) blocked.addSubnet(network, prefix, "ipv4");
 for (const [network, prefix] of [
-  ["2001::", 23], ["2001:db8::", 32], ["2002::", 16], ["3fff::", 20],
+  ["2001::", 23], ["2001:20::", 28], ["2001:db8::", 32], ["2002::", 16], ["3fff::", 20],
 ]) blocked.addSubnet(network, prefix, "ipv6");
 const globalV6 = new BlockList();
 globalV6.addSubnet("2000::", 3, "ipv6");

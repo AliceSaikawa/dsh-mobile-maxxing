@@ -73,7 +73,7 @@ test('mobile registers a stylesheet only inside the mobile chat', () => {
 test('one installer URL installs three independent components', () => {
   const installer = readFileSync(new URL('../../../scripts/install-mobile-bundle.mjs', import.meta.url), 'utf8');
   assert.match(installer, /github:kuraneko1\/dsh-mobile-maxxing/);
-  assert.match(installer, /dsh-md-rendering-0\.1\.2\.tgz/);
+  assert.match(installer, /dsh-md-rendering-0\.1\.3\.tgz/);
   assert.match(installer, /github:kuraneko1\/dsh-locale-ja/);
   assert.match(installer, /\["plugin", "--profile", profile, "add", \.\.\.packages\]/);
 });

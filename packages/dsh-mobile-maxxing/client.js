@@ -3282,7 +3282,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     function fitVisualViewport() {
       const root = document.documentElement;
       const viewport = window.visualViewport;
-      const open = phone() && viewport !== null && viewport !== undefined && keyboardOpen();
+      // Dialogs and landscape composers own their scroll and focus geometry;
+      // pinning them to the keyboard-shrunk viewport hides the input itself.
+      const landscape = window.innerWidth > window.innerHeight;
+      const open = phone() && !landscape && viewport !== null && viewport !== undefined && document.querySelector('[role="dialog"]') === null && keyboardOpen();
       root.toggleAttribute("data-rdsh-keyboard", open);
       if (!open) return;
       root.style.setProperty("--rdsh-vv-top", `${Math.max(0, Math.round(viewport.offsetTop))}px`);
@@ -7365,6 +7368,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     function decorateFast() {
+      fitVisualViewport();
       // One mode decision per pass. Every tag below belongs to the mobile
       // surface; on desktop the same pass only removes leftovers, so a
       // MutationObserver firing between frames cannot re-create a hook.
@@ -11058,6 +11062,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (!phone()) return;
       const field = textBoxOf(event.target);
       if (field === null) return;
+      // Lexical re-focuses the composer after turning a slash command into a
+      // chip. Blurring it here makes Backspace/Delete stop working entirely.
+      if (field.matches("[data-composer-input]")) return;
       // Popovers (the model picker's search, dialogs, etc.) focus their own
       // inputs programmatically. Blurring those closes the popover because the
       // menu's onBlur sees no related focus target.
@@ -13701,6 +13708,15 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
 
   /* #59: a two-column dock created in landscape stays two columns after
      rotation. Stack its two hosts in portrait without changing the saved layout. */
+  @media (orientation: landscape) {
+    [data-window-drag] { height: 0 !important; min-height: 0 !important; padding: 0 !important; border: 0 !important; }
+    [data-window-drag] [class*="_titleRow"] { display: none !important; }
+    [data-window-drag] [class*="_headerCorner"] {
+      position: fixed !important; z-index: 70 !important; display: flex !important;
+      width: 28px; height: 28px;
+      top: var(--rdsh-safe-top, 0px) !important; right: var(--rdsh-safe-right, 0px) !important;
+    }
+  }
   @media (orientation: portrait) and (max-width: 767px) {
     [data-sidebar-right-panel] [data-dockkit-split]:has(> [data-dockkit-host][data-dockkit-column="1"]) {
       grid-template-columns: minmax(0, 1fr) !important;

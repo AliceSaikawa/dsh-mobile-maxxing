@@ -14,7 +14,7 @@ import vm from "node:vm";
 const CLIENT = readFileSync(new URL("../client.js", import.meta.url), "utf8");
 
 /** Run the pin against a fake window and report what it published. */
-function pinFor(viewport, { phone = true, innerHeight = 800, dvh = 800, dialog = false } = {}) {
+function pinFor(viewport, { phone = true, innerHeight = 800, dvh = 800, dialog = false, innerWidth = 390 } = {}) {
 	const start = CLIENT.indexOf("    let heightProbe = null;");
 	const end = CLIENT.indexOf("    function measureSafeArea()");
 	assert.ok(start !== -1 && end > start, "keyboardOpen and fitVisualViewport are in the bundle");
@@ -27,7 +27,7 @@ function pinFor(viewport, { phone = true, innerHeight = 800, dvh = 800, dialog =
 	const probe = { style: {}, isConnected: false, setAttribute() {}, remove() { this.isConnected = false; }, getBoundingClientRect: () => ({ height: dvh }) };
 	const body = { append(node) { node.isConnected = true; } };
 	const document = { documentElement: root, body, createElement: () => probe, querySelector: () => dialog ? {} : null };
-	const sandbox = { window: { visualViewport: viewport, innerHeight }, document, Math, phone: () => phone };
+	const sandbox = { window: { visualViewport: viewport, innerHeight, innerWidth }, document, Math, phone: () => phone };
 	vm.runInNewContext(`${CLIENT.slice(start, end)}\nfitVisualViewport();`, sandbox);
 	return { attributes: [...attributes.keys()], properties: Object.fromEntries(properties) };
 }
@@ -53,6 +53,10 @@ test("a pinch zoom, a closed keyboard or a desktop does not pin the app", () => 
 	assert.deepEqual(pinFor({ height: 790, offsetTop: 0, scale: 1 }).attributes, [], "a small inset is not a keyboard");
 	assert.deepEqual(pinFor(undefined).attributes, [], "no visualViewport support");
 	assert.deepEqual(pinFor({ height: 480, offsetTop: 150, scale: 1 }, { phone: false }).attributes, [], "desktop stays stock");
+});
+
+test("a landscape composer keeps its own keyboard and scroll geometry", () => {
+	assert.deepEqual(pinFor({ height: 200, offsetTop: 0, scale: 1 }, { innerWidth: 844, innerHeight: 390, dvh: 390 }).attributes, []);
 });
 
 test("a dialog keeps its own keyboard and scroll geometry", () => {

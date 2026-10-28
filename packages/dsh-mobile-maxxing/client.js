@@ -3266,9 +3266,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     function fitVisualViewport() {
       const root = document.documentElement;
       const viewport = window.visualViewport;
-      // Dialogs own their scroll and focus geometry; do not pin them to the
-      // keyboard-shrunk viewport or their URL fields disappear off-screen.
-      const open = phone() && viewport !== null && viewport !== undefined && document.querySelector('[role="dialog"]') === null && keyboardOpen();
+      // Dialogs and landscape composers own their scroll and focus geometry;
+      // pinning them to the keyboard-shrunk viewport hides the input itself.
+      const landscape = window.innerWidth > window.innerHeight;
+      const open = phone() && !landscape && viewport !== null && viewport !== undefined && document.querySelector('[role="dialog"]') === null && keyboardOpen();
       root.toggleAttribute("data-rdsh-keyboard", open);
       if (!open) return;
       root.style.setProperty("--rdsh-vv-top", `${Math.max(0, Math.round(viewport.offsetTop))}px`);

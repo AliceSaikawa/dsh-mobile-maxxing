@@ -11078,6 +11078,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (!phone()) return;
       const field = textBoxOf(event.target);
       if (field === null) return;
+      // Lexical re-focuses the composer after turning a slash command into a
+      // chip. Blurring it here makes Backspace/Delete stop working entirely.
+      if (field.matches("[data-composer-input]")) return;
       // Popovers (the model picker's search, dialogs, etc.) focus their own
       // inputs programmatically. Blurring those closes the popover because the
       // menu's onBlur sees no related focus target.

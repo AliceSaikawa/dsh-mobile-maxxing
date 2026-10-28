@@ -69,6 +69,10 @@ test("landscape hides the session title bar but keeps the panel corner", () => {
 	assert.match(CLIENT, /\[data-window-drag\] \[class\*="_headerCorner"\] \{[\s\S]*?position: fixed !important;/);
 });
 
+test("the composer keeps focus when a slash command is edited", () => {
+	assert.match(CLIENT, /if \(field.matches\("\[data-composer-input\]"\)\) return;/);
+});
+
 test("the pin is torn down with the phone hooks", () => {
 	const release = CLIENT.slice(CLIENT.indexOf("    function releaseSafeArea()"), CLIENT.indexOf("    let heightProbe = null;"));
 	assert.match(release, /removeAttribute\("data-rdsh-keyboard"\)/);

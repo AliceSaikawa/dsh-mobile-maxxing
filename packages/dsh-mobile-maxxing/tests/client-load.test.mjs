@@ -5034,6 +5034,49 @@ function enterKey(overrides = {}) {
 	return event;
 }
 
+test("question listeners detach on field replacement, card removal and plugin disposal", () => {
+	const booted = bootClient({ mode: "mobile", narrow: true });
+	const behavior = booted.sandbox.__RDSH_MOBILE_UX__.questionCard;
+	const eventTarget = () => {
+		const listeners = new Map();
+		return {
+			listeners,
+			addEventListener(type, fn) { if (!listeners.has(type)) listeners.set(type, new Set()); listeners.get(type).add(fn); },
+			removeEventListener(type, fn) { listeners.get(type)?.delete(fn); },
+			emit(type, event) { for (const fn of listeners.get(type) ?? []) fn(event); },
+		};
+	};
+	const field1 = eventTarget(), field2 = eventTarget();
+	let currentField = field1;
+	const submit = {};
+	const card = Object.assign(eventTarget(), {
+		querySelector(selector) {
+			if (selector === "textarea") return currentField;
+			if (selector.includes("_options")) return {};
+			if (selector.includes("_footerActions")) return { querySelectorAll: () => [submit] };
+			return null;
+		},
+		removeAttribute() {}, setAttribute() {}, contains() { return false; },
+	});
+	behavior.install(card);
+	behavior.install(card);
+	assert.equal(field1.listeners.get("keydown").size, 1);
+	const first = enterKey(); field1.emit("keydown", first);
+	assert.equal(first.stopped, 1);
+	currentField = field2; behavior.install(card);
+	assert.equal(field1.listeners.get("keydown").size, 0);
+	assert.equal(field2.listeners.get("keydown").size, 1);
+	behavior.clear(card);
+	assert.equal(field2.listeners.get("keydown").size, 0);
+	assert.equal(card.listeners.get("click").size, 0);
+	behavior.install(card);
+	booted.disposeAll();
+	assert.equal(field2.listeners.get("keydown").size, 0);
+	assert.equal(card.listeners.get("focusin").size, 0);
+	const after = enterKey(); field2.emit("keydown", after);
+	assert.equal(after.stopped, 0, "disposed plugin must not intercept Enter");
+});
+
 test("#26 a question with options needs one selected, a free-text question does not", () => {
 	const booted = bootClient({ mode: "mobile", narrow: true });
 	const { needsSelection } = booted.sandbox.__RDSH_MOBILE_UX__.questionCard;

@@ -6,11 +6,12 @@ import vm from 'node:vm';
 const client = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
 const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
-function boot(mode) {
+function boot(mode, navigator = {}) {
   let definition;
   const sandbox = {
     window: { __ModuleLoader__: { load(value) { definition = value; } } },
     document: { documentElement: { getAttribute: () => mode } },
+    navigator,
   };
   sandbox.globalThis = sandbox;
   if (mode !== undefined) sandbox.__RDSH_DEVICE_MODE__ = mode;
@@ -38,6 +39,24 @@ test('desktop is a hard no-op, including an unknown device mode', () => {
     assert.deepEqual(registrations, [], 'desktop must not register a stylesheet');
     assert.doesNotThrow(() => plugin.apply({}));
   }
+});
+
+test('standalone mobile detection registers styles without changing the document', () => {
+  for (const navigator of [
+    { userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Mobile' },
+    { userAgent: 'Mozilla/5.0 (Linux; Android 14; Tablet)' },
+    { platform: 'MacIntel', maxTouchPoints: 5 },
+    { userAgentData: { platform: 'Android', mobile: false } },
+  ]) {
+    const { registrations, required } = boot(undefined, navigator);
+    assert.equal(registrations.length, 1);
+    assert.deepEqual(required, ['react']);
+    const css = registrations[0].component().children[0];
+    assert.match(css, /html \[data-chat-flow-kind="assistant-step"\]/);
+    assert.doesNotMatch(css, /data-rdsh-device-mode/);
+  }
+  assert.equal(boot('desktop', { userAgent: 'iPhone' }).registrations.length, 0, 'explicit desktop mode wins');
+  assert.equal(boot(undefined, { platform: 'Win32', maxTouchPoints: 5 }).registrations.length, 0, 'touch desktop stays unchanged');
 });
 
 test('mobile registers a stylesheet only inside the mobile chat', () => {

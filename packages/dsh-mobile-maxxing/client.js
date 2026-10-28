@@ -3804,6 +3804,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       closeCropOverlay();
       clearDetailPanelHooks();
       clearQuestionArrows();
+      clearQuestionBehaviors();
       clearModelSearch();
       clearActivityChips();
       clearPreviewTools();
@@ -5906,8 +5907,17 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       update();
     }
 
-    /** Question cards whose Enter/validation behaviour is already installed. */
-    const questionBehaviorCards = new WeakSet();
+    /** Keep the exact handlers so leaving the card or disposing removes them. */
+    const questionBehaviorCards = new Map();
+    function clearQuestionBehavior(card) {
+      const state = questionBehaviorCards.get(card);
+      if (state === undefined) return;
+      questionBehaviorCards.delete(card);
+      state.dispose();
+    }
+    function clearQuestionBehaviors() {
+      for (const card of questionBehaviorCards.keys()) clearQuestionBehavior(card);
+    }
 
     /**
      * Whether this card still needs a selected option, or null when it offers
@@ -5991,29 +6001,28 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     /** Install the phone-only answer-field rules once per card node. */
     function installQuestionCardBehavior(card) {
-      if (questionBehaviorCards.has(card) || card.querySelector('[class*="_options"]') === null) return;
       const field = card.querySelector("textarea");
-      if (field === null || questionSubmitButton(card) === null) return;
-      questionBehaviorCards.add(card);
-      card.addEventListener("focusin", () => {
-        // The keyboard shrinks the layout viewport; this attribute lifts the
-        // 60vh cap while a field is focused, and the next frame keeps that
-        // field inside the card's scroller.
+      if (card.querySelector('[class*="_options"]') === null || field === null || questionSubmitButton(card) === null) {
+        clearQuestionBehavior(card);
+        return;
+      }
+      if (questionBehaviorCards.get(card)?.field === field) return;
+      clearQuestionBehavior(card);
+      const state = { field, dispose: null };
+      const onFocusIn = () => {
         card.setAttribute("data-rdsh-question-typing", "");
-        requestAnimationFrame(() => revealQuestionField(card));
-      });
-      card.addEventListener("focusout", (event) => {
-        if (card.contains(event.relatedTarget)) return;
-        card.removeAttribute("data-rdsh-question-typing");
-      });
-      field.addEventListener("keydown", (event) => questionCardKeyDown(event, card), true);
-      field.addEventListener("input", () => { if (questionNeedsSelection(card) === false) clearQuestionFeedback(card); });
-      card.addEventListener("click", (event) => {
+        requestAnimationFrame(() => { if (questionBehaviorCards.get(card) === state) revealQuestionField(card); });
+      };
+      const onFocusOut = (event) => {
+        if (!card.contains(event.relatedTarget)) card.removeAttribute("data-rdsh-question-typing");
+      };
+      const onKeyDown = (event) => questionCardKeyDown(event, card);
+      const onInput = () => { if (questionNeedsSelection(card) === false) clearQuestionFeedback(card); };
+      const onClick = (event) => {
         const button = event.target?.closest?.("button") ?? null;
         if (button === null || button !== questionSubmitButton(card)) {
-          // A choice lands after React commits; clear our message on that frame.
           requestAnimationFrame(() => {
-            if (questionNeedsSelection(card) === false) clearQuestionFeedback(card);
+            if (questionBehaviorCards.get(card) === state && questionNeedsSelection(card) === false) clearQuestionFeedback(card);
           });
           return;
         }
@@ -6021,12 +6030,27 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         event.preventDefault();
         if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
         refuseEmptyQuestion(card);
-      }, true);
+      };
+      state.dispose = () => {
+        card.removeEventListener("focusin", onFocusIn);
+        card.removeEventListener("focusout", onFocusOut);
+        field.removeEventListener("keydown", onKeyDown, true);
+        field.removeEventListener("input", onInput);
+        card.removeEventListener("click", onClick, true);
+        card.removeAttribute("data-rdsh-question-typing");
+      };
+      questionBehaviorCards.set(card, state);
+      card.addEventListener("focusin", onFocusIn);
+      card.addEventListener("focusout", onFocusOut);
+      field.addEventListener("keydown", onKeyDown, true);
+      field.addEventListener("input", onInput);
+      card.addEventListener("click", onClick, true);
     }
 
     function decorateQuestionCards() {
       if (!phone()) {
         clearQuestionArrows();
+        clearQuestionBehaviors();
         for (const attribute of ["data-rdsh-question-card", "data-rdsh-question-frame", "data-rdsh-question-tile", "data-rdsh-question-typing"]) {
           clearOwnedAttribute(attribute);
         }
@@ -6045,6 +6069,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         installQuestionCardBehavior(card);
         if (card.hasAttribute("data-rdsh-question-typing")) revealQuestionField(card);
         live.add(card);
+      }
+      for (const card of questionBehaviorCards.keys()) {
+        if (!live.has(card)) clearQuestionBehavior(card);
       }
       for (const [card, state] of questionArrowState) {
         if (live.has(card)) continue;
@@ -15277,6 +15304,8 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             keyDown: questionCardKeyDown,
             needsSelection: questionNeedsSelection,
             clearFeedback: clearQuestionFeedback,
+            install: installQuestionCardBehavior,
+            clear: clearQuestionBehavior,
           },
           phone,
           // Folder frames and the one-shot workspace-menu claim. The keys,

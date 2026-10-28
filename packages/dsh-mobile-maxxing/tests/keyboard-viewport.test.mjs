@@ -63,11 +63,13 @@ test("a dialog keeps its own keyboard and scroll geometry", () => {
 	assert.deepEqual(pinFor({ height: 480, offsetTop: 150, scale: 1 }, { dialog: true }).attributes, []);
 });
 
-test("landscape hides only the conversation title bar and keeps right-panel tabs", () => {
-	const landscape = CLIENT.slice(CLIENT.indexOf("  @media (orientation: landscape)"), CLIENT.indexOf("  @media (orientation: portrait)"));
+test("only a landscape phone compacts the conversation header without overlapping its drawer button", () => {
+	const landscape = CLIENT.slice(CLIENT.indexOf("  @media (orientation: landscape) and (max-height: 500px)"), CLIENT.indexOf("  @media (orientation: portrait)"));
+	assert.ok(landscape.startsWith("  @media (orientation: landscape) and (max-height: 500px)"), "tablets keep the full upstream header");
 	assert.match(landscape, /header\[data-window-drag\]:has\(\[data-conversation-header-leading\]\) \{ height: 0 !important;/);
 	assert.match(landscape, /header\[data-window-drag\]:has\(\[data-conversation-header-leading\]\) \[class\*="_titleRow"\] \{ display: none !important; \}/);
 	assert.match(landscape, /header\[data-window-drag\]:has\(\[data-conversation-header-leading\]\) \[class\*="_headerCorner"\] \{[\s\S]*?position: fixed !important;/);
+	assert.match(landscape, /\[class\*="_tabs"\]:has\(> \[data-conversation-tabs\]\) \{\s*box-sizing: border-box; padding-left: 48px !important;/);
 	assert.doesNotMatch(landscape, /^    \[data-window-drag\]/m, "the right panel's dock strip must not be selected");
 });
 

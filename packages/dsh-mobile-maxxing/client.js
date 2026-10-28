@@ -13750,7 +13750,10 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
 
   /* #59: a two-column dock created in landscape stays two columns after
      rotation. Stack its two hosts in portrait without changing the saved layout. */
-  @media (orientation: landscape) {
+  /* A landscape phone needs the compact header; a tablet keeps upstream's
+     full title and controls. Height distinguishes them even when a phone's
+     landscape width crosses the tablet layout's 768px breakpoint. */
+  @media (orientation: landscape) and (max-height: 500px) {
     /* Only the conversation's own header collapses. Dockkit reuses
        data-window-drag on the right panel's tab strip; that strip must stay
        visible and keep its height. */
@@ -13760,6 +13763,11 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
       position: fixed !important; z-index: 70 !important; display: flex !important;
       width: 28px; height: 28px;
       top: var(--rdsh-safe-top, 0px) !important; right: var(--rdsh-safe-right, 0px) !important;
+    }
+    /* The floating drawer button occupies the first 40px at the same top
+       inset. Move the whole tab row, including its overflow button, after it. */
+    header[data-window-drag]:has([data-conversation-header-leading]) [class*="_tabs"]:has(> [data-conversation-tabs]) {
+      box-sizing: border-box; padding-left: 48px !important;
     }
   }
   @media (orientation: portrait) and (max-width: 767px) {

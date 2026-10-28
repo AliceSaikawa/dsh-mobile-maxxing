@@ -2,9 +2,9 @@
 import { spawnSync } from "node:child_process";
 
 const profile = process.env.DSH_PROFILE ?? process.argv[2] ?? "web";
-const tag = process.env.DSH_BUNDLE_TAG ?? "v0.7.0-rc.1";
+const tag = process.env.DSH_BUNDLE_TAG ?? "v1.00";
 const base = process.env.DSH_BUNDLE_BASE_URL ?? "https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/" + tag;
-const markdownVersion = process.env.DSH_MD_VERSION ?? (process.env.DSH_BUNDLE_TAG ? "0.1.3" : "0.1.2");
+const markdownVersion = process.env.DSH_MD_VERSION ?? "0.1.3";
 const packages = [
   "github:kuraneko1/dsh-mobile-maxxing" + (process.env.DSH_BUNDLE_TAG ? "#" + tag : ""),
   base + `/dsh-md-rendering-${markdownVersion}.tgz`,

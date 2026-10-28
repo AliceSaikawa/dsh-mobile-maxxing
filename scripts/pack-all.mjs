@@ -93,7 +93,8 @@ function main() {
 		//
 		// Keep the install commands on the version just packed: a version-free install
 		// URL is cached by pnpm, so the docs must point at the versioned one.
-		const url = `https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v${mobile.version}/${mobile.file}`;
+		const releaseTag = process.env.DSH_RELEASE_TAG ?? `v${mobile.version}`;
+		const url = `https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/${releaseTag}/${mobile.file}`;
 		for (const doc of [join(root, "README.md"), join(root, "packages", mobile.name, "README.md")]) {
 			let text;
 			try {
@@ -108,7 +109,7 @@ function main() {
 			if (updated !== text) {
 				originalDocs.set(doc, text);
 				writeFileSync(doc, updated);
-				console.log(`updated ${doc.slice(root.length)} -> v${mobile.version}`);
+				console.log(`updated ${doc.slice(root.length)} -> ${releaseTag}`);
 			}
 		}
 

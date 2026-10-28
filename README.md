@@ -41,7 +41,7 @@ dsh plugin --profile web add github:kuraneko1/dsh-locale-ja
 curl -fsSL https://raw.githubusercontent.com/kuraneko1/dsh-mobile-maxxing/main/scripts/install-mobile-bundle.mjs | node --input-type=module
 ```
 
-各コンポーネントは、プラグイン画面で個別に有効・無効を切り替えられます。既定ではモバイル本体と日本語化はそれぞれの `main`、表表示は `v0.7.0-rc.1` の `0.1.2` 成果物を使用するため、公開中のインストール URL は変わりません。次版を検証する場合は `DSH_BUNDLE_TAG` でモバイル本体のタグと表表示のリリースを指定します（表表示の既定は `0.1.3`）。独立した日本語化リポジトリは `DSH_LOCALE_REF`、表表示の版だけを変える場合は `DSH_MD_VERSION` で指定してください。指定したリリースに対応する tarball が必要です。
+各コンポーネントは、プラグイン画面で個別に有効・無効を切り替えられます。既定ではモバイル本体と日本語化はそれぞれの `main`、表表示は `v1.00` の `0.1.3` 成果物を使用します。別版を再現する場合は `DSH_BUNDLE_TAG` でモバイル本体のタグと表表示のリリースを指定し、独立した日本語化リポジトリは `DSH_LOCALE_REF`、表表示の版は `DSH_MD_VERSION` で指定してください。指定したリリースに対応する tarball が必要です。
 
 ## できること
 
@@ -82,15 +82,16 @@ dsh plugin --profile web add link:/path/to/dsh-mobile-maxxing
 ## リリース
 
 ```sh
+export DSH_RELEASE_TAG="v$(node -p "require('./package.json').version")" # v1.00 のような別タグにも変更可
 node scripts/pack-all.mjs --require-locale && \
-gh release create "v$(node -p "require('./package.json').version")" \
+gh release create "$DSH_RELEASE_TAG" \
   "dist/dsh-mobile-maxxing-$(node -p "require('./package.json').version").tgz" \
   "dist/dsh-mobile-maxxing.tgz" \
   "dist/dsh-md-rendering-$(node -p "require('./packages/dsh-md-rendering/package.json').version").tgz" \
   "dist/dsh-locale-ja-$(node -p "require('./packages/dsh-locale-ja/package.json').version").tgz"
 ```
 
-`dist/` 内の過去の成果物は保持されますが、上記は今回の4ファイルだけを添付します。日本語化の検証に失敗した場合はリリースしません。
+`DSH_RELEASE_TAG` は tarball 内の案内URLと GitHub リリースタグの両方に使われます。`dist/` 内の過去の成果物は保持されますが、上記は今回の4ファイルだけを添付します。日本語化の検証に失敗した場合はリリースしません。
 
 `dist/` には版付き（`dsh-mobile-maxxing-<version>.tgz`）と版なし（`dsh-mobile-maxxing.tgz`）の両方ができます。
 

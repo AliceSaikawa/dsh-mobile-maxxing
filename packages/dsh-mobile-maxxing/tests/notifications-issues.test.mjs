@@ -98,7 +98,7 @@ function seed(file, endpoint, origin) {
  * One plugin process: its own routes, listeners and learned-origin list, all
  * reading the shared state file through `DSH_HOME`.
  */
-function makeInstance({ getOrigin = INTERNAL_ORIGIN, config = {}, rejection = undefined } = {}) {
+function makeInstance({ getOrigin = INTERNAL_ORIGIN, config = {}, rejection = undefined, profileName = undefined } = {}) {
 	const listeners = new Map();
 	const routes = new Map();
 	const agentsById = new Map();
@@ -109,6 +109,7 @@ function makeInstance({ getOrigin = INTERNAL_ORIGIN, config = {}, rejection = un
 	};
 	const services = {
 		agents,
+		profileContext: profileName === undefined ? undefined : { name: profileName },
 		connection: { requestRejection: () => rejection },
 		webServer: {
 			register(route) {
@@ -144,8 +145,9 @@ function makeInstance({ getOrigin = INTERNAL_ORIGIN, config = {}, rejection = un
 		},
 		effect: (fn) => scope.effect(fn),
 	};
-	applyNotify(ctx, { onlyMobileTurns: true, ...config }, { transport: (...args) => globalThis.fetch(...args) });
+	const api = applyNotify(ctx, { onlyMobileTurns: true, ...config }, { transport: (...args) => globalThis.fetch(...args) });
 	return {
+		fanOut: api.fanOut,
 		listeners,
 		routes,
 		addRoot(id) {
@@ -483,6 +485,35 @@ test("an event with no origin of its own reaches only the newest app, never all 
 		fetchRecorder.restore();
 	}
 	assert.equal(home, process.env.DSH_HOME);
+}));
+
+test("restart restores only each profile's learned subscribed origin", withHome(async (_home, file) => {
+	mkdirSync(dirname(file), { recursive: true });
+	const phone = "https://web.push.apple.com/profile-a", other = "https://web.push.apple.com/profile-b";
+	seed(file, phone, NEW_ORIGIN);
+	seed(file, other, OLD_ORIGIN);
+	const a = makeInstance({ profileName: "alpha" });
+	const b = makeInstance({ profileName: "beta" });
+	await request(a, "/api/dsh-mobile-maxxing/push/config", { method: "GET", origin: NEW_ORIGIN });
+	await request(b, "/api/dsh-mobile-maxxing/push/config", { method: "GET", origin: OLD_ORIGIN });
+	// An internal server URL can coincide with a subscription belonging to a different profile.
+	const restartedA = makeInstance({ profileName: "alpha", getOrigin: OLD_ORIGIN });
+	const restartedB = makeInstance({ profileName: "beta" });
+	const unrelated = makeInstance({ profileName: "other" });
+	const recorder = withFetch(() => ({ status: 201, ok: true }));
+	try {
+		assert.equal((await restartedA.fanOut({ kind: "test", title: "test" })).ok, true);
+		assert.deepEqual(recorder.calls, [phone]);
+		recorder.calls.length = 0;
+		assert.equal((await restartedB.fanOut({ kind: "test", title: "test" })).ok, true);
+		assert.deepEqual(recorder.calls, [other]);
+		recorder.calls.length = 0;
+		assert.equal((await unrelated.fanOut({ kind: "test", title: "test" })).reason, "no-origin");
+		assert.deepEqual(recorder.calls, []);
+		new PushStore(file).remove(phone, NEW_ORIGIN);
+		const afterRemoval = makeInstance({ profileName: "alpha" });
+		assert.equal((await afterRemoval.fanOut({ kind: "test", title: "test" })).reason, "no-origin");
+	} finally { recorder.restore(); }
 }));
 
 test("a phone turn only notifies the app that started it, even with the other app configured", withHome(async (home, file) => {

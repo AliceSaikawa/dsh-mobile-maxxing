@@ -759,6 +759,8 @@ export function applyNotify(ctx, config, { transport = securePushRequest } = {})
 	 * exists to prevent (#28).
 	 */
 	const ownOrigins = [];
+	let originFile = null;
+	let savedOrigins = "";
 
 	/** Enough remembered origins for two apps plus a proxy and a stale tab. */
 	const MAX_OWN_ORIGINS = 8;
@@ -810,7 +812,38 @@ export function applyNotify(ctx, config, { transport = securePushRequest } = {})
 		if (existing !== -1) ownOrigins.splice(existing, 1);
 		ownOrigins.unshift(origin);
 		if (ownOrigins.length > MAX_OWN_ORIGINS) ownOrigins.length = MAX_OWN_ORIGINS;
+		persistOrigins();
 	}
+
+	/** Persist only learned origins that can receive push, isolated per profile. */
+	function persistOrigins() {
+		if (originFile === null) return;
+		const subscriptions = store.subscriptions();
+		const origins = ownOrigins.filter((origin) => subscriptions.some((item) => sameOrigin(item.origin, origin)));
+		const serialized = JSON.stringify(origins);
+		if (serialized === savedOrigins) return;
+		try {
+			writeJsonAtomically(originFile, { origins });
+			savedOrigins = serialized;
+		} catch (error) {
+			console.warn("[dsh-mobile-maxxing] cannot save profile push origins:", error?.message ?? error);
+		}
+	}
+
+	ctx.inject(["profileContext"], (profileCtx) => {
+		const profile = profileCtx.profileContext ?? profileCtx.get?.("profileContext");
+		if (typeof profile?.name !== "string" || !/^[a-zA-Z0-9._-]+$/.test(profile.name)) return;
+		originFile = join(stateDirectory(), `push-origins-${profile.name}.json`);
+		const saved = readJson(originFile, {});
+		const subscriptions = store.subscriptions();
+		if (Array.isArray(saved.origins)) {
+			for (const value of saved.origins.slice(0, MAX_OWN_ORIGINS)) {
+				const origin = normalizeOrigin(value);
+				if (origin && !ownOrigins.includes(origin) && subscriptions.some((item) => sameOrigin(item.origin, origin))) ownOrigins.push(origin);
+			}
+		}
+		persistOrigins();
+	});
 
 	/**
 	 * The first usable origin on a request: body.origin, Origin, then Referer.
@@ -999,7 +1032,7 @@ export function applyNotify(ctx, config, { transport = securePushRequest } = {})
 		// restart without falling back to every stored subscription (#27).
 		try {
 			const serverOrigin = new URL(routeCtx.webServer.getOrigin()).origin;
-			if (serverOrigin !== "null" && store.subscriptions().some((item) => sameOrigin(item.origin, serverOrigin))) {
+			if (ownOrigins.length === 0 && serverOrigin !== "null" && store.subscriptions().some((item) => sameOrigin(item.origin, serverOrigin))) {
 				learnOrigin(serverOrigin);
 			}
 		} catch {
@@ -1073,6 +1106,7 @@ export function applyNotify(ctx, config, { transport = securePushRequest } = {})
 							// registration; see `PushStore.add` (#98).
 							previousEndpoint: body.previousEndpoint,
 						});
+						persistOrigins();
 						json(res, 200, { ok: true, count, subject: store.subject(copy.subject) });
 					} catch (error) {
 						json(res, 400, { ok: false, error: String(error?.message ?? error) });

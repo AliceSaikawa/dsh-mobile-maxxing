@@ -55,7 +55,8 @@ test('the package is a separate, private web client with its own exports', () =>
 	assert.equal(manifest.dsh?.bundle?.patch, './cordis.patch.yml');
 	assert.ok(manifest.files.includes('cordis.patch.yml'));
 	assert.deepEqual(manifest.dsh?.client?.inject, ['@deepseek-ai/dsh-client-locale']);
-	assert.equal(manifest.peerDependencies?.['@deepseek-ai/dsh-client-locale'], upstream.dsh.version);
+	assert.equal(manifest.peerDependencies?.['@deepseek-ai/dsh-client-locale'], meta.clientLocalePeer);
+	assert.equal(meta.clientLocalePeer, '0.2.1-rc.2 || 0.2.1-rc.3', 'both distribution channels must advertise the same peer range');
 	assert.equal(manifest.exports?.['.'], './index.js');
 	assert.equal(manifest.exports?.['./client'], './client.js');
 	for (const target of Object.values(manifest.exports)) {
@@ -259,25 +260,100 @@ test('pack-all publishes the locale only for the complete 65/2915 zero-fallback 
 	assert.equal(localePublishDecision({ ...complete, developmentOnlyEnglishFallback: true }).publish, false);
 	assert.equal(localePublishDecision(null).publish, false);
 });
-
-test('pack-all refuses an incomplete locale in practice and leaves no locale tarball', () => {
-	const status = JSON.parse(fs.readFileSync(path.join(packageDir, 'locale', 'translation-status.json'), 'utf8'));
-	const result = spawnSync('node', [path.join(repo, 'scripts', 'pack-all.mjs'), '--require-locale'], {
-		cwd: repo,
-		encoding: 'utf8',
-	});
-	const tarballs = fs.readdirSync(path.join(repo, 'dist')).filter((file) => /^dsh-locale-ja-.*\.tgz$/.test(file));
-	if (status.status === 'complete' && status.totals.fallback === 0) {
-		assert.equal(result.status, 0, result.stderr);
-		assert.equal(tarballs.length, 1, 'a complete locale must produce exactly one tarball');
-	} else {
-		assert.equal(result.status, 1, 'an incomplete locale must fail under --require-locale');
-		assert.match(result.stdout, /REFUSED: not packing dsh-locale-ja/);
-		assert.match(result.stdout, /English fallback pack was produced/);
-		assert.deepEqual(tarballs, [], 'an incomplete locale produced a fallback tarball');
+function isolatedRepo(t) {
+	const destination = path.join(temporaryDirectory(t), 'fixture with spaces');
+	fs.mkdirSync(destination);
+	for (const entry of ['packages', 'scripts', 'tools', 'package.json', 'README.md', 'LICENSE', 'cordis.patch.yml']) {
+		fs.cpSync(path.join(repo, entry), path.join(destination, entry), { recursive: true });
 	}
-	assert.equal(fs.existsSync(path.join(repo, 'dist', tarballName(JSON.parse(fs.readFileSync(path.join(repo, 'package.json'), 'utf8'))))), true,
-		'the mobile tarball must still be packed');
+	return destination;
+}
+
+test('pack-all preserves unrelated dist files and publishes complete artifacts', (t) => {
+	const copy = isolatedRepo(t);
+	fs.mkdirSync(path.join(copy, 'dist'));
+	fs.writeFileSync(path.join(copy, 'dist', 'keep.txt'), 'keep');
+	const result = spawnSync('node', [path.join(copy, 'scripts', 'pack-all.mjs'), '--require-locale'], { cwd: copy, encoding: 'utf8' });
+	assert.equal(result.status, 0, result.stderr);
+	assert.equal(fs.readFileSync(path.join(copy, 'dist', 'keep.txt'), 'utf8'), 'keep');
+	assert.equal(fs.existsSync(path.join(copy, 'dist', tarballName(manifest))), true);
+	assert.equal(fs.existsSync(path.join(copy, 'dist', tarballName(JSON.parse(fs.readFileSync(path.join(copy, 'package.json'), 'utf8'))))), true);
+});
+
+test('pack-all preserves old artifacts and docs when required locale is stale', (t) => {
+	const copy = isolatedRepo(t);
+	const dist = path.join(copy, 'dist');
+	fs.mkdirSync(dist);
+	for (const file of ['keep.txt', tarballName(manifest), 'dsh-mobile-maxxing-0.7.0.tgz']) fs.writeFileSync(path.join(dist, file), 'old artifact');
+	const dictionary = path.join(copy, 'packages/dsh-locale-ja/locale/namespaces/ja/sidebarRight.json');
+	fs.writeFileSync(dictionary, fs.readFileSync(dictionary, 'utf8').replace('その他のツール', '変更後の翻訳'));
+	const readme = path.join(copy, 'README.md');
+	const original = fs.readFileSync(readme, 'utf8') + '\nhttps://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.1.0/dsh-mobile-maxxing-0.1.0.tgz\n';
+	fs.writeFileSync(readme, original);
+	const result = spawnSync('node', [path.join(copy, 'scripts', 'pack-all.mjs'), '--require-locale'], { cwd: copy, encoding: 'utf8' });
+	assert.equal(result.status, 1, result.stderr);
+	assert.match(result.stdout, /REFUSED: dsh-locale-ja generated files are stale/);
+	for (const file of ['keep.txt', tarballName(manifest), 'dsh-mobile-maxxing-0.7.0.tgz']) assert.equal(fs.readFileSync(path.join(dist, file), 'utf8'), 'old artifact');
+	assert.equal(fs.readFileSync(readme, 'utf8'), original);
+});
+test('optional incomplete packing refuses to reuse a previous locale tarball', (t) => {
+	const copy = isolatedRepo(t);
+	const dist = path.join(copy, 'dist');
+	fs.mkdirSync(dist);
+	fs.writeFileSync(path.join(dist, tarballName(manifest)), 'old locale');
+	const statusPath = path.join(copy, 'packages/dsh-locale-ja/locale/translation-status.json');
+	const status = JSON.parse(fs.readFileSync(statusPath, 'utf8'));
+	status.status = 'incomplete';
+	fs.writeFileSync(statusPath, JSON.stringify(status));
+	const result = spawnSync('node', [path.join(copy, 'scripts', 'pack-all.mjs')], { cwd: copy, encoding: 'utf8' });
+	assert.equal(result.status, 1, result.stderr);
+	assert.match(result.stdout, /Existing locale artifacts in dist\/ were preserved/);
+	assert.equal(fs.readFileSync(path.join(dist, tarballName(manifest)), 'utf8'), 'old locale');
+});
+
+test('pack-all refuses a directory where an artifact must be written', (t) => {
+	const copy = isolatedRepo(t);
+	const dist = path.join(copy, 'dist');
+	fs.mkdirSync(dist);
+	fs.writeFileSync(path.join(dist, 'dsh-mobile-maxxing-0.7.0.tgz'), 'old mobile');
+	fs.mkdirSync(path.join(dist, tarballName(manifest)));
+	const result = spawnSync('node', [path.join(copy, 'scripts', 'pack-all.mjs'), '--require-locale'], { cwd: copy, encoding: 'utf8' });
+	assert.notEqual(result.status, 0);
+	assert.match(result.stderr, /Refusing to replace a non-file/);
+	assert.equal(fs.readFileSync(path.join(dist, 'dsh-mobile-maxxing-0.7.0.tgz'), 'utf8'), 'old mobile');
+	assert.ok(fs.statSync(path.join(dist, tarballName(manifest))).isDirectory());
+});
+
+test('pack-all rolls back earlier artifacts when promotion fails', (t) => {
+	const copy = isolatedRepo(t);
+	const dist = path.join(copy, 'dist');
+	fs.mkdirSync(dist);
+	const files = ['dsh-mobile-maxxing-0.7.0.tgz', 'dsh-mobile-maxxing.tgz'];
+	for (const file of files) fs.writeFileSync(path.join(dist, file), 'old ' + file);
+	const preload = path.join(temporaryDirectory(t), 'fail-promotion.cjs');
+	fs.writeFileSync(preload, `const fs = require('node:fs');
+const { syncBuiltinESMExports } = require('node:module');
+const rename = fs.renameSync; let promotions = 0;
+if (process.argv[1]?.endsWith('pack-all.mjs')) fs.renameSync = (from, to) => {
+  if (String(from).includes('.dsh-pack-') && String(to).includes('/dist/') && ++promotions === 2) throw new Error('injected promotion failure');
+  return rename(from, to);
+};
+syncBuiltinESMExports();`);
+	const result = spawnSync('node', [path.join(copy, 'scripts', 'pack-all.mjs'), '--require-locale'], { cwd: copy, encoding: 'utf8', env: { ...process.env, NODE_OPTIONS: '--require=' + preload } });
+	assert.notEqual(result.status, 0);
+	assert.match(result.stderr, /injected promotion failure/);
+	for (const file of files) assert.equal(fs.readFileSync(path.join(dist, file), 'utf8'), 'old ' + file);
+});
+
+test('packed locale accepts the advertised rc.2 peer under strict resolution', (t) => {
+	const { file } = pack(t);
+	const dir = temporaryDirectory(t);
+	const peer = path.join(dir, 'peer');
+	fs.mkdirSync(peer);
+	fs.writeFileSync(path.join(peer, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-client-locale', version: '0.2.1-rc.2' }));
+	fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'locale-peer-test', version: '1.0.0', private: true, dependencies: { '@deepseek-ai/dsh-client-locale': 'file:./peer', 'dsh-locale-ja': 'file:' + file } }));
+	const result = spawnSync('npm', ['install', '--package-lock-only', '--ignore-scripts', '--offline', '--strict-peer-deps'], { cwd: dir, encoding: 'utf8' });
+	assert.equal(result.status, 0, result.stderr);
 });
 
 test('docs describe the optional local-tarball install and never a fake release asset', () => {

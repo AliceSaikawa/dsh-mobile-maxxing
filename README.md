@@ -41,7 +41,7 @@ dsh plugin --profile web add github:kuraneko1/dsh-locale-ja
 curl -fsSL https://raw.githubusercontent.com/kuraneko1/dsh-mobile-maxxing/main/scripts/install-mobile-bundle.mjs | node --input-type=module
 ```
 
-各コンポーネントは、プラグイン画面で個別に有効・無効を切り替えられます。
+各コンポーネントは、プラグイン画面で個別に有効・無効を切り替えられます。既定ではモバイル本体と日本語化はそれぞれの `main`、表表示は `v0.7.0-rc.1` の成果物を使用します。特定版を再現する場合は、`DSH_BUNDLE_TAG` でモバイル本体のタグと表表示のリリースを指定し、独立した日本語化リポジトリは `DSH_LOCALE_REF` でタグまたはコミットを指定してください。指定先に表表示の `dsh-md-rendering-0.1.2.tgz` が必要です。
 
 ## できること
 

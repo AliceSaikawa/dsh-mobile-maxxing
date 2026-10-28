@@ -580,7 +580,7 @@ export function renderManifest(meta, upstream) {
 	if (meta.repository !== undefined) manifest.repository = meta.repository;
 	if (meta.homepage !== undefined) manifest.homepage = meta.homepage;
 	if (meta.bugs !== undefined) manifest.bugs = meta.bugs;
-	if (upstream.dsh && typeof upstream.dsh.version === 'string') manifest.peerDependencies = { '@deepseek-ai/dsh-client-locale': upstream.dsh.version };
+	if (upstream.dsh && typeof upstream.dsh.version === 'string') manifest.peerDependencies = { '@deepseek-ai/dsh-client-locale': meta.clientLocalePeer ?? upstream.dsh.version };
 	return jsonText(manifest);
 }
 
@@ -590,6 +590,7 @@ export function validateMeta(meta) {
 	if (typeof meta.name !== 'string' || meta.name === '') throw new Error('locale/package-meta.json: name is required');
 	if (typeof meta.version !== 'string' || meta.version === '') throw new Error('locale/package-meta.json: version is required');
 	if (typeof meta.description !== 'string' || meta.description === '') throw new Error('locale/package-meta.json: description is required');
+	if (meta.clientLocalePeer !== undefined && (typeof meta.clientLocalePeer !== 'string' || !meta.clientLocalePeer.trim())) throw new Error('locale/package-meta.json: clientLocalePeer must be a nonempty string');
 	return meta;
 }
 

@@ -1,6 +1,10 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 
 const client = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
@@ -57,6 +61,23 @@ test('one installer URL installs three independent components', () => {
   assert.match(installer, /dsh-md-rendering-0\.1\.2\.tgz/);
   assert.match(installer, /github:kuraneko1\/dsh-locale-ja/);
   assert.match(installer, /\["plugin", "--profile", profile, "add", \.\.\.packages\]/);
+});
+
+test('installer pins specified mobile and locale refs independently', (t) => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), 'dsh-installer-test-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const dsh = path.join(directory, 'dsh');
+  writeFileSync(dsh, '#!/usr/bin/env node\nconsole.log(JSON.stringify(process.argv.slice(2)))\n');
+  chmodSync(dsh, 0o755);
+  const env = { ...process.env, PATH: directory + path.delimiter + process.env.PATH, DSH_PROFILE: 'isolated', DSH_BUNDLE_TAG: 'v0.8.0', DSH_LOCALE_REF: 'locale-ref', DSH_BUNDLE_BASE_URL: 'https://example.test/v0.8.0' };
+  const script = fileURLToPath(new URL('../../../scripts/install-mobile-bundle.mjs', import.meta.url));
+  const run = spawnSync(process.execPath, [script], { env, encoding: 'utf8' });
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(JSON.parse(run.stdout), ['plugin', '--profile', 'isolated', 'add', 'github:kuraneko1/dsh-mobile-maxxing#v0.8.0', 'https://example.test/v0.8.0/dsh-md-rendering-0.1.2.tgz', 'github:kuraneko1/dsh-locale-ja#locale-ref']);
+  delete env.DSH_BUNDLE_TAG; delete env.DSH_LOCALE_REF; delete env.DSH_BUNDLE_BASE_URL;
+  const defaults = spawnSync(process.execPath, [script], { env, encoding: 'utf8' });
+  assert.equal(defaults.status, 0, defaults.stderr);
+  assert.deepEqual(JSON.parse(defaults.stdout).slice(4), ['github:kuraneko1/dsh-mobile-maxxing', 'https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v0.7.0-rc.1/dsh-md-rendering-0.1.2.tgz', 'github:kuraneko1/dsh-locale-ja']);
 });
 
 test('bundle exports its client and distribution resources', () => {

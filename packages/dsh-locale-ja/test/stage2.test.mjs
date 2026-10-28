@@ -26,12 +26,20 @@ import {
 	placeholders,
 	readJsonFile,
 	validateBatchManifest,
+	validateMeta,
 	writeArtifacts,
 } from '../../../tools/locale-data.mjs';
 import { mergeReviewedBatches } from '../../../tools/merge-batches.mjs';
 import { loadClientModule } from './client-loader.mjs';
 
 const packageDir = path.resolve(import.meta.dirname, '..');
+
+test('locale peer metadata must be a nonempty string when supplied', () => {
+	const base = { name: 'dsh-locale-ja', version: '0.1.1', description: 'test' };
+	assert.equal(validateMeta(base), base);
+	assert.equal(validateMeta({ ...base, clientLocalePeer: '0.2.1-rc.2 || 0.2.1-rc.3' }).clientLocalePeer, '0.2.1-rc.2 || 0.2.1-rc.3');
+	for (const invalid of [null, '', '  ', 3]) assert.throws(() => validateMeta({ ...base, clientLocalePeer: invalid }), /clientLocalePeer/);
+});
 
 /**
  * The generated client is a browser bundle, not an ES module: load it through

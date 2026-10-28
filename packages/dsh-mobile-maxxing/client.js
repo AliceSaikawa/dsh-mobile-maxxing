@@ -3804,6 +3804,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       closeCropOverlay();
       clearDetailPanelHooks();
       clearQuestionArrows();
+      clearQuestionBehaviors();
       clearModelSearch();
       clearActivityChips();
       clearPreviewTools();
@@ -5906,8 +5907,17 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       update();
     }
 
-    /** Question cards whose Enter/validation behaviour is already installed. */
-    const questionBehaviorCards = new WeakSet();
+    /** Keep the exact handlers so leaving the card or disposing removes them. */
+    const questionBehaviorCards = new Map();
+    function clearQuestionBehavior(card) {
+      const state = questionBehaviorCards.get(card);
+      if (state === undefined) return;
+      questionBehaviorCards.delete(card);
+      state.dispose();
+    }
+    function clearQuestionBehaviors() {
+      for (const card of questionBehaviorCards.keys()) clearQuestionBehavior(card);
+    }
 
     /**
      * Whether this card still needs a selected option, or null when it offers
@@ -5991,29 +6001,28 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     /** Install the phone-only answer-field rules once per card node. */
     function installQuestionCardBehavior(card) {
-      if (questionBehaviorCards.has(card) || card.querySelector('[class*="_options"]') === null) return;
       const field = card.querySelector("textarea");
-      if (field === null || questionSubmitButton(card) === null) return;
-      questionBehaviorCards.add(card);
-      card.addEventListener("focusin", () => {
-        // The keyboard shrinks the layout viewport; this attribute lifts the
-        // 60vh cap while a field is focused, and the next frame keeps that
-        // field inside the card's scroller.
+      if (card.querySelector('[class*="_options"]') === null || field === null || questionSubmitButton(card) === null) {
+        clearQuestionBehavior(card);
+        return;
+      }
+      if (questionBehaviorCards.get(card)?.field === field) return;
+      clearQuestionBehavior(card);
+      const state = { field, dispose: null };
+      const onFocusIn = () => {
         card.setAttribute("data-rdsh-question-typing", "");
-        requestAnimationFrame(() => revealQuestionField(card));
-      });
-      card.addEventListener("focusout", (event) => {
-        if (card.contains(event.relatedTarget)) return;
-        card.removeAttribute("data-rdsh-question-typing");
-      });
-      field.addEventListener("keydown", (event) => questionCardKeyDown(event, card), true);
-      field.addEventListener("input", () => { if (questionNeedsSelection(card) === false) clearQuestionFeedback(card); });
-      card.addEventListener("click", (event) => {
+        requestAnimationFrame(() => { if (questionBehaviorCards.get(card) === state) revealQuestionField(card); });
+      };
+      const onFocusOut = (event) => {
+        if (!card.contains(event.relatedTarget)) card.removeAttribute("data-rdsh-question-typing");
+      };
+      const onKeyDown = (event) => questionCardKeyDown(event, card);
+      const onInput = () => { if (questionNeedsSelection(card) === false) clearQuestionFeedback(card); };
+      const onClick = (event) => {
         const button = event.target?.closest?.("button") ?? null;
         if (button === null || button !== questionSubmitButton(card)) {
-          // A choice lands after React commits; clear our message on that frame.
           requestAnimationFrame(() => {
-            if (questionNeedsSelection(card) === false) clearQuestionFeedback(card);
+            if (questionBehaviorCards.get(card) === state && questionNeedsSelection(card) === false) clearQuestionFeedback(card);
           });
           return;
         }
@@ -6021,12 +6030,27 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         event.preventDefault();
         if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
         refuseEmptyQuestion(card);
-      }, true);
+      };
+      state.dispose = () => {
+        card.removeEventListener("focusin", onFocusIn);
+        card.removeEventListener("focusout", onFocusOut);
+        field.removeEventListener("keydown", onKeyDown, true);
+        field.removeEventListener("input", onInput);
+        card.removeEventListener("click", onClick, true);
+        card.removeAttribute("data-rdsh-question-typing");
+      };
+      questionBehaviorCards.set(card, state);
+      card.addEventListener("focusin", onFocusIn);
+      card.addEventListener("focusout", onFocusOut);
+      field.addEventListener("keydown", onKeyDown, true);
+      field.addEventListener("input", onInput);
+      card.addEventListener("click", onClick, true);
     }
 
     function decorateQuestionCards() {
       if (!phone()) {
         clearQuestionArrows();
+        clearQuestionBehaviors();
         for (const attribute of ["data-rdsh-question-card", "data-rdsh-question-frame", "data-rdsh-question-tile", "data-rdsh-question-typing"]) {
           clearOwnedAttribute(attribute);
         }
@@ -6045,6 +6069,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         installQuestionCardBehavior(card);
         if (card.hasAttribute("data-rdsh-question-typing")) revealQuestionField(card);
         live.add(card);
+      }
+      for (const card of questionBehaviorCards.keys()) {
+        if (!live.has(card)) clearQuestionBehavior(card);
       }
       for (const [card, state] of questionArrowState) {
         if (live.has(card)) continue;
@@ -7621,24 +7648,50 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     let currentSessionId = null;
 
-    /**
-     * Tell the push host that the next turn belongs to this device.
-     *
-     * A phone send is marked automatically. On a desktop that is the #15
-     * opt-in: without it the host's `onlyMobileTurns` default means a PC send
-     * is never notified, and a desktop window silently changing that would be
-     * the same width-based behaviour #17 removes.
-     */
-    function markMobileSession(sessionId = currentSessionId) {
-      if (typeof sessionId !== "string" || sessionId === "") return;
-      if (!phone() && !notifyDeviceTurns()) return;
-      void fetch(`${PUSH_API}/mobile-send`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        // The host routes this turn's end back to the app that started it.
-        body: JSON.stringify({ sessionId, origin: location.origin }),
-        keepalive: true,
-      }).catch(() => {});
+    /** Mark this exact prompt before the Host can admit it. */
+    async function markMobileSession(sessionId = currentSessionId, requestId = "") {
+      if (typeof sessionId !== "string" || sessionId === "" || typeof requestId !== "string" || requestId === "") return false;
+      if (!phone() && !notifyDeviceTurns()) return false;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 1500);
+      try {
+        const response = await fetch(`${PUSH_API}/mobile-send`, {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ sessionId, requestId, origin: location.origin }),
+          signal: controller.signal, keepalive: true,
+        });
+        return response.ok === true;
+      } catch {
+        // Never prevent a user prompt merely because notification marking failed.
+        return false;
+      } finally { clearTimeout(timer); }
+    }
+
+    /** Wrap only the public conversation sink; leave the original Session object untouched. */
+    function installConversationMarking(conversation) {
+      if (conversation === null || typeof conversation !== "object" || typeof conversation.sendSession !== "function") return () => {};
+      const original = conversation.sendSession;
+      const hadOwn = Object.hasOwn(conversation, "sendSession");
+      const wrapped = function (session, ...args) {
+        if ((!phone() && !notifyDeviceTurns()) || session === null || typeof session !== "object") return original.call(this, session, ...args);
+        const scoped = new Proxy(session, {
+          get(target, property) {
+            const value = Reflect.get(target, property, target);
+            if (property === "prompt" && typeof value === "function") return async (...promptArgs) => {
+              await markMobileSession(target.sessionId, promptArgs[3]);
+              return value.apply(target, promptArgs);
+            };
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+        return original.call(this, scoped, ...args);
+      };
+      conversation.sendSession = wrapped;
+      return () => {
+        if (conversation.sendSession !== wrapped) return;
+        if (hadOwn) conversation.sendSession = original;
+        else delete conversation.sendSession;
+      };
     }
 
     let notificationTotal = 0;
@@ -9474,10 +9527,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           input.focus({ preventScroll: true });
         }
       }
-      const send = event.target.closest && event.target.closest('[data-rdsh-composer-root] [class*="primary"]');
-      if (send !== null && send !== undefined && send.disabled !== true && !STOP_PROBE.test(send.getAttribute("aria-label") || "")) {
-        markMobileSession();
-      }
       // Right panel tabs: dockkit arms a reorder on pointerdown and starts it
       // after 4px, so a tap or a sideways swipe became a drag. Block the move
       // until the hold fires; the app's own listener stays armed and completes
@@ -9956,12 +10005,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (editor.querySelector("[data-selected]") !== null) return;
       // While a menu is open, Enter selects its highlighted row.
       if (openPopup() !== null) return;
-      if (!finger) {
-        markMobileSession();
-        return;
-      }
+      if (!finger) return;
       if (state.enterToSend) {
-        markMobileSession();
         closeKeyboardAfterSend();
         return;
       }
@@ -10938,7 +10983,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (phone() || notifyDeviceTurns()) {
         const primary = target.closest && target.closest('[data-rdsh-composer-root] [class*="primary"]');
         if (primary !== null && primary !== undefined && primary.disabled !== true && !STOP_PROBE.test(primary.getAttribute("aria-label") || "")) {
-          markMobileSession();
           closeKeyboardAfterSend();
         }
       }
@@ -11895,7 +11939,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * The host delivers each event to one origin only: the app that started
      * the turn, or the newest origin that has talked to it, and never to every
      * stored subscription (#27). After a process restart it has to learn that
-     * origin again, so a boot-time `/config` request is enough: its guard
+     * origin when no per-profile saved origin is available, so a boot-time `/config` request is enough: its guard
      * records the request origin from the Origin/Referer headers without
      * changing any notification setting, and without one the host logs
      * `push skipped` instead of guessing.
@@ -11922,6 +11966,23 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * device's own previous endpoint and never another device's.
      */
     const PUSH_ENDPOINT_KEY = "rdsh-mobile-ux:push-endpoint";
+    const PUSH_ENABLED_KEY = "rdsh-mobile-ux:push-enabled";
+    let pushEnabledOverride = null;
+    function pushEnabled() {
+      if (pushEnabledOverride !== null) return pushEnabledOverride;
+      try {
+        const value = localStorage.getItem(PUSH_ENABLED_KEY);
+        return value === "true" ? true : value === "false" ? false : null;
+      } catch { return null; }
+    }
+    function setPushEnabled(enabled) {
+      pushEnabledOverride = enabled;
+      try { localStorage.setItem(PUSH_ENABLED_KEY, String(enabled)); } catch { /* private mode */ }
+    }
+    let pushSyncTask = null;
+    let pushEnablePromise = null;
+    let pushEnableWork = null;
+    let pushEnableGeneration = 0;
 
     /** The endpoint this browser registered last, or "". */
     function readPushEndpoint() {
@@ -11971,53 +12032,76 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       return saved;
     }
 
-    async function enableNotifications() {
-      if (typeof Notification === "undefined") throw new Error(t("notify.unsupported"));
-      const permission = await Notification.requestPermission();
-      if (permission !== "granted") throw new Error(t("notify.permissionMissing"));
-      const registration = await navigator.serviceWorker.ready;
-      const response = await fetch(`${PUSH_API}/vapid`, { cache: "no-store" });
-      if (!response.ok) throw new Error(t("notify.unavailable"));
-      const { publicKey } = await response.json();
-      const existing = await registration.pushManager.getSubscription();
-      const subscription = existing === null
-        ? await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(publicKey) })
-        : existing;
-      const saved = await savePushSubscription(subscription);
-      if (!saved.ok) throw new Error(t("notify.subscribeFailed", { status: saved.status }));
-      await refreshNotificationStatus();
+    function enableNotifications() {
+      if (pushEnablePromise !== null) return pushEnablePromise;
+      const generation = ++pushEnableGeneration;
+      pushEnablePromise = (async () => {
+        if (typeof Notification === "undefined") throw new Error(t("notify.unsupported"));
+        const permission = await Notification.requestPermission();
+        if (generation !== pushEnableGeneration) return;
+        if (permission !== "granted") throw new Error(t("notify.permissionMissing"));
+        if (pushSyncTask !== null) await pushSyncTask;
+        if (generation !== pushEnableGeneration) return;
+        pushEnableWork = (async () => {
+          setPushEnabled(true);
+          const registration = await navigator.serviceWorker.ready;
+          const response = await fetch(`${PUSH_API}/vapid`, { cache: "no-store" });
+          if (!response.ok) throw new Error(t("notify.unavailable"));
+          const { publicKey } = await response.json();
+          const existing = await registration.pushManager.getSubscription();
+          const subscription = existing === null
+            ? await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(publicKey) })
+            : existing;
+          const saved = await savePushSubscription(subscription);
+          if (!saved.ok) throw new Error(t("notify.subscribeFailed", { status: saved.status }));
+          await refreshNotificationStatus();
+        })();
+        await pushEnableWork;
+      })().finally(() => { pushEnablePromise = null; pushEnableWork = null; });
+      return pushEnablePromise;
     }
 
-    /**
-     * Re-register this browser's existing subscription on every launch (#98).
-     *
-     * A browser can rotate its registration, and the host retires the old
-     * endpoint only when a page names it. Registering again also refreshes the
-     * entry's timestamp, which is the host's evidence that this device still
-     * holds that endpoint: the stale-entry valve keys on it, so an entry is
-     * never pruned while its device keeps opening the app. Nothing is created
-     * here — without permission or an existing subscription there is nothing
-     * to send.
-     */
-    async function syncPushSubscription() {
-      if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
-      if (!("serviceWorker" in navigator)) return;
-      try {
-        const registration = await navigator.serviceWorker.getRegistration();
-        const subscription = registration === null || registration === undefined
-          ? null
-          : await registration.pushManager.getSubscription();
-        if (subscription === null || subscription === undefined) return;
-        await savePushSubscription(subscription);
-      } catch {
-        // A failed sync leaves the stored entry alone; Settings can retry.
-      }
+    /** Retry on launch, reconnect and return to the visible app. */
+    function syncPushSubscription() {
+      if (pushSyncTask !== null) return pushSyncTask;
+      pushSyncTask = (async () => {
+        if (typeof Notification === "undefined" || Notification.permission !== "granted" || pushEnabled() === false) return;
+        if (!("serviceWorker" in navigator)) return;
+        try {
+          const registration = await navigator.serviceWorker.getRegistration();
+          if (!live || registration === null || registration === undefined || pushEnabled() === false) return;
+          let subscription = await registration.pushManager.getSubscription();
+          if (!live || pushEnabled() === false) return;
+          if (subscription === null || subscription === undefined) {
+            // Legacy disabled and never-enabled browsers are indistinguishable: do not opt them in.
+            if (pushEnabled() !== true) return;
+            const response = await fetch(`${PUSH_API}/vapid`, { cache: "no-store" });
+            if (!response.ok || !live || pushEnabled() !== true) return;
+            const { publicKey } = await response.json();
+            if (!live || pushEnabled() !== true) return;
+            subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(publicKey) });
+          }
+          if (!live || pushEnabled() === false) return;
+          const saved = await savePushSubscription(subscription);
+          if (saved.ok && live && pushEnabled() !== false) setPushEnabled(true);
+        } catch {
+          // Retry on the next launch, reconnect or foreground event.
+        }
+      })().finally(() => { pushSyncTask = null; });
+      return pushSyncTask;
+    }
+    function onPushVisible() {
+      if (document.visibilityState === "visible") void syncPushSubscription();
     }
 
     async function disableNotifications() {
+      ++pushEnableGeneration;
+      setPushEnabled(false);
+      if (pushEnableWork !== null) { try { await pushEnableWork; } catch { /* still remove the browser subscription */ } }
+      if (pushSyncTask !== null) await pushSyncTask;
       const registration = await navigator.serviceWorker.getRegistration();
       const subscription = registration === null || registration === undefined ? null : await registration.pushManager.getSubscription();
-      if (subscription !== null) {
+      if (subscription !== null && subscription !== undefined) {
         try {
           await fetch(`${PUSH_API}/unsubscribe`, {
             method: "POST",
@@ -15235,6 +15319,8 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         // #98: re-assert this device's subscription so a rotated endpoint
         // retires the one it replaced, and the host sees this device as live.
         void syncPushSubscription();
+        window.addEventListener("online", syncPushSubscription);
+        document.addEventListener("visibilitychange", onPushVisible);
 
         globalThis.__RDSH_MOBILE_UX__ = {
           get state() { return { ...state }; },
@@ -15281,6 +15367,8 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             keyDown: questionCardKeyDown,
             needsSelection: questionNeedsSelection,
             clearFeedback: clearQuestionFeedback,
+            install: installQuestionCardBehavior,
+            clear: clearQuestionBehavior,
           },
           phone,
           // Folder frames and the one-shot workspace-menu claim. The keys,
@@ -15297,6 +15385,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             clear: clearFolderMenu,
           },
           markMobileSession,
+          installConversationMarking,
           closeDrawer,
           openDrawer: toggleDrawer,
           drawerScroll: {
@@ -15305,6 +15394,8 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             get top() { return drawerScrollTop; },
           },
           enableNotifications,
+          disableNotifications,
+          syncPushSubscription,
           sendTestNotification,
         };
 
@@ -15333,6 +15424,8 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             removeHeightProbe();
             document.removeEventListener("focusout", onKeyboardFocusOut, true);
             document.removeEventListener("visibilitychange", onKeyboardVisibility);
+            document.removeEventListener("visibilitychange", onPushVisible);
+            window.removeEventListener("online", syncPushSubscription);
             window.removeEventListener("blur", scheduleKeyboardRecovery);
             window.removeEventListener("focus", scheduleKeyboardRecovery);
             if (keyboardRecoveryFrame !== 0) {
@@ -15456,6 +15549,10 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         // service through injection so a stored device choice is applied as
         // soon as the palette contract exists, instead of being skipped at
         // apply time because ctx.get("theme") was still undefined (#73).
+        ctx.inject(["conversation"], (scope) => {
+          const service = scope.conversation ?? scope.get?.("conversation");
+          return installConversationMarking(service);
+        });
         ctx.inject(["theme"], (scope) => {
           try {
             attachDeviceTheme(scope);

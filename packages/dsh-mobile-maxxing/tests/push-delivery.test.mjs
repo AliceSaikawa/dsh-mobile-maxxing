@@ -56,13 +56,15 @@ test("sendWebPush lets fetch frame the body and reports the push status", async 
 		const result = await sendWebPush(
 			target,
 			{ title: "t", body: "b" },
-			{ keys: KEYS, subject: "https://app.example" },
+			{ keys: KEYS, subject: "https://app.example", transport: (...args) => globalThis.fetch(...args) },
 		);
 
 		assert.equal(calls.length, 1, "one push endpoint means one request");
 		assert.equal(calls[0].url, target.endpoint);
 		const { options } = calls[0];
 		assert.equal(options.method, "POST");
+		assert.equal(options.redirect, "error");
+		assert.ok(options.signal instanceof AbortSignal);
 		assertNoForbiddenHeaders(options.headers);
 		assert.equal(options.headers["content-encoding"], "aes128gcm");
 		assert.equal(options.headers["content-type"], "application/octet-stream");
@@ -112,7 +114,7 @@ test("sendWebPush delivers a POST through a real socket", async () => {
 		const result = await sendWebPush(
 			target,
 			{ title: "t", body: "b" },
-			{ keys: KEYS, subject: "https://app.example" },
+			{ keys: KEYS, subject: "https://app.example", transport: (...args) => globalThis.fetch(...args) },
 		);
 
 		assert.equal(received.length, 1, "the local push service received one request");
@@ -141,7 +143,7 @@ test("describePushError surfaces the undici cause code, without the endpoint", a
 	try {
 		const target = subscription("https://web.push.apple.com/abc");
 		await assert.rejects(
-			() => sendWebPush(target, { title: "t" }, { keys: KEYS, subject: "https://app.example" }),
+			() => sendWebPush(target, { title: "t" }, { keys: KEYS, subject: "https://app.example", transport: (...args) => globalThis.fetch(...args) }),
 			(error) => {
 				const text = describePushError(error);
 				assert.match(text, /^fetch failed/);

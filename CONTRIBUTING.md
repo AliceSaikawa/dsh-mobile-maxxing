@@ -55,10 +55,7 @@ node --test packages/dsh-mobile-maxxing/tests/plugin.test.mjs   # 1ファイル�
 
 ## リリース
 
-```sh
-node scripts/pack-all.mjs
-gh release create vX.Y.Z dist/*.tgz
-```
+[READMEのリリース手順](README.md#リリース)を使います。日本語化の検証を必須にし、`dist/` に保存されている旧成果物を添付しません。
 
 ファイル名は `<name>-<version>.tgz` で固定です（README のインストール手順がこの名前を指しています）。
 任意の `dsh-locale-ja` は `translation-status.json` が 65/2915・翻訳 2915・fallback 0 のときだけ

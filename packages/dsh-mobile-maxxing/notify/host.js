@@ -28,22 +28,16 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { copyFor } from "../lib/copy.js";
+import { securePushRequest } from "./secure-push.js";
 
 /** How long a push stays queued when the phone is offline. */
 const PUSH_TTL_SECONDS = 600;
 /** VAPID tokens are short-lived on purpose; 12h is the common ceiling. */
 const VAPID_TTL_SECONDS = 12 * 60 * 60;
-/** How many subscriptions one store keeps; the oldest is dropped past this. */
+/** Refuse new subscriptions at capacity instead of dropping another device. */
 const MAX_SUBSCRIPTIONS = 32;
-/**
- * How long one device's registration stays trusted while it is never refreshed.
- *
- * A browser re-registers on every launch, so a live device keeps its entry
- * fresh. An entry this old belongs to a registration the device no longer
- * holds — typically left behind by a reinstall that cleared its storage, which
- * also clears the endpoint it would otherwise name (#98).
- */
-const STALE_SUBSCRIPTION_MS = 7 * 24 * 60 * 60 * 1000;
+/** A slow or unreachable push service must not delay delivery indefinitely. */
+const PUSH_TIMEOUT_MS = 10_000;
 
 // ---------------------------------------------------------------------------
 // Small helpers
@@ -236,7 +230,7 @@ export function describePushError(error) {
  * @param {string} options.subject - VAPID contact.
  * @returns {Promise<{ok: boolean, status: number, gone: boolean}>}
  */
-export async function sendWebPush(subscription, payload, { keys, subject }) {
+export async function sendWebPush(subscription, payload, { keys, subject, transport = securePushRequest }) {
 	const audience = endpointAudience(subscription.endpoint);
 	if (audience === "") return { ok: false, status: 0, gone: true };
 
@@ -248,18 +242,19 @@ export async function sendWebPush(subscription, payload, { keys, subject }) {
 		return { ok: false, status: 0, gone: true };
 	}
 
-	const response = await fetch(subscription.endpoint, {
+	const response = await transport(subscription.endpoint, {
 		method: "POST",
 		headers: {
 			authorization: vapidAuthorization({ keys, audience, subject }),
 			"content-encoding": "aes128gcm",
 			"content-type": "application/octet-stream",
-			// content-length is deliberately left to fetch: a manual value on a
-			// Buffer body made undici reject every send (#85).
+			// Let the HTTP transport frame the encrypted bytes (#85).
 			ttl: String(PUSH_TTL_SECONDS),
 			urgency: "high",
 		},
 		body,
+		redirect: "error",
+		signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
 	});
 	// 404 and 410 are the two ways a push service retires a subscription.
 	return { ok: response.status >= 200 && response.status < 300, status: response.status, gone: response.status === 404 || response.status === 410 };
@@ -580,11 +575,9 @@ export class PushStore {
 	 * notification from the stale copy (#98). The page names the endpoint it
 	 * held last, and only that exact entry is dropped.
 	 *
-	 * The endpoint is per browser registration, not per origin: two devices can
-	 * serve the same origin, and a device that reinstalled can name nothing.
-	 * An entry left without a `previousEndpoint` is therefore only dropped once
-	 * it has not been refreshed for {@link STALE_SUBSCRIPTION_MS} and carries
-	 * this device's label — a live device refreshes its entry on every launch.
+	 * The endpoint is per browser registration, not per origin or user agent.
+	 * If a device cannot name its old endpoint, only an explicit unsubscribe
+	 * or a 404/410 from the push service can safely retire it.
 	 *
 	 * @param {object} subscription - `{ endpoint, keys }` from the browser.
 	 * @param {object} [meta] - `{ label, origin, previousEndpoint }` for the
@@ -622,21 +615,8 @@ export class PushStore {
 		if (previous !== "" && previous !== endpoint) {
 			kept = kept.filter((item) => !(item.endpoint === previous && sameOrigin(item.origin, entry.origin)));
 		}
-		// The safety valve for entries no client can name. It is scoped to this
-		// origin and this label, so another origin (or a device with a different
-		// label) is never touched; a live device resets its own `addedAt` at
-		// every launch, which is what keeps it out of this filter.
-		if (entry.origin !== "" && entry.label !== "") {
-			const cutoff = entry.addedAt - STALE_SUBSCRIPTION_MS;
-			kept = kept.filter((item) => !(
-				item.endpoint !== endpoint
-				&& item.label === entry.label
-				&& sameOrigin(item.origin, entry.origin)
-				&& Number.isFinite(item.addedAt)
-				&& item.addedAt <= cutoff
-			));
-		}
-		this.state.subscriptions = [entry, ...kept].slice(0, MAX_SUBSCRIPTIONS);
+		if (kept.length >= MAX_SUBSCRIPTIONS) throw new Error("push subscription limit reached; remove an obsolete subscription first");
+		this.state.subscriptions = [entry, ...kept];
 		this.save();
 		return this.state.subscriptions.length;
 	}
@@ -753,12 +733,12 @@ async function readJsonBody(req) {
  * @param {object} ctx - plugin context.
  * @param {object} config - normalized notification config.
  */
-export function applyNotify(ctx, config) {
+export function applyNotify(ctx, config, { transport = securePushRequest } = {}) {
 	const store = new PushStore(join(stateDirectory(), "push.json"));
 	const copy = normalizeNotifyConfig(config);
-	/** Sessions whose next turn was started from the phone. One-shot. */
-	const mobileSendAt = new Map();
-	/** The turn now running in a session: `{ fromPhone, origin }`. */
+	/** RPC ids explicitly marked by a browser, consumed by the matching user message. */
+	const mobileSends = new Map();
+	/** The turn now running in a session: `{ fromPhone, origins }`. */
 	const turnMobile = new Map();
 	/** The origin that most recently started a turn in a session. */
 	const lastTurnOrigin = new Map();
@@ -779,6 +759,8 @@ export function applyNotify(ctx, config) {
 	 * exists to prevent (#28).
 	 */
 	const ownOrigins = [];
+	let originFile = null;
+	let savedOrigins = "";
 
 	/** Enough remembered origins for two apps plus a proxy and a stale tab. */
 	const MAX_OWN_ORIGINS = 8;
@@ -830,7 +812,45 @@ export function applyNotify(ctx, config) {
 		if (existing !== -1) ownOrigins.splice(existing, 1);
 		ownOrigins.unshift(origin);
 		if (ownOrigins.length > MAX_OWN_ORIGINS) ownOrigins.length = MAX_OWN_ORIGINS;
+		persistOrigins();
 	}
+
+	/** Persist only learned origins that can receive push, isolated per profile. */
+	function persistOrigins() {
+		if (originFile === null) return;
+		const subscriptions = store.subscriptions();
+		const origins = ownOrigins.filter((origin) => subscriptions.some((item) => sameOrigin(item.origin, origin)));
+		const pending = [...mobileSends].map(([key, item]) => ({ key, ...item }));
+		const serialized = JSON.stringify({ origins, pending });
+		if (serialized === savedOrigins) return;
+		try {
+			writeJsonAtomically(originFile, { origins, pending });
+			savedOrigins = serialized;
+		} catch (error) {
+			console.warn("[dsh-mobile-maxxing] cannot save profile push origins:", error?.message ?? error);
+		}
+	}
+
+	ctx.inject(["profileContext"], (profileCtx) => {
+		const profile = profileCtx.profileContext ?? profileCtx.get?.("profileContext");
+		if (typeof profile?.name !== "string" || !/^[a-zA-Z0-9._-]+$/.test(profile.name)) return;
+		originFile = join(stateDirectory(), `push-origins-${profile.name}.json`);
+		const saved = readJson(originFile, {});
+		const subscriptions = store.subscriptions();
+		if (Array.isArray(saved.origins)) {
+			for (const value of saved.origins.slice(0, MAX_OWN_ORIGINS)) {
+				const origin = normalizeOrigin(value);
+				if (origin && !ownOrigins.includes(origin) && subscriptions.some((item) => sameOrigin(item.origin, origin))) ownOrigins.push(origin);
+			}
+		}
+		if (Array.isArray(saved.pending)) {
+			for (const item of saved.pending.slice(0, 2048)) {
+				if (typeof item?.key !== "string" || !item.key.includes("\0") || typeof item.at !== "number" || Date.now() - item.at >= 7 * 24 * 60 * 60 * 1000 || typeof item.origin !== "string") continue;
+				if (!mobileSends.has(item.key)) mobileSends.set(item.key, { at: item.at, origin: normalizeOrigin(item.origin) || "" });
+			}
+		}
+		persistOrigins();
+	});
 
 	/**
 	 * The first usable origin on a request: body.origin, Origin, then Referer.
@@ -940,25 +960,17 @@ export function applyNotify(ctx, config) {
 				pendingNotices.delete(pending);
 			}
 		}
-		for (const subscription of subscriptions) {
-			// Skip only after this particular notice was rendered and acknowledged.
-			// A suspended page, failed request, or missing UI always gets normal
-			// push instead of losing the notification behind a stale visibility lease.
-			if (pending?.acked.has(subscription.endpoint)) {
-				results.push({ status: 0, ok: true, skipped: "acknowledged" });
-				continue;
-			}
+		results.push(...await Promise.all(subscriptions.map(async (subscription) => {
+			// Only an acknowledged notice suppresses this particular endpoint.
+			if (pending?.acked.has(subscription.endpoint)) return { status: 0, ok: true, skipped: "acknowledged" };
 			try {
-				const result = await sendWebPush(subscription, payload, { keys: store.keys(), subject });
-				results.push({ status: result.status, ok: result.ok });
-				// 404/410 is how a push service retires a registration; an app
-				// deleted without /unsubscribe is only discoverable this way.
+				const result = await sendWebPush(subscription, payload, { keys: store.keys(), subject, transport });
 				if (result.gone) store.remove(subscription.endpoint);
+				return { status: result.status, ok: result.ok };
 			} catch (error) {
-				// The undici cause is the only diagnostic a failed fetch leaves.
-				results.push({ status: 0, ok: false, error: describePushError(error) });
+				return { status: 0, ok: false, error: describePushError(error) };
 			}
-		}
+		})));
 		const everyDelivered = results.every((item) => item.ok);
 		const skipped = results.length > 0 && results.every((item) => item.skipped === "acknowledged")
 			? "acknowledged"
@@ -970,28 +982,40 @@ export function applyNotify(ctx, config) {
 		const agents = agentCtx.get("agents");
 		agentCtx.on("session/event", (session, event) => {
 			if (event?.type === "turn/start") {
-				const pending = mobileSendAt.get(session.id);
-				const fromPhone = pending !== undefined && Date.now() - pending.at < 10 * 60 * 1000;
-				if (pending !== undefined) mobileSendAt.delete(session.id);
-				const origin = fromPhone ? (pending.origin || "") : "";
-				turnMobile.set(session.id, { fromPhone, origin });
-				if (origin !== "") lastTurnOrigin.set(session.id, origin);
+				turnMobile.set(session.id, { fromPhone: false, origins: new Set() });
+				return;
+			}
+			if (event?.type === "user/message") {
+				const id = event.data?.source?.rpcId;
+				const key = typeof id === "string" ? session.id + "\0" + id : "";
+				const marked = mobileSends.get(key);
+				if (marked !== undefined) {
+					mobileSends.delete(key);
+					persistOrigins();
+					const turn = turnMobile.get(session.id);
+					if (turn !== undefined && Date.now() - marked.at < 7 * 24 * 60 * 60 * 1000) {
+						turn.fromPhone = true;
+						if (marked.origin !== "") {
+							turn.origins.add(marked.origin);
+							lastTurnOrigin.set(session.id, marked.origin);
+						}
+					}
+				}
 				return;
 			}
 			if (event?.type !== "turn/end") return;
 			const turn = turnMobile.get(session.id);
 			const fromPhone = turn?.fromPhone === true;
-			const origin = turn?.origin || "";
+			const origins = turn?.origins?.size ? [...turn.origins] : [""];
 			turnMobile.delete(session.id);
 			if (copy.onlyMobileTurns && !fromPhone) return;
 			// Root sessions only: a subagent finishing is not news.
 			const agent = agents?.get(session.id);
 			if (agent === undefined || !agents.roots().includes(agent)) return;
-			void fanOut(buildTurnEndPayload(session.id, event.data?.reason, {
-				copy,
-				lang: copy.lang,
-				session: sessionNameOf(ctx, session),
-			}), { origin, awaitAck: true }).catch((error) => {
+			const payload = buildTurnEndPayload(session.id, event.data?.reason, {
+				copy, lang: copy.lang, session: sessionNameOf(ctx, session),
+			});
+			for (const origin of origins) void fanOut(payload, { origin, awaitAck: true }).catch((error) => {
 				console.error("[dsh-mobile-maxxing] turn-end push failed", error);
 			});
 		});
@@ -1027,7 +1051,7 @@ export function applyNotify(ctx, config) {
 		// restart without falling back to every stored subscription (#27).
 		try {
 			const serverOrigin = new URL(routeCtx.webServer.getOrigin()).origin;
-			if (serverOrigin !== "null" && store.subscriptions().some((item) => sameOrigin(item.origin, serverOrigin))) {
+			if (ownOrigins.length === 0 && serverOrigin !== "null" && store.subscriptions().some((item) => sameOrigin(item.origin, serverOrigin))) {
 				learnOrigin(serverOrigin);
 			}
 		} catch {
@@ -1101,6 +1125,7 @@ export function applyNotify(ctx, config) {
 							// registration; see `PushStore.add` (#98).
 							previousEndpoint: body.previousEndpoint,
 						});
+						persistOrigins();
 						json(res, 200, { ok: true, count, subject: store.subject(copy.subject) });
 					} catch (error) {
 						json(res, 400, { ok: false, error: String(error?.message ?? error) });
@@ -1159,9 +1184,21 @@ export function applyNotify(ctx, config) {
 					}
 					const body = await readJsonBody(req);
 					noteOrigin(req, body);
-					if (typeof body.sessionId === "string" && body.sessionId !== "") {
-						mobileSendAt.set(body.sessionId, { at: Date.now(), origin: requestOrigin(req, body) });
+					if (typeof body.sessionId !== "string" || body.sessionId === "" || body.sessionId.includes("\0")
+						|| typeof body.requestId !== "string" || body.requestId === "" || body.requestId.length > 256 || body.requestId.includes("\0")) {
+						json(res, 400, { error: "sessionId and requestId are required" });
+						return;
 					}
+					// shortcut: orphaned/failed prompts expire after seven days; extend this for queues kept longer.
+					const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+					for (const [key, item] of mobileSends) if (item.at < cutoff) mobileSends.delete(key);
+					const key = body.sessionId + "\0" + body.requestId;
+					if (!mobileSends.has(key) && mobileSends.size >= 2048) {
+						json(res, 429, { error: "too many pending notifications" });
+						return;
+					}
+					mobileSends.set(key, { at: Date.now(), origin: requestOrigin(req, body) });
+					persistOrigins();
 					json(res, 200, { ok: true });
 				},
 			},

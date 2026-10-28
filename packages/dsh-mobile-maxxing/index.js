@@ -323,24 +323,43 @@ function assetPath(file) {
 
 
 /**
- * Run the profile plugin CLI to update the two mobile packages from GitHub.
+ * Install the confirmed release in the active profile.
  *
  * @returns {Promise<void>}
  */
-function runPluginUpdate() {
+function runPluginUpdate(profile, tag) {
 	return new Promise((resolve, reject) => {
-		const child = spawn("dsh", ["plugin", "--profile", "web", "add", "kuraneko1/dsh-mobile-maxxing", "kuraneko1/dsh-locale-ja"], {
-			stdio: ["ignore", "pipe", "pipe"],
+		const child = spawn("dsh", ["plugin", "--profile", profile, "add", `github:kuraneko1/dsh-mobile-maxxing#${tag}`], {
+			stdio: ["ignore", "ignore", "pipe"],
 			timeout: 120000,
 		});
 		let stderr = "";
-		child.stderr.on("data", (chunk) => { stderr += String(chunk); });
+		child.stderr.on("data", (chunk) => { stderr = (stderr + String(chunk)).slice(-16000); });
 		child.on("error", reject);
 		child.on("close", (code) => {
 			if (code === 0) resolve();
 			else reject(new Error(stderr.trim() || `exit ${code}`));
 		});
 	});
+}
+
+export const RELEASE_URL = "https://github.com/kuraneko1/dsh-mobile-maxxing/releases";
+const RELEASE_API = "https://api.github.com/repos/kuraneko1/dsh-mobile-maxxing/releases/latest";
+
+export function compareReleaseVersions(current, latest) {
+  const parse = (value) => /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(value)?.slice(1).map(Number);
+  const a = parse(current), b = parse(latest);
+  if (!a || !b || [...a, ...b].some((part) => !Number.isSafeInteger(part))) throw new Error("Unsupported release version");
+  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] < b[i] ? -1 : 1;
+  return 0;
+}
+
+export async function fetchLatestRelease(fetcher = fetch) {
+  const response = await fetcher(RELEASE_API, { headers: { accept: "application/vnd.github+json" }, cache: "no-store", signal: AbortSignal.timeout(15000) });
+  if (!response.ok) throw new Error("GitHub HTTP " + response.status);
+  const data = await response.json();
+  if (data.draft || data.prerelease || typeof data.tag_name !== "string" || !/^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(data.tag_name)) throw new Error("Invalid release tag");
+  return data.tag_name;
 }
 
 /**
@@ -365,6 +384,57 @@ export function apply(ctx, config) {
 			console.error(`[dsh-mobile-maxxing] ${label} host half failed to mount`, error);
 		}
 	};
+	ctx.inject(["webServer", "connection", "profileContext"], (updateCtx) => {
+    const webServer = updateCtx.webServer;
+    const disposes = [];
+    // Only an authenticated, explicit confirmation can install a release.
+    const guardUpdate = (req, res) => {
+      const connection = updateCtx.connection;
+      if (typeof connection?.requestRejection !== "function") { res.writeHead(503); res.end("authentication unavailable"); return false; }
+      const rejection = connection.requestRejection(req);
+      if (rejection !== undefined) { res.writeHead(rejection); res.end("forbidden"); return false; }
+      return true;
+    };
+    let checkedRelease = null;
+    disposes.push(webServer.register({
+      kind: "exact",
+      path: "/dsh-mobile-maxxing/plugin-version",
+      handler: readOnly(async (req, res) => {
+        if (!guardUpdate(req, res)) return;
+        try {
+          checkedRelease = null;
+          const pkg = JSON.parse(await readFile(new URL("../../package.json", import.meta.url), "utf8"));
+          const latest = await fetchLatestRelease();
+          const comparison = compareReleaseVersions(pkg.version, latest);
+          const available = comparison < 0;
+          checkedRelease = available ? latest : null;
+          respond(res, req.method, 200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }, JSON.stringify({ current: pkg.version, latest, available, ahead: comparison > 0, repository: RELEASE_URL }));
+        } catch (error) {
+          respond(res, req.method, 502, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }, JSON.stringify({ error: String(error?.message || error) }));
+        }
+      }),
+    }));
+    disposes.push(webServer.register({
+      kind: "exact",
+      path: "/dsh-mobile-maxxing/update-plugins",
+      handler: async (req, res) => {
+        if (req.method !== "POST") { methodNotAllowed(res, "POST"); return; }
+        if (!guardUpdate(req, res)) return;
+        const profile = updateCtx.profileContext?.name;
+        if (!profile || !/^[a-zA-Z0-9._-]+$/.test(profile)) { respond(res, "POST", 503, { "content-type": "application/json" }, JSON.stringify({ error: "profile unavailable" })); return; }
+        const tag = checkedRelease;
+        if (!tag || req.headers?.["x-dsh-release"] !== tag) { respond(res, "POST", 409, { "content-type": "application/json" }, JSON.stringify({ error: "release confirmation required" })); return; }
+        checkedRelease = null;
+        try {
+          await runPluginUpdate(profile, tag);
+          respond(res, "POST", 200, { "content-type": "application/json", "cache-control": "no-store" }, JSON.stringify({ ok: true, version: tag }));
+        } catch (error) {
+          respond(res, "POST", 500, { "content-type": "application/json", "cache-control": "no-store" }, JSON.stringify({ error: String(error?.message || error) }));
+        }
+      },
+    }));
+    return () => { for (const dispose of disposes) if (typeof dispose === "function") dispose(); };
+  });
 	// Notifications are their own module: the copy, the VAPID pair, the push
 	// fan-out and the browser-facing routes all live there. It opens a state
 	// file, so it is mounted under the same guard as the rest: an unwritable
@@ -444,45 +514,6 @@ export function apply(ctx, config) {
 				}),
 			}));
 		}
-
-		// #109: check and update plugin version from the PWA settings.
-		disposes.push(webServer.register({
-			kind: "exact",
-			path: "/dsh-mobile-maxxing/plugin-version",
-			handler: readOnly(async (req, res) => {
-				try {
-					const pkg = JSON.parse(await readFile(new URL("./package.json", import.meta.url), "utf8"));
-					const res2 = await fetch("https://raw.githubusercontent.com/kuraneko1/dsh-mobile-maxxing/main/packages/dsh-mobile-maxxing/package.json");
-					const remote = res2.ok ? JSON.parse(await res2.text()) : {};
-					const localeRes = await fetch("https://raw.githubusercontent.com/kuraneko1/dsh-locale-ja/main/package.json");
-					const localeRemote = localeRes.ok ? JSON.parse(await localeRes.text()) : {};
-					const localePkgPath = new URL("../dsh-locale-ja/package.json", import.meta.url);
-					let localeCurrent = "";
-					try { localeCurrent = JSON.parse(await readFile(localePkgPath, "utf8")).version || ""; } catch {}
-					respond(res, req.method, 200, { "content-type": "application/json; charset=utf-8" }, JSON.stringify({ current: pkg.version || "", latest: remote.version || "", localeCurrent, localeLatest: localeRemote.version || "" }));
-				} catch (error) {
-					respond(res, req.method, 200, { "content-type": "application/json; charset=utf-8" }, JSON.stringify({ current: "", latest: "", error: String(error && error.message || error) }));
-				}
-			}),
-		}));
-
-		disposes.push(webServer.register({
-			kind: "exact",
-			path: "/dsh-mobile-maxxing/update-plugins",
-			handler: async (req, res) => {
-				if (req.method !== "POST") {
-					res.writeHead(405, { allow: "POST" });
-					res.end();
-					return;
-				}
-				try {
-					await runPluginUpdate();
-					respond(res, "POST", 200, { "content-type": "application/json; charset=utf-8" }, JSON.stringify({ ok: true }));
-				} catch (error) {
-					respond(res, "POST", 500, { "content-type": "application/json; charset=utf-8" }, JSON.stringify({ ok: false, error: String(error && error.message || error) }));
-				}
-			},
-		}));
 
 		for (const [route, asset] of ASSETS) {
 			disposes.push(webServer.register({

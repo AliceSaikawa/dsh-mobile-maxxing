@@ -601,6 +601,20 @@ window.__ModuleLoader__.load({
     }
 
     const CSS = `
+.rdsh-update-launch { display: inline-flex; width: 100%; min-height: 48px; align-items: center; justify-content: center; gap: 10px; padding: 10px 16px; box-sizing: border-box; border: 1px solid var(--dsw-alias-border-l2, #777); border-radius: 12px; background: var(--dsw-alias-bg-layer-2, #26262a); color: var(--dsw-alias-label-primary, #f9fafb); font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; }
+.rdsh-update-launch:active { opacity: .75; }
+.rdsh-update-launch:focus-visible { outline: 2px solid var(--dsw-alias-link, #4d6bfe); outline-offset: 2px; }
+.rdsh-update-launch svg { width: 19px; height: 19px; flex: none; }
+.rdsh-update-overlay { position: fixed; inset: 0; z-index: 2147483000; display: grid; place-items: center; padding: 20px; background: var(--dsw-alias-mask, rgba(0,0,0,.72)); }
+.rdsh-update-dialog { box-sizing: border-box; width: min(100%, 420px); max-height: 100%; overflow-y: auto; overscroll-behavior: contain; padding: 28px; border-radius: 18px; background: var(--dsw-alias-bg-layer-2, #26262a); color: var(--dsw-alias-label-primary, #fff); text-align: center; box-shadow: 0 12px 40px #0008; overflow-wrap: anywhere; }
+.rdsh-update-dialog h2 { font-size: 19px; line-height: 1.4; }
+.rdsh-update-dialog a { color: var(--dsw-alias-link, #8ca6ff); }
+.rdsh-update-check { width: 64px; height: 64px; color: var(--dsw-alias-label-positive, #59c88d); }
+.rdsh-update-actions { display: flex; gap: 12px; justify-content: center; margin-top: 24px; }
+.rdsh-update-actions button { min-height: 44px; min-width: 100px; border: 1px solid var(--dsw-alias-border-l2, #777); border-radius: 10px; font: inherit; color: inherit; background: transparent; }
+.rdsh-update-actions button:last-child { border-color: currentColor; font-weight: 700; }
+.rdsh-update-spinner { margin: 24px auto 0; width: 32px; height: 32px; border: 3px solid var(--dsw-alias-border-l2, #7775); border-top-color: currentColor; border-radius: 50%; animation: rdsh-update-spin .8s linear infinite; }
+@keyframes rdsh-update-spin { to { transform: rotate(360deg); } }
 html[data-dsh-mobile-maxxing="standalone"] #root {
   box-sizing: border-box;
   padding-top: env(safe-area-inset-top, 0px);
@@ -1193,7 +1207,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     function PwaSettingsSection() {
       const s = useStore();
       const [message, setMessage] = useState("");
-      const [busy, setBusy] = useState(false);
 
       const install = async () => {
         const outcome = await promptInstall();
@@ -1201,50 +1214,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           ? t("pwa.install.accepted")
           : outcome === "dismissed" ? t("pwa.install.dismissed") : t("pwa.install.unavailable"));
       };
-      const updatePlugins = async () => {
-        setBusy(true);
-        setMessage("");
-        try {
-          // #109: check version first; only update when a newer one exists.
-          const verRes = await fetch("/dsh-mobile-maxxing/plugin-version");
-          const ver = await verRes.json().catch(() => ({}));
-          const upToDate = ver.current && ver.latest && ver.current === ver.latest
-            && (!ver.localeCurrent || !ver.localeLatest || ver.localeCurrent === ver.localeLatest);
-          if (upToDate) {
-            setMessage(t("pwa.note.pluginsLatest"));
-            return;
-          }
-          const res = await fetch("/dsh-mobile-maxxing/update-plugins", { method: "POST" });
-          const data = await res.json().catch(() => ({}));
-          if (res.ok && data.ok !== false) setMessage(t("pwa.note.pluginsUpdated"));
-          else setMessage(t("pwa.note.pluginsUpdateFailed", { error: data.error || res.status }));
-        } catch (error) {
-          setMessage(t("pwa.note.pluginsUpdateFailed", { error: String(error && error.message || error) }));
-        } finally {
-          setBusy(false);
-        }
-      };
 
-      const check = async () => {
-        setBusy(true);
-        setMessage("");
-        try {
-          const reg = registration ?? (await navigator.serviceWorker.getRegistration());
-          if (reg === null || reg === undefined) {
-            setMessage(t("pwa.check.noWorker"));
-          } else {
-            await reg.update();
-            const waiting = reg.waiting !== null;
-            emit({ updateReady: waiting && navigator.serviceWorker.controller !== null });
-            setMessage(waiting ? t("pwa.check.available") : t("pwa.check.latest"));
-          }
-        } catch {
-          setMessage(t("pwa.check.failed"));
-        } finally {
-          setBusy(false);
-          void pingWorker();
-        }
-      };
 
       return h(
         "section",
@@ -1269,10 +1239,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           h(
             "div",
             { className: "dsh-mobile-maxxing-actions" },
-            s.installable ? h("button", { type: "button", className: "dsh-mobile-maxxing-primary", onClick: install, disabled: busy }, t("pwa.install.button")) : null,
+            s.installable ? h("button", { type: "button", className: "dsh-mobile-maxxing-primary", onClick: install }, t("pwa.install.button")) : null,
             s.updateReady ? h("button", { type: "button", className: "dsh-mobile-maxxing-primary", onClick: () => void applyUpdate() }, t("pwa.action.reloadUpdate")) : null,
-            h("button", { type: "button", onClick: check, disabled: busy }, busy ? t("pwa.action.checking") : t("pwa.action.check")),
-            h("button", { type: "button", onClick: updatePlugins, disabled: busy }, busy ? t("pwa.action.updatingPlugins") : t("pwa.action.updatePlugins")),
           ),
           message !== "" ? h("p", { className: "dsh-mobile-maxxing-note" }, message) : null,
           s.ios && !s.standalone
@@ -1288,6 +1256,60 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     // The mobile settings tab merges this section instead of showing the
     // separate "アプリ" tab.
     globalThis.__RDSH_PWA_SETTINGS_SECTION__ = PwaSettingsSection;
+
+    function UpdateSettingsSection() {
+      const [phase, setPhase] = useState("");
+      const { createPortal } = require("react-dom");
+      const [release, setRelease] = useState("");
+      const [error, setError] = useState("");
+      const repository = "https://github.com/kuraneko1/dsh-mobile-maxxing/releases";
+      const checkRelease = async () => {
+        setPhase("checking"); setError("");
+        try {
+          const response = await fetch("/dsh-mobile-maxxing/plugin-version", { cache: "no-store" });
+          const data = await response.json();
+          if (!response.ok || typeof data.latest !== "string" || typeof data.available !== "boolean") throw new Error(data.error || response.status);
+          setRelease(data.ahead && typeof data.current === "string" ? data.current : data.latest);
+          setPhase(data.available ? "available" : data.ahead ? "ahead" : "latest");
+        } catch (reason) { setError(String(reason?.message || reason)); setPhase("error"); }
+      };
+      const installRelease = async () => {
+        setPhase("installing"); setError("");
+        try {
+          const response = await fetch("/dsh-mobile-maxxing/update-plugins", { method: "POST", headers: { "x-dsh-release": release } });
+          const data = await response.json();
+          if (!response.ok || data.ok !== true || data.version !== release) throw new Error(data.error || response.status);
+          setPhase("done");
+        } catch (reason) { setError(String(reason?.message || reason)); setPhase("install-error"); }
+      };
+      const busy = phase === "checking" || phase === "installing";
+      return h("section", { className: "dsh-mobile-maxxing-section" },
+        h("div", { className: "dsh-mobile-maxxing-cardbox" },
+          h("h3", { className: "dsh-mobile-maxxing-title" }, t("tab.update")),
+          h("button", { type: "button", className: "rdsh-update-launch", onClick: () => setPhase("confirm") },
+            h("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" },
+              h("path", { d: "M20 7v5h-5M4 17v-5h5" }),
+              h("path", { d: "M5.6 9A7 7 0 0 1 18 6l2 1M4 17l2 1a7 7 0 0 0 12.4-3" })),
+            t("pwa.action.check"))),
+        phase !== "" ? createPortal(h("div", { className: "rdsh-update-overlay", role: "dialog", "aria-modal": "true", "aria-labelledby": "rdsh-update-heading", onKeyDown: (event) => { if (event.key === "Escape" && !busy) setPhase(""); if (event.key === "Tab") { const nodes = [...event.currentTarget.querySelectorAll("a[href], button:not([disabled])")]; if (!nodes.length) { event.preventDefault(); return; } const first = nodes[0]; const last = nodes[nodes.length - 1]; if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); } else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); } } } },
+          h("div", { className: "rdsh-update-dialog" },
+            (phase === "latest" || phase === "ahead" || phase === "done") ? h("svg", { className: "rdsh-update-check", viewBox: "0 0 64 64", fill: "none", "aria-hidden": "true" },
+              h("circle", { cx: 32, cy: 32, r: 29, stroke: "currentColor", strokeWidth: 3 }),
+              h("path", { d: "M17 33l10 10 20-22", stroke: "currentColor", strokeWidth: 4, strokeLinecap: "round", strokeLinejoin: "round" })) : null,
+            h("h2", { id: "rdsh-update-heading" }, t({ confirm: "update.confirm", checking: "update.checking", latest: "update.latest", ahead: "update.ahead", available: "update.available", installing: "update.installing", done: "update.done", error: "update.failed", "install-error": "update.installFailed" }[phase])),
+            phase === "confirm" ? h("a", { href: repository, target: "_blank", rel: "noopener noreferrer" }, repository) : null,
+            ["latest", "ahead", "available", "installing", "done"].includes(phase) ? h("p", null, t("update.release", { version: release })) : null,
+            phase === "done" ? h("p", null, t("update.restart")) : null,
+            error ? h("p", { role: "alert" }, error) : null,
+            busy ? h("div", { className: "rdsh-update-spinner", role: "status", "aria-label": t(phase === "checking" ? "update.checking" : "update.installing") }) : null,
+            !busy ? h("div", { className: "rdsh-update-actions" },
+              phase === "confirm" ? h("button", { type: "button", onClick: () => setPhase("") }, t("update.no")) : null,
+              phase === "confirm" ? h("button", { type: "button", autoFocus: true, onClick: () => void checkRelease() }, t("update.yes")) : null,
+              phase === "available" ? h("button", { type: "button", onClick: () => setPhase("") }, t("update.cancel")) : null,
+              phase === "available" ? h("button", { type: "button", autoFocus: true, onClick: () => void installRelease() }, t("update.install")) : null,
+              !["confirm", "available"].includes(phase) ? h("button", { type: "button", autoFocus: true, onClick: () => setPhase("") }, t("update.close")) : null) : null)), document.body) : null);
+    }
+    globalThis.__RDSH_PWA_UPDATE_SECTION__ = UpdateSettingsSection;
 
     // ---------------------------------------------------------------------
     // Wiring
@@ -1907,17 +1929,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       } catch {
         return false;
       }
-    }
-
-    function writeNotifyDeviceTurns(value) {
-      try {
-        if (value) localStorage.setItem(NOTIFY_DEVICE_TURNS_KEY, "1");
-        else localStorage.removeItem(NOTIFY_DEVICE_TURNS_KEY);
-      } catch {
-        /* private mode: the choice lasts for this page */
-      }
-      emit({ notifyDeviceTurns: value });
-      scheduleDecorate();
     }
 
     /** The live value of the #15 opt-in (the store copy only drives the UI). */
@@ -2586,6 +2597,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       });
       emit({ localDisplay: display });
       localDisplayRuntime?.applyTheme();
+    }
+
+    function resetLocalDisplayFonts() {
+      if (state.localDisplay.available.fonts === false || !state.localDisplay.fonts) return;
+      for (const role of LOCAL_FONT_ROLES) setLocalDisplayFont(role, LOCAL_FONT_SPECS[role].default - state.localDisplay.fonts[role]);
     }
 
     /** Select a supported locale for this browser only; "" follows the Host. */
@@ -5904,6 +5920,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     function questionNeedsSelection(card) {
       const options = card.querySelectorAll('[class*="_options"] [role="radio"], [class*="_options"] [role="checkbox"]');
       if (options.length === 0) return null;
+      const field = card.querySelector("textarea");
+      if (typeof field?.value === "string" && field.value.trim() !== "") return false;
       return card.querySelector('[role="radio"][aria-checked="true"], [role="checkbox"][aria-checked="true"]') === null;
     }
 
@@ -5939,10 +5957,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     /**
-     * The submit button stays the only way to send without a keyboard
-     * shortcut; the guard runs before the click, so upstream's "a custom
-     * answer counts" rule cannot send a zero-selection answer for a question
-     * that has options. Skip remains its own explicit, labelled action.
+     * The guard accepts a selected option or a non-empty custom answer.
+     * Skip remains its own explicit, labelled action.
      */
     function submitQuestionCard(card) {
       if (questionNeedsSelection(card) === true) {
@@ -5988,6 +6004,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         card.removeAttribute("data-rdsh-question-typing");
       });
       field.addEventListener("keydown", (event) => questionCardKeyDown(event, card), true);
+      field.addEventListener("input", () => { if (questionNeedsSelection(card) === false) clearQuestionFeedback(card); });
       card.addEventListener("click", (event) => {
         const button = event.target?.closest?.("button") ?? null;
         if (button === null || button !== questionSubmitButton(card)) {
@@ -7601,47 +7618,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     let currentSessionId = null;
 
     /**
-     * Sessions this browser told the host its turn belongs to.
-     *
-     * A local turn-end banner is only right for these: the host's
-     * `onlyMobileTurns` default notifies phone turns alone, so a turn a PC
-     * started in a session this phone merely watches must stay silent. The
-     * memory mirrors the host's own mobile-send window (10 minutes), so a
-     * session reused from a desktop later is not notified either. A reload
-     * forgets it while the host still remembers the send, so that turn falls
-     * back to the host's OS notification instead of the in-app banner: the
-     * local side can lose the banner, never the notice.
-     */
-    const MARKED_SEND_WINDOW_MS = 10 * 60 * 1000;
-    /** A hard cap: a long-lived page cannot grow this without bound. */
-    const MARKED_SEND_MAX = 128;
-    /** sessionId -> the moment its send stops counting, in ms. */
-    const markedSendSessions = new Map();
-
-    /** Remember one send this browser reported to the host. */
-    function rememberMarkedSend(sessionId) {
-      const now = Date.now();
-      markedSendSessions.delete(sessionId);
-      markedSendSessions.set(sessionId, now + MARKED_SEND_WINDOW_MS);
-      while (markedSendSessions.size > MARKED_SEND_MAX) {
-        const oldest = markedSendSessions.keys().next().value;
-        if (oldest === undefined) break;
-        markedSendSessions.delete(oldest);
-      }
-    }
-
-    /** Whether this browser sent in that session recently enough to be routed to. */
-    function markedSendRecent(sessionId) {
-      const until = markedSendSessions.get(sessionId);
-      if (until === undefined) return false;
-      if (until <= Date.now()) {
-        markedSendSessions.delete(sessionId);
-        return false;
-      }
-      return true;
-    }
-
-    /**
      * Tell the push host that the next turn belongs to this device.
      *
      * A phone send is marked automatically. On a desktop that is the #15
@@ -7652,9 +7628,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     function markMobileSession(sessionId = currentSessionId) {
       if (typeof sessionId !== "string" || sessionId === "") return;
       if (!phone() && !notifyDeviceTurns()) return;
-      // Recorded here, with the request: this is the same condition the host
-      // applies, so the local banner follows exactly what the host will send.
-      rememberMarkedSend(sessionId);
       void fetch(`${PUSH_API}/mobile-send`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -7665,6 +7638,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     let notificationTotal = 0;
+    let notificationSessions = null;
+
+    function isRootSession(row) {
+      // A forked root keeps parentId; only the explicit origin marks a child.
+      return row !== null && typeof row === "object" && row.origin !== "subagent";
+    }
 
     function applyNotificationCount(count) {
       notificationTotal = Math.max(0, Math.floor(Number(count) || 0));
@@ -7691,6 +7670,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       return count;
     }
 
+    function rootSessionIds(byId) {
+      return new Set(byId !== null && byId !== undefined && typeof byId === "object"
+        ? Object.entries(byId).filter(([, row]) => isRootSession(row)).map(([id]) => id)
+        : []);
+    }
+
     function NotificationWatcher(props) {
       const useSessionStatus = props.useSessionStatus;
       const useSessions = props.useSessions;
@@ -7703,9 +7688,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const previousStatuses = React.useRef(null);
       useEffect(() => {
         const byId = sessions !== null && sessions !== undefined ? sessions.byId : null;
-        const mainIds = byId !== null && byId !== undefined && typeof byId === "object"
-          ? new Set(Object.entries(byId).filter(([, row]) => row !== null && row !== undefined && row.origin !== "subagent").map(([id]) => id))
-          : null;
+        notificationSessions = byId;
+        const mainIds = rootSessionIds(byId);
         const total = countSessionStatuses(statuses, null);
         const main = countSessionStatuses(statuses, mainIds);
         applyNotificationCount(main);
@@ -11850,16 +11834,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     /**
-     * The host's `onlyMobileTurns`, as its `/config` answer reported it.
-     *
-     * `false` means the host notifies every turn, so a local turn-end banner
-     * is right even for a session this browser never marked. Unknown — before
-     * the answer, or after a failed one — keeps the host default (phone turns
-     * only) and the marked-send gate applies.
-     */
-    let hostNotifiesEveryTurn = false;
-
-    /**
      * Tell the push host which deployed origin this page is.
      *
      * The host delivers each event to one origin only: the app that started
@@ -11874,12 +11848,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     function notePushOrigin() {
       if (pushOriginNoted) return;
       pushOriginNoted = true;
-      void fetch(`${PUSH_API}/config`, { cache: "no-store" }).then(async (response) => {
-        const body = await response.json();
-        if (body?.copy?.onlyMobileTurns === false) hostNotifiesEveryTurn = true;
-      }).catch(() => {
-        // No answer keeps the host default, so the gate stays conservative.
-      });
+      void fetch(`${PUSH_API}/config`, { cache: "no-store" }).catch(() => {});
     }
 
     async function refreshNotificationStatus() {
@@ -12127,7 +12096,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     const SOUND_PRESETS = {
       none: { label: t("mux.sound.none"), notes: [[0, 0, 0]] },
       // A short two-note rise: the "something finished" shape.
-      chime: { label: t("mux.sound.chime"), notes: [[880, 0.09, 0.5], [1320, 0.16, 0.16]] },
+      chime: { label: t("mux.sound.chime"), notes: [[659.25, 0.22, 0], [783.99, 0.30, 0.12], [987.77, 0.42, 0.24]] },
       // One soft blip, for questions that should not startle.
       pop: { label: t("mux.sound.pop"), notes: [[660, 0.05, 0.35]] },
       // Three descending notes: distinct without being loud.
@@ -12334,8 +12303,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
             row = null;
           }
         }
-        // Unknown rows are roots: only a known subagent is skipped.
-        if (row !== null && typeof row === "object" && row.origin === "subagent") continue;
+        // Wait for the session catalog; an unknown row may be a child.
+        if (!isRootSession(row)) continue;
         let previous = null;
         try {
           previous = previousStatuses.get(sessionId);
@@ -12381,11 +12350,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     function emitLocalNotices(previousStatuses, statuses, byId) {
       try {
         for (const notice of localNotices(previousStatuses, statuses, byId, t)) {
-          // A turn-end is notified only when the host will route it here: this
-          // browser's own send, or a host that turned `onlyMobileTurns` off.
-          // Questions always need the user, wherever the turn came from.
-          if (notice.kind === "turn-end" && !hostNotifiesEveryTurn && !markedSendRecent(notice.sessionId)) continue;
-          notifyUser({ ...notice, onShown: () => acknowledgeLocalNotice(notice) });
+          notifyUser({ ...notice, parentVerified: true, onShown: () => acknowledgeLocalNotice(notice) });
         }
       } catch (error) {
         console.error("[rdsh-mobile-ux] local notification failed", error);
@@ -12483,6 +12448,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const toastProps = {
         // The session name is the headline; the detail is what happened.
         text: body === "" ? title : `${title} — ${body}`,
+        icon: h("svg", { "data-rdsh-notice-icon": "", "aria-hidden": "true", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round" }, h("path", { d: "M18 8a6 6 0 0 0-12 0c0 7-2 7-2 9h16c0-2-2-2-2-9M10 20h4" })),
         holdMs: kind === "question" ? 6000 : 4200,
         actions: sessionId === ""
           ? undefined
@@ -12536,7 +12502,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         warnNoticeSkipped("the page is not visible");
         return false;
       }
-      playNoticeSound(notice.kind === "question" ? "pop" : readSoundPreset());
+      if (!["turn-end", "question"].includes(notice.kind) || notice.parentVerified === true || isRootSession(notificationSessions?.[notice.sessionId])) {
+        playNoticeSound(notice.kind === "question" ? "pop" : readSoundPreset());
+      }
       return showInAppNotice(notice);
     }
 
@@ -12727,8 +12695,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       return h(
         "div",
         { className: "rdsh-mux-card" },
-        h("h3", { className: "rdsh-mux-title" }, t("localPermission.title")),
-        h("p", { className: "rdsh-mux-desc" }, t("localPermission.desc")),
+        h("h3", { className: "rdsh-mux-title" }, t("mobile.access")),
+        h("p", { className: "rdsh-mux-note" }, t("mobile.accessScope")),
         h(
           "label",
           { className: "rdsh-mux-slider" },
@@ -12750,7 +12718,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         shared === ""
           ? null
           : h("p", { className: "rdsh-mux-note" }, t("localPermission.shared", { preset: sharedLabel })),
-        h("p", { className: "rdsh-mux-note" }, t("localPermission.hostNote")),
         s.permissionError === "" ? null : h("p", { className: "rdsh-mux-note" }, s.permissionError),
         message === "" ? null : h("p", { className: "rdsh-mux-note" }, message),
       );
@@ -12841,11 +12808,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       return h(
         "section",
         { className: "rdsh-mux-section" },
+        onPhone ? h(LocalLanguageSection) : null,
         h(
           "div",
           { className: "rdsh-mux-card" },
           h("h3", { className: "rdsh-mux-title" }, t("mux.deviceTheme.title")),
-          h("p", { className: "rdsh-mux-desc" }, t("mux.deviceTheme.desc")),
           h(
             "label",
             { className: "rdsh-mux-slider" },
@@ -12860,7 +12827,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
               Object.entries(DEVICE_THEME_KEYS).map(([id, key]) => h("option", { key: id, value: id }, t(key))),
             ),
           ),
-          h("p", { className: "rdsh-mux-note" }, t("mux.deviceTheme.note")),
           s.deviceThemeNote === "custom"
             ? h("p", { className: "rdsh-mux-note" }, t("mux.deviceTheme.custom"))
             : null,
@@ -12868,16 +12834,14 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
             ? h("p", { className: "rdsh-mux-note" }, t("mux.deviceTheme.unsupported"))
             : null,
         ),
-        onPhone ? h(LocalPermissionSection) : null,
         h(
           "div",
           { className: "rdsh-mux-card" },
-          h("h3", { className: "rdsh-mux-title" }, t("mux.section.title")),
+          h("h3", { className: "rdsh-mux-title" }, t("mobile.notifications")),
+          h("p", { className: "rdsh-mux-note", role: "status" }, t(!s.notifications.supported ? "mobile.unsupported" : s.notifications.permission === "granted" && s.notifications.subscribed ? "mobile.enabled" : "mobile.disabled")),
           // #15: on a desktop this card must not describe a layout it is not
           // running, and the layout row is a phone/window fact. The
           // notification controls below stay: they are useful everywhere.
-          h("p", { className: "rdsh-mux-desc" }, onPhone ? t("mux.section.desc") : t("mux.section.desc.desktop")),
-          onPhone ? h("p", { className: "rdsh-mux-note" }, t("mux.section.plusNote")) : null,
           h(
             "div",
             { className: "rdsh-mux-actions" },
@@ -12904,7 +12868,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
             ? h("p", { className: "rdsh-mux-note" }, t("mux.note.blocked"))
             : null,
           h("h4", { className: "rdsh-mux-subtitle" }, t("mux.sound.title")),
-          h("p", { className: "rdsh-mux-desc" }, t("mux.sound.desc")),
+          h("p", { className: "rdsh-mux-note" }, t("mobile.soundScope")),
           h(
             "div",
             { className: "rdsh-mux-sound-row" },
@@ -12957,31 +12921,15 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
             }),
             h("span", { className: "rdsh-mux-slider-value" }, `${Math.round(volume * 100)}%`),
           ),
-          // #15: the host defaults to `onlyMobileTurns: true`, so a desktop
-          // send is never notified unless this browser opts in.
-          h(
-            "label",
-            { className: "rdsh-mux-check" },
-            h("input", {
-              type: "checkbox",
-              checked: s.notifyDeviceTurns === true,
-              onChange: (event) => writeNotifyDeviceTurns(event.target.checked),
-            }),
-            t("mux.notify.deviceTurns"),
-          ),
-          h("p", { className: "rdsh-mux-note" }, t("mux.notify.deviceTurns.note")),
-          h("p", { className: "rdsh-mux-note" }, t("mux.note.notifyScope")),
           message !== "" ? h("p", { className: "rdsh-mux-note" }, message) : null,
         ),
-        // Chat view preferences are device-local, so they only exist here.
-        onPhone ? h(LocalChatSettingsSection) : null,
-        // One Mobile tab carries both sections inline; the separate tabs are
-        // no longer registered.
-        onPhone ? h(LocalDisplaySettingsSection) : null,
-        onPhone ? h(InputSection) : null,
-        onPhone && typeof globalThis.__RDSH_PWA_SETTINGS_SECTION__ === "function"
-          ? h(globalThis.__RDSH_PWA_SETTINGS_SECTION__)
-          : null,
+        onPhone ? h(LocalPermissionSection) : null,
+        onPhone ? h("details", { className: "rdsh-mux-more-settings" },
+          h("summary", null, t("mobile.other")),
+          h(LocalChatSettingsSection),
+          h(LocalDisplaySettingsSection),
+          h(InputSection),
+          typeof globalThis.__RDSH_PWA_SETTINGS_SECTION__ === "function" ? h(globalThis.__RDSH_PWA_SETTINGS_SECTION__) : null) : null,
         s.bootError !== "" ? h("p", { className: "rdsh-mux-note" }, t("mux.bootError", { error: s.bootError })) : null,
       );
     }
@@ -13021,11 +12969,21 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * to localStorage and the local projections above; no Host setting is
      * touched.
      */
+    function LocalLanguageSection() {
+      const display = useStore().localDisplay;
+      const available = display.available?.language !== false;
+      return h("div", { className: "rdsh-mux-card" },
+        h("label", { className: "rdsh-mux-slider" }, h("span", null, t("localDisplay.language")),
+          h("select", { className: "rdsh-mux-select", value: display.language, disabled: !available, onChange: (event) => setLocalDisplayLanguage(event.target.value) },
+            h("option", { value: "" }, t("localDisplay.language.system")),
+            (display.languages ?? []).map((entry) => h("option", { key: entry.id, value: entry.id }, entry.label)))),
+        !available ? h("p", { className: "rdsh-mux-note" }, t("localDisplay.reason.localeMissing")) : null);
+    }
+
     function LocalDisplaySettingsSection() {
       const s = useStore();
       const display = s.localDisplay;
       const fonts = display.fonts ?? { text: 14, code: 11, terminal: 13 };
-      const languages = display.languages ?? [];
       const available = display.available ?? { fonts: true, language: true };
       const reasons = display.reason ?? {};
       const reasonText = (kind) => {
@@ -13076,6 +13034,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
               ),
             );
           }),
+          h("div", { className: "rdsh-mux-actions" },
+            h("button", { type: "button", disabled: available.fonts === false, onClick: resetLocalDisplayFonts }, t("localDisplay.resetFonts"))),
           available.fonts === false
             ? h("p", { className: "rdsh-mux-note" }, t("localDisplay.unavailable", { reason: reasonText("fonts") }))
             : null,
@@ -13090,26 +13050,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
             t("localDisplay.terminalDark"),
           ),
           h("p", { className: "rdsh-mux-note" }, t("localDisplay.terminalDark.note")),
-          h(
-            "label",
-            { className: "rdsh-mux-slider" },
-            h("span", null, t("localDisplay.language")),
-            h(
-              "select",
-              {
-                className: "rdsh-mux-select",
-                value: display.language,
-                disabled: available.language === false,
-                onChange: (event) => setLocalDisplayLanguage(event.target.value),
-              },
-              h("option", { value: "" }, t("localDisplay.language.system")),
-              languages.map((entry) => h("option", { key: entry.id, value: entry.id }, entry.label)),
-            ),
-          ),
-          available.language === false
-            ? h("p", { className: "rdsh-mux-note" }, t("localDisplay.unavailable", { reason: reasonText("language") }))
-            : h("p", { className: "rdsh-mux-note" }, t("localDisplay.language.note")),
-          h("p", { className: "rdsh-mux-note" }, t("localDisplay.note")),
         ),
       );
     }
@@ -13193,6 +13133,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
 
 .rdsh-mux-section { display: flex; flex-direction: column; gap: 12px; color: var(--dsw-alias-label-primary, #f9fafb); }
+.rdsh-mux-more-settings > summary { cursor: pointer; min-height: 44px; padding: 12px; box-sizing: border-box; }
+.rdsh-mux-more-settings > *:not(summary) { margin-top: 12px; }
 .rdsh-mux-card {
   border: .5px solid var(--dsw-alias-settings-card-stroke, var(--dsw-alias-border-l3, rgba(255,255,255,.12)));
   background: var(--dsw-alias-settings-card-fill, transparent);
@@ -13212,6 +13154,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
   display: flex; align-items: center; gap: 10px; margin: 0 0 8px;
   font-size: 13px; color: var(--dsw-alias-label-secondary, #cfd3d6);
 }
+.rdsh-mux-slider:has(> select) { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 120px), 1fr)); }
+.rdsh-mux-slider > select { width: 100%; min-height: 44px; }
 .rdsh-mux-slider input[type="range"] { flex: 1 1 auto; min-width: 0; accent-color: var(--dsw-alias-link, #4d6bfe); }
 .rdsh-mux-slider-value {
   flex: 0 0 auto; min-width: 42px; text-align: right;
@@ -13236,7 +13180,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
   color: var(--dsw-alias-label-primary, #f9fafb);
   background: var(--dsw-alias-bg-layer-2, #26262a);
   border: .5px solid var(--dsw-alias-border-l3, rgba(255,255,255,.16));
-  -webkit-appearance: none; appearance: none;
+  -webkit-appearance: auto; appearance: auto;
 }
 .rdsh-mux-actions button.rdsh-mux-primary {
   border-color: transparent;
@@ -13272,6 +13216,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       .join(", ");
 
     const CSS_PHONE = `
+@property --rdsh-question-angle { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
+@keyframes rdsh-question-glow { to { --rdsh-question-angle: 360deg; } }
+html[data-rdsh-device-mode="mobile"] body > [role="alert"]:has([data-rdsh-notice-icon]) { max-width: calc(100vw - 32px); box-sizing: border-box; }
+html[data-rdsh-device-mode="mobile"] body > [role="alert"]:has([data-rdsh-notice-icon]) > span:last-child { display: flex; flex: 1 1 auto; align-items: center; min-width: 0; }
+html[data-rdsh-device-mode="mobile"] body > [role="alert"]:has([data-rdsh-notice-icon]) button { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; align-self: center; min-height: 44px; min-width: 56px; margin-left: auto; padding: 6px 12px; border: 1px solid currentColor; border-radius: 9px; font: inherit; font-weight: 600; text-decoration: none; }
+html[data-rdsh-device-mode="mobile"] [data-rdsh-notice-icon] { width: 18px; height: 18px; }
 /* Controls the hide list matched. The attribute these selectors key off is
    written only while phone() holds (see applyHideList), and the rules sit in
    the mobile sheet as well: a desktop keeps every control. */
@@ -14325,6 +14275,17 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
     border-radius: 10px !important;
     background: var(--dsw-alias-bg-module-platform, rgba(255,255,255,.02));
   }
+  [data-rdsh-question-card] [data-rdsh-question-tile][aria-checked="true"],
+  [data-rdsh-question-card] [data-rdsh-question-tile][class*="_customRowActive"] {
+    border: 2px solid transparent !important;
+    background: linear-gradient(color-mix(in srgb, var(--dsw-alias-link, #7aaaff) 14%, var(--dsw-alias-bg-module-platform, #26262a)), color-mix(in srgb, var(--dsw-alias-link, #7aaaff) 14%, var(--dsw-alias-bg-module-platform, #26262a))) padding-box, conic-gradient(from var(--rdsh-question-angle, 0deg), var(--dsw-alias-link, #7aaaff), var(--dsw-alias-label-primary, #f9fafb), var(--dsw-alias-link, #7aaaff)) border-box !important;
+    box-shadow: 0 0 10px color-mix(in srgb, var(--dsw-alias-link, #7aaaff) 35%, transparent);
+    animation: rdsh-question-glow 2.8s linear infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    [data-rdsh-question-card] [data-rdsh-question-tile][aria-checked="true"],
+    [data-rdsh-question-card] [data-rdsh-question-tile][class*="_customRowActive"] { animation: none; }
+  }
   [data-rdsh-question-card] [class*="_options"] { gap: 6px !important; }
   /* A down chevron bubble for a scrollable question body. It follows the
      Settings-tab arrow look, but sits over the card and disappears at the
@@ -15192,6 +15153,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           // clears the remembered language, a language id stores it.
           setLanguage: setLocalDisplayLanguage,
           setFont: setLocalDisplayFont,
+          resetFonts: resetLocalDisplayFonts,
           build: BUILD,
           lang: currentLang(),
           autoSettings: true,
@@ -15304,9 +15266,6 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             // the cleanup below.
             live = false;
             scheduled = false;
-            // A teardown forgets which sends this page reported; the next mount
-            // has to learn them from its own sends again.
-            markedSendSessions.clear();
             // One teardown path: every owned attribute/node/listener/style,
             // the original viewport and the upstream palette. It runs even if
             // the window is still narrow, so a live reload starts clean.
@@ -15367,6 +15326,8 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
     if (noticeTestHook !== null && typeof noticeTestHook === "object") {
       noticeTestHook.notice = {
         localNotices,
+        rootSessionIds,
+        countSessionStatuses,
         emitLocalNotices,
         onWorkerMessage,
         localNoticeRecent,
@@ -15452,6 +15413,12 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           order: -1,
           label: () => t("tab.mobile"),
         }, MobileSection));
+        if (phone()) ctx.slots.inject("settings.section", () => ctx.slots.register({
+          name: "settings.section",
+          id: "mobile-update",
+          order: 0,
+          label: () => t("tab.update"),
+        }, globalThis.__RDSH_PWA_UPDATE_SECTION__));
       },
     };
     }

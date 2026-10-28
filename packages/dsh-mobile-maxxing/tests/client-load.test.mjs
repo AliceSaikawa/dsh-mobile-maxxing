@@ -2124,6 +2124,27 @@ test("a notification hand-off from the current or old worker name renders one ba
 	}
 });
 
+test("a finished task plays the softer three-note completion sound", () => {
+  const { booted, notice, markSend } = localNoticeHarness({ storage: { getItem: () => null, setItem() {}, removeItem() {} } });
+  const frequencies = [];
+  booted.sandbox.AudioContext = class {
+    currentTime = 0;
+    state = "running";
+    destination = {};
+    createOscillator() { return { type: "", frequency: { setValueAtTime(value) { frequencies.push(value); } }, connect() {}, start() {}, stop() {} }; }
+    createGain() { return { gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {} }; }
+  };
+  markSend("s1");
+  notice.emitLocalNotices(new Map([["s1", { running: true }]]), new Map([["s1", { running: false }]]), { "s1": { title: "Done" } });
+  assert.deepEqual(frequencies, [659.25, 783.99, 987.77]);
+  markSend("child");
+  notice.emitLocalNotices(new Map([["child", { running: true }]]), new Map([["child", { running: false }]]), { child: { origin: "subagent", parentId: "s1" } });
+  notice.emitLocalNotices(new Map([["unknown", { running: true }]]), new Map([["unknown", { running: false }]]), null);
+  notice.onWorkerMessage({ data: { type: "dsh-mobile-maxxing:notify", sessionId: "child", kind: "turn-end", title: "Child" } });
+  assert.deepEqual(frequencies, [659.25, 783.99, 987.77], "child and unverified completion must stay silent");
+  booted.disposeAll();
+});
+
 test("a hidden page takes no hand-off and logs the skip once", () => {
 	for (const type of ["dsh-mobile-maxxing:notify", "rdsh-pwa:notify"]) {
 		const booted = bootWorkerMessages({ visible: false });
@@ -3846,6 +3867,14 @@ test("#80 a catalog publish leaves the device font projection untouched", async 
 		"",
 		"a font step invented a language choice",
 	);
+	api.resetFonts();
+	assert.equal(theme.snapshot.fontSizes.text, 14);
+	assert.equal(theme.snapshot.fontSizes.code, 11);
+	assert.equal(theme.snapshot.fontSizes.terminal, 13);
+	const saved = JSON.parse(booted.sandbox.localStorage.getItem("rdsh-mobile-ux:local-display"));
+	assert.deepEqual(saved.fonts, { text: 14, code: 11, terminal: 13 });
+	assert.equal(saved.language, "");
+	assert.equal(docEl.hasAttribute("data-rdsh-terminal-dark"), true);
 	api.writeTerminalDark(false);
 	booted.disposeAll();
 	assert.equal(theme.snapshot, hostTheme);
@@ -4115,9 +4144,27 @@ test("a finished root turn raises one local banner and push does not stack", () 
 	booted.disposeAll();
 });
 
+test("badge counts only known root sessions, never children or unknowns", () => {
+  const { booted, notice } = localNoticeHarness();
+  const statuses = new Map([["root", { completionUnread: true }], ["forked", { completionUnread: true }], ["child", { completionUnread: true }], ["child2", { pendingInteraction: { kind: "question" } }], ["unknown", { completionUnread: true }]]);
+  const byId = { root: { title: "Root" }, forked: { parentId: "previous-root" }, child: { origin: "subagent" }, child2: { origin: "subagent", parentId: "root" } };
+  assert.equal(notice.countSessionStatuses(statuses, notice.rootSessionIds(byId)), 2);
+  assert.equal(notice.countSessionStatuses(statuses, notice.rootSessionIds(null)), 0);
+  booted.disposeAll();
+});
+
+test("a forked root with parentId still emits a completion notice", () => {
+  const { booted, notice, rendered, markSend } = localNoticeHarness();
+  const byId = { root: { parentId: "previous-root", title: "Forked root" } };
+  markSend("root");
+  notice.emitLocalNotices(new Map([["root", { running: true }]]), new Map([["root", { running: false }]]), byId);
+  assert.deepEqual(rendered, ["Forked root — The work finished."]);
+  booted.disposeAll();
+});
+
 test("a subagent turn end and a first render raise no local banner", () => {
 	const { booted, notice, rendered } = localNoticeHarness();
-	const byId = { "child-1": { origin: "subagent", title: "Child" } };
+	const byId = { "child-1": { origin: "subagent", parentId: "root", title: "Child" } };
 	const running = new Map([["child-1", { running: true }]]);
 	const idle = new Map([["child-1", { running: false }]]);
 
@@ -4216,19 +4263,18 @@ async function settleNoticeWork() {
 	for (let index = 0; index < 8; index += 1) await new Promise((resolve) => setImmediate(resolve));
 }
 
-test("a turn this browser did not send raises no local banner", async () => {
+test("a root turn finished while another session is open raises a local banner", async () => {
 	const endpoint = "https://web.push.apple.com/device";
 	const { booted, notice, rendered, ackPosts } = localNoticeHarness({ endpoint });
 	const byId = { "root-pc": { title: "Main" } };
 	const running = new Map([["root-pc", { running: true }]]);
 	const idle = new Map([["root-pc", { running: false }]]);
 
-	// A PC turn: the host (onlyMobileTurns) never notifies it, so a banner here
-	// would invent a notification the user asked not to get.
+	// In-app delivery is independent of which browser started the turn.
 	notice.emitLocalNotices(running, idle, byId);
 	await settleNoticeWork();
-	assert.equal(rendered.length, 0, "a turn from another device raised a local banner");
-	assert.deepEqual(ackPosts, [], "a turn from another device acknowledged a push it never got");
+	assert.equal(rendered.length, 1, "a root turn from another device stayed silent");
+	assert.equal(ackPosts.length, 1, "the visible banner did not acknowledge its event");
 	booted.disposeAll();
 });
 
@@ -4264,7 +4310,7 @@ test("a question from another device still raises a local banner", async () => {
 	booted.disposeAll();
 });
 
-test("a host that notifies every turn keeps the local banner for an unmarked session", async () => {
+test("an unmarked root session keeps its local banner", async () => {
 	const endpoint = "https://web.push.apple.com/device";
 	const { booted, notice, rendered, markSend } = localNoticeHarness({ endpoint, onlyMobileTurns: false });
 	const byId = { "root-pc": { title: "Main" } };
@@ -4936,7 +4982,7 @@ test("#80 a full ja desktop keeps the stock nav and installs no phone controls",
  * queries those rules make are answered; anything label-based throws, so a
  * translation regression cannot pass through this fake.
  */
-function questionCardFixture({ options = 2, checked = 0 } = {}) {
+function questionCardFixture({ options = 2, checked = 0, custom = "" } = {}) {
 	const feedback = { textContent: "" };
 	let clicks = 0;
 	const submit = {
@@ -4959,6 +5005,7 @@ function questionCardFixture({ options = 2, checked = 0 } = {}) {
 			if (selector.includes('aria-checked="true"')) return checked > 0 ? {} : null;
 			if (selector.includes('_footerActions')) return { querySelectorAll: () => [{}, submit] };
 			if (selector.includes('_feedback')) return feedback;
+			if (selector === "textarea") return { value: custom };
 			return null;
 		},
 	};
@@ -4994,6 +5041,8 @@ test("#26 a question with options needs one selected, a free-text question does 
 	assert.equal(needsSelection(questionCardFixture({ options: 2, checked: 0 })), true, "an empty question was accepted");
 	assert.equal(needsSelection(questionCardFixture({ options: 2, checked: 1 })), false, "a chosen option was rejected");
 	assert.equal(needsSelection(questionCardFixture({ options: 3, checked: 2 })), false, "two multi-select choices were rejected");
+	assert.equal(needsSelection(questionCardFixture({ options: 2, custom: "custom answer" })), false, "a custom answer alongside options was rejected");
+	assert.equal(needsSelection(questionCardFixture({ options: 2, custom: "  \n " })), true, "blank custom text was accepted");
 	// A free-text-only question has no options to choose, so its text is the answer.
 	assert.equal(needsSelection(questionCardFixture({ options: 0 })), null, "a free-text-only question became unsendable");
 	booted.disposeAll();
@@ -5033,6 +5082,9 @@ test("#26 Enter in the answer field breaks the line; only Cmd/Ctrl+Enter sends",
 	assert.equal(chosen.clicks, 1, "Cmd/Ctrl+Enter did not press the submit button");
 	assert.equal(chosen.feedback.textContent, "", "a valid send showed the missing-choice message");
 
+	const customWithOptions = questionCardFixture({ options: 2, custom: "custom answer" });
+	keyDown(enterKey({ ctrlKey: true }), customWithOptions);
+	assert.equal(customWithOptions.clicks, 1, "a custom answer with options could not be submitted");
 	const freeText = enterKey({ ctrlKey: true });
 	const onlyText = questionCardFixture({ options: 0 });
 	keyDown(freeText, onlyText);

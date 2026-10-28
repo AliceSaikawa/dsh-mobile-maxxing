@@ -393,7 +393,7 @@ test("the runtime and the UI stay device-local", () => {
 		"the runtime reaches the shared settings transport");
 	assert.match(CLIENT, /attachLocalChat\(ctx\)/, "the runtime is not attached");
 	assert.match(CLIENT, /function LocalChatSettingsSection\(\)/, "the Settings card is missing");
-	assert.match(CLIENT, /onPhone \? h\(LocalChatSettingsSection\) : null/, "the card is not in Mobile settings");
+	assert.match(CLIENT, /onPhone \? h\("details"[\s\S]*h\(LocalChatSettingsSection\)/, "the card is not in Mobile settings");
 	// An unavailable row must not look saved: it shows the Host/fallback value
 	// disabled, and only an available local choice offers "follow Host".
 	assert.match(CLIENT, /value: available \? \(local \?\? hostValue\) : hostValue/);

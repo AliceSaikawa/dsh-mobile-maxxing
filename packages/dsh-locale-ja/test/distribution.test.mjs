@@ -356,6 +356,52 @@ test('packed locale accepts the advertised rc.2 peer under strict resolution', (
 	assert.equal(result.status, 0, result.stderr);
 });
 
+function releaseCommand(copy) {
+	const readme = fs.readFileSync(path.join(copy, 'README.md'), 'utf8');
+	const match = readme.match(/## リリース\n\n```sh\n([\s\S]*?)\n```/);
+	assert.ok(match, 'the README must document the release command');
+	return match[1];
+}
+
+function fakeReleaseCli(t) {
+	const dir = temporaryDirectory(t);
+	const executable = path.join(dir, 'gh');
+	const log = path.join(dir, 'gh-args.json');
+	fs.writeFileSync(executable, '#!/usr/bin/env node\nrequire("node:fs").writeFileSync(process.env.DSH_TEST_GH_LOG, JSON.stringify(process.argv.slice(2)))\n');
+	fs.chmodSync(executable, 0o755);
+	return { log, env: { ...process.env, PATH: dir + path.delimiter + process.env.PATH, DSH_TEST_GH_LOG: log } };
+}
+
+test('documented release attaches only current artifacts, not retained old tarballs', (t) => {
+	const copy = isolatedRepo(t);
+	const dist = path.join(copy, 'dist');
+	fs.mkdirSync(dist);
+	const old = path.join(dist, 'dsh-mobile-maxxing-0.0.1.tgz');
+	fs.writeFileSync(old, 'keep old file');
+	const fake = fakeReleaseCli(t);
+	const result = spawnSync('bash', ['-c', releaseCommand(copy)], { cwd: copy, env: fake.env, encoding: 'utf8' });
+	assert.equal(result.status, 0, result.stderr);
+	const rootManifest = JSON.parse(fs.readFileSync(path.join(copy, 'package.json'), 'utf8'));
+	const markdown = JSON.parse(fs.readFileSync(path.join(copy, 'packages/dsh-md-rendering/package.json'), 'utf8'));
+	assert.deepEqual(JSON.parse(fs.readFileSync(fake.log, 'utf8')), [
+		'release', 'create', 'v' + rootManifest.version,
+		'dist/' + tarballName(rootManifest), 'dist/dsh-mobile-maxxing.tgz',
+		'dist/' + tarballName(markdown), 'dist/' + tarballName(manifest),
+	]);
+	assert.equal(fs.readFileSync(old, 'utf8'), 'keep old file');
+});
+
+test('documented release does not run gh after locale validation fails', (t) => {
+	const copy = isolatedRepo(t);
+	const dictionary = path.join(copy, 'packages/dsh-locale-ja/locale/namespaces/ja/sidebarRight.json');
+	fs.writeFileSync(dictionary, fs.readFileSync(dictionary, 'utf8').replace('その他のツール', '変更後の翻訳'));
+	const fake = fakeReleaseCli(t);
+	const result = spawnSync('bash', ['-c', releaseCommand(copy)], { cwd: copy, env: fake.env, encoding: 'utf8' });
+	assert.notEqual(result.status, 0);
+	assert.match(result.stdout, /REFUSED: dsh-locale-ja generated files are stale/);
+	assert.equal(fs.existsSync(fake.log), false, 'gh must not run after a failed pack');
+});
+
 test('docs describe the optional local-tarball install and never a fake release asset', () => {
 	const readme = fs.readFileSync(path.join(packageDir, 'README.md'), 'utf8');
 	assert.doesNotMatch(readme, /releases\/download\/[^\s"']*dsh-locale-ja/, 'the unreleased locale must not link a release asset');

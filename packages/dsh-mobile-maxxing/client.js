@@ -7648,24 +7648,50 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     let currentSessionId = null;
 
-    /**
-     * Tell the push host that the next turn belongs to this device.
-     *
-     * A phone send is marked automatically. On a desktop that is the #15
-     * opt-in: without it the host's `onlyMobileTurns` default means a PC send
-     * is never notified, and a desktop window silently changing that would be
-     * the same width-based behaviour #17 removes.
-     */
-    function markMobileSession(sessionId = currentSessionId) {
-      if (typeof sessionId !== "string" || sessionId === "") return;
-      if (!phone() && !notifyDeviceTurns()) return;
-      void fetch(`${PUSH_API}/mobile-send`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        // The host routes this turn's end back to the app that started it.
-        body: JSON.stringify({ sessionId, origin: location.origin }),
-        keepalive: true,
-      }).catch(() => {});
+    /** Mark this exact prompt before the Host can admit it. */
+    async function markMobileSession(sessionId = currentSessionId, requestId = "") {
+      if (typeof sessionId !== "string" || sessionId === "" || typeof requestId !== "string" || requestId === "") return false;
+      if (!phone() && !notifyDeviceTurns()) return false;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 1500);
+      try {
+        const response = await fetch(`${PUSH_API}/mobile-send`, {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ sessionId, requestId, origin: location.origin }),
+          signal: controller.signal, keepalive: true,
+        });
+        return response.ok === true;
+      } catch {
+        // Never prevent a user prompt merely because notification marking failed.
+        return false;
+      } finally { clearTimeout(timer); }
+    }
+
+    /** Wrap only the public conversation sink; leave the original Session object untouched. */
+    function installConversationMarking(conversation) {
+      if (conversation === null || typeof conversation !== "object" || typeof conversation.sendSession !== "function") return () => {};
+      const original = conversation.sendSession;
+      const hadOwn = Object.hasOwn(conversation, "sendSession");
+      const wrapped = function (session, ...args) {
+        if ((!phone() && !notifyDeviceTurns()) || session === null || typeof session !== "object") return original.call(this, session, ...args);
+        const scoped = new Proxy(session, {
+          get(target, property) {
+            const value = Reflect.get(target, property, target);
+            if (property === "prompt" && typeof value === "function") return async (...promptArgs) => {
+              await markMobileSession(target.sessionId, promptArgs[3]);
+              return value.apply(target, promptArgs);
+            };
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+        return original.call(this, scoped, ...args);
+      };
+      conversation.sendSession = wrapped;
+      return () => {
+        if (conversation.sendSession !== wrapped) return;
+        if (hadOwn) conversation.sendSession = original;
+        else delete conversation.sendSession;
+      };
     }
 
     let notificationTotal = 0;
@@ -9501,10 +9527,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           input.focus({ preventScroll: true });
         }
       }
-      const send = event.target.closest && event.target.closest('[data-rdsh-composer-root] [class*="primary"]');
-      if (send !== null && send !== undefined && send.disabled !== true && !STOP_PROBE.test(send.getAttribute("aria-label") || "")) {
-        markMobileSession();
-      }
       // Right panel tabs: dockkit arms a reorder on pointerdown and starts it
       // after 4px, so a tap or a sideways swipe became a drag. Block the move
       // until the hold fires; the app's own listener stays armed and completes
@@ -9983,12 +10005,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (editor.querySelector("[data-selected]") !== null) return;
       // While a menu is open, Enter selects its highlighted row.
       if (openPopup() !== null) return;
-      if (!finger) {
-        markMobileSession();
-        return;
-      }
+      if (!finger) return;
       if (state.enterToSend) {
-        markMobileSession();
         closeKeyboardAfterSend();
         return;
       }
@@ -10965,7 +10983,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (phone() || notifyDeviceTurns()) {
         const primary = target.closest && target.closest('[data-rdsh-composer-root] [class*="primary"]');
         if (primary !== null && primary !== undefined && primary.disabled !== true && !STOP_PROBE.test(primary.getAttribute("aria-label") || "")) {
-          markMobileSession();
           closeKeyboardAfterSend();
         }
       }
@@ -11922,7 +11939,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * The host delivers each event to one origin only: the app that started
      * the turn, or the newest origin that has talked to it, and never to every
      * stored subscription (#27). After a process restart it has to learn that
-     * origin again, so a boot-time `/config` request is enough: its guard
+     * origin when no per-profile saved origin is available, so a boot-time `/config` request is enough: its guard
      * records the request origin from the Origin/Referer headers without
      * changing any notification setting, and without one the host logs
      * `push skipped` instead of guessing.
@@ -11950,16 +11967,22 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      */
     const PUSH_ENDPOINT_KEY = "rdsh-mobile-ux:push-endpoint";
     const PUSH_ENABLED_KEY = "rdsh-mobile-ux:push-enabled";
+    let pushEnabledOverride = null;
     function pushEnabled() {
+      if (pushEnabledOverride !== null) return pushEnabledOverride;
       try {
         const value = localStorage.getItem(PUSH_ENABLED_KEY);
         return value === "true" ? true : value === "false" ? false : null;
       } catch { return null; }
     }
     function setPushEnabled(enabled) {
+      pushEnabledOverride = enabled;
       try { localStorage.setItem(PUSH_ENABLED_KEY, String(enabled)); } catch { /* private mode */ }
     }
     let pushSyncTask = null;
+    let pushEnablePromise = null;
+    let pushEnableWork = null;
+    let pushEnableGeneration = 0;
 
     /** The endpoint this browser registered last, or "". */
     function readPushEndpoint() {
@@ -12009,23 +12032,33 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       return saved;
     }
 
-    async function enableNotifications() {
-      if (typeof Notification === "undefined") throw new Error(t("notify.unsupported"));
-      const permission = await Notification.requestPermission();
-      if (permission !== "granted") throw new Error(t("notify.permissionMissing"));
-      if (pushSyncTask !== null) await pushSyncTask;
-      setPushEnabled(true);
-      const registration = await navigator.serviceWorker.ready;
-      const response = await fetch(`${PUSH_API}/vapid`, { cache: "no-store" });
-      if (!response.ok) throw new Error(t("notify.unavailable"));
-      const { publicKey } = await response.json();
-      const existing = await registration.pushManager.getSubscription();
-      const subscription = existing === null
-        ? await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(publicKey) })
-        : existing;
-      const saved = await savePushSubscription(subscription);
-      if (!saved.ok) throw new Error(t("notify.subscribeFailed", { status: saved.status }));
-      await refreshNotificationStatus();
+    function enableNotifications() {
+      if (pushEnablePromise !== null) return pushEnablePromise;
+      const generation = ++pushEnableGeneration;
+      pushEnablePromise = (async () => {
+        if (typeof Notification === "undefined") throw new Error(t("notify.unsupported"));
+        const permission = await Notification.requestPermission();
+        if (generation !== pushEnableGeneration) return;
+        if (permission !== "granted") throw new Error(t("notify.permissionMissing"));
+        if (pushSyncTask !== null) await pushSyncTask;
+        if (generation !== pushEnableGeneration) return;
+        pushEnableWork = (async () => {
+          setPushEnabled(true);
+          const registration = await navigator.serviceWorker.ready;
+          const response = await fetch(`${PUSH_API}/vapid`, { cache: "no-store" });
+          if (!response.ok) throw new Error(t("notify.unavailable"));
+          const { publicKey } = await response.json();
+          const existing = await registration.pushManager.getSubscription();
+          const subscription = existing === null
+            ? await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(publicKey) })
+            : existing;
+          const saved = await savePushSubscription(subscription);
+          if (!saved.ok) throw new Error(t("notify.subscribeFailed", { status: saved.status }));
+          await refreshNotificationStatus();
+        })();
+        await pushEnableWork;
+      })().finally(() => { pushEnablePromise = null; pushEnableWork = null; });
+      return pushEnablePromise;
     }
 
     /** Retry on launch, reconnect and return to the visible app. */
@@ -12062,7 +12095,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     async function disableNotifications() {
+      ++pushEnableGeneration;
       setPushEnabled(false);
+      if (pushEnableWork !== null) { try { await pushEnableWork; } catch { /* still remove the browser subscription */ } }
       if (pushSyncTask !== null) await pushSyncTask;
       const registration = await navigator.serviceWorker.getRegistration();
       const subscription = registration === null || registration === undefined ? null : await registration.pushManager.getSubscription();
@@ -15350,6 +15385,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             clear: clearFolderMenu,
           },
           markMobileSession,
+          installConversationMarking,
           closeDrawer,
           openDrawer: toggleDrawer,
           drawerScroll: {
@@ -15513,6 +15549,10 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         // service through injection so a stored device choice is applied as
         // soon as the palette contract exists, instead of being skipped at
         // apply time because ctx.get("theme") was still undefined (#73).
+        ctx.inject(["conversation"], (scope) => {
+          const service = scope.conversation ?? scope.get?.("conversation");
+          return installConversationMarking(service);
+        });
         ctx.inject(["theme"], (scope) => {
           try {
             attachDeviceTheme(scope);

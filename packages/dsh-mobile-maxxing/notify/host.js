@@ -736,9 +736,9 @@ async function readJsonBody(req) {
 export function applyNotify(ctx, config, { transport = securePushRequest } = {}) {
 	const store = new PushStore(join(stateDirectory(), "push.json"));
 	const copy = normalizeNotifyConfig(config);
-	/** Sessions whose next turn was started from the phone. One-shot. */
-	const mobileSendAt = new Map();
-	/** The turn now running in a session: `{ fromPhone, origin }`. */
+	/** RPC ids explicitly marked by a browser, consumed by the matching user message. */
+	const mobileSends = new Map();
+	/** The turn now running in a session: `{ fromPhone, origins }`. */
 	const turnMobile = new Map();
 	/** The origin that most recently started a turn in a session. */
 	const lastTurnOrigin = new Map();
@@ -820,10 +820,11 @@ export function applyNotify(ctx, config, { transport = securePushRequest } = {})
 		if (originFile === null) return;
 		const subscriptions = store.subscriptions();
 		const origins = ownOrigins.filter((origin) => subscriptions.some((item) => sameOrigin(item.origin, origin)));
-		const serialized = JSON.stringify(origins);
+		const pending = [...mobileSends].map(([key, item]) => ({ key, ...item }));
+		const serialized = JSON.stringify({ origins, pending });
 		if (serialized === savedOrigins) return;
 		try {
-			writeJsonAtomically(originFile, { origins });
+			writeJsonAtomically(originFile, { origins, pending });
 			savedOrigins = serialized;
 		} catch (error) {
 			console.warn("[dsh-mobile-maxxing] cannot save profile push origins:", error?.message ?? error);
@@ -840,6 +841,12 @@ export function applyNotify(ctx, config, { transport = securePushRequest } = {})
 			for (const value of saved.origins.slice(0, MAX_OWN_ORIGINS)) {
 				const origin = normalizeOrigin(value);
 				if (origin && !ownOrigins.includes(origin) && subscriptions.some((item) => sameOrigin(item.origin, origin))) ownOrigins.push(origin);
+			}
+		}
+		if (Array.isArray(saved.pending)) {
+			for (const item of saved.pending.slice(0, 2048)) {
+				if (typeof item?.key !== "string" || !item.key.includes("\0") || typeof item.at !== "number" || Date.now() - item.at >= 7 * 24 * 60 * 60 * 1000 || typeof item.origin !== "string") continue;
+				if (!mobileSends.has(item.key)) mobileSends.set(item.key, { at: item.at, origin: normalizeOrigin(item.origin) || "" });
 			}
 		}
 		persistOrigins();
@@ -975,28 +982,40 @@ export function applyNotify(ctx, config, { transport = securePushRequest } = {})
 		const agents = agentCtx.get("agents");
 		agentCtx.on("session/event", (session, event) => {
 			if (event?.type === "turn/start") {
-				const pending = mobileSendAt.get(session.id);
-				const fromPhone = pending !== undefined && Date.now() - pending.at < 10 * 60 * 1000;
-				if (pending !== undefined) mobileSendAt.delete(session.id);
-				const origin = fromPhone ? (pending.origin || "") : "";
-				turnMobile.set(session.id, { fromPhone, origin });
-				if (origin !== "") lastTurnOrigin.set(session.id, origin);
+				turnMobile.set(session.id, { fromPhone: false, origins: new Set() });
+				return;
+			}
+			if (event?.type === "user/message") {
+				const id = event.data?.source?.rpcId;
+				const key = typeof id === "string" ? session.id + "\0" + id : "";
+				const marked = mobileSends.get(key);
+				if (marked !== undefined) {
+					mobileSends.delete(key);
+					persistOrigins();
+					const turn = turnMobile.get(session.id);
+					if (turn !== undefined && Date.now() - marked.at < 7 * 24 * 60 * 60 * 1000) {
+						turn.fromPhone = true;
+						if (marked.origin !== "") {
+							turn.origins.add(marked.origin);
+							lastTurnOrigin.set(session.id, marked.origin);
+						}
+					}
+				}
 				return;
 			}
 			if (event?.type !== "turn/end") return;
 			const turn = turnMobile.get(session.id);
 			const fromPhone = turn?.fromPhone === true;
-			const origin = turn?.origin || "";
+			const origins = turn?.origins?.size ? [...turn.origins] : [""];
 			turnMobile.delete(session.id);
 			if (copy.onlyMobileTurns && !fromPhone) return;
 			// Root sessions only: a subagent finishing is not news.
 			const agent = agents?.get(session.id);
 			if (agent === undefined || !agents.roots().includes(agent)) return;
-			void fanOut(buildTurnEndPayload(session.id, event.data?.reason, {
-				copy,
-				lang: copy.lang,
-				session: sessionNameOf(ctx, session),
-			}), { origin, awaitAck: true }).catch((error) => {
+			const payload = buildTurnEndPayload(session.id, event.data?.reason, {
+				copy, lang: copy.lang, session: sessionNameOf(ctx, session),
+			});
+			for (const origin of origins) void fanOut(payload, { origin, awaitAck: true }).catch((error) => {
 				console.error("[dsh-mobile-maxxing] turn-end push failed", error);
 			});
 		});
@@ -1165,9 +1184,21 @@ export function applyNotify(ctx, config, { transport = securePushRequest } = {})
 					}
 					const body = await readJsonBody(req);
 					noteOrigin(req, body);
-					if (typeof body.sessionId === "string" && body.sessionId !== "") {
-						mobileSendAt.set(body.sessionId, { at: Date.now(), origin: requestOrigin(req, body) });
+					if (typeof body.sessionId !== "string" || body.sessionId === "" || body.sessionId.includes("\0")
+						|| typeof body.requestId !== "string" || body.requestId === "" || body.requestId.length > 256 || body.requestId.includes("\0")) {
+						json(res, 400, { error: "sessionId and requestId are required" });
+						return;
 					}
+					// shortcut: orphaned/failed prompts expire after seven days; extend this for queues kept longer.
+					const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+					for (const [key, item] of mobileSends) if (item.at < cutoff) mobileSends.delete(key);
+					const key = body.sessionId + "\0" + body.requestId;
+					if (!mobileSends.has(key) && mobileSends.size >= 2048) {
+						json(res, 429, { error: "too many pending notifications" });
+						return;
+					}
+					mobileSends.set(key, { at: Date.now(), origin: requestOrigin(req, body) });
+					persistOrigins();
 					json(res, 200, { ok: true });
 				},
 			},

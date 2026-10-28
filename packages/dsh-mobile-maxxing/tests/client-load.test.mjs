@@ -2022,11 +2022,63 @@ test("mobile-send carries the page origin so the host can route the turn back", 
 	});
 	booted.sandbox.location = { origin: "https://app.example:8446", href: "https://app.example:8446/" };
 	booted.sandbox.window.location = booted.sandbox.location;
-	booted.sandbox.__RDSH_MOBILE_UX__.markMobileSession("session-1");
+	booted.sandbox.__RDSH_MOBILE_UX__.markMobileSession("session-1", "request-1");
 	const call = calls.find((entry) => entry.url.endsWith("api/dsh-mobile-maxxing/push/mobile-send"));
 	assert.ok(call, "mobile-send was not called");
-	assert.deepEqual(JSON.parse(call.body), { sessionId: "session-1", origin: "https://app.example:8446" });
+	assert.deepEqual(JSON.parse(call.body), { sessionId: "session-1", requestId: "request-1", origin: "https://app.example:8446" });
 	booted.disposeAll();
+});
+
+test("conversation submits only after the matching notification marker resolves", async () => {
+	const calls = [];
+	let finishMark;
+	const booted = bootClient({ mode: "mobile", narrow: true, fetchImpl(url, options) {
+		if (!String(url).endsWith("/push/mobile-send")) return Promise.resolve(stub());
+		calls.push(JSON.parse(options.body));
+		return new Promise((resolve) => { finishMark = resolve; });
+	} });
+	booted.sandbox.location = { origin: "https://app.example", href: "https://app.example/" };
+	let promptCalls = 0;
+	class Session {
+		#value = 42;
+		get sessionId() { return "s1"; }
+		beginSubmission() { assert.equal(this.#value, 42); return { requestId: "rpc-1" }; }
+		prompt(_content, _mode, _signal, id) { assert.equal(this.#value, 42); promptCalls++; return Promise.resolve(id); }
+	}
+	const conversation = { async sendSession(session) { const submission = session.beginSubmission(); return session.prompt([], "queue", undefined, submission.requestId); } };
+	const original = conversation.sendSession;
+	const dispose = booted.sandbox.__RDSH_MOBILE_UX__.installConversationMarking(conversation);
+	const submitted = conversation.sendSession(new Session());
+	assert.equal(promptCalls, 0);
+	assert.deepEqual(calls, [{ sessionId: "s1", requestId: "rpc-1", origin: "https://app.example" }]);
+	finishMark({ ok: true });
+	assert.equal(await submitted, "rpc-1");
+	assert.equal(promptCalls, 1);
+	dispose();
+	assert.equal(conversation.sendSession, original);
+	booted.disposeAll();
+});
+
+test("a failed marker never blocks the user's prompt", async () => {
+	const booted = bootClient({ mode: "mobile", narrow: true, fetchImpl(url) {
+		return String(url).endsWith("/push/mobile-send") ? Promise.reject(new Error("offline")) : Promise.resolve(stub());
+	} });
+	const conversation = { sendSession: (session) => session.prompt([], "queue", undefined, "rpc-2") };
+	const dispose = booted.sandbox.__RDSH_MOBILE_UX__.installConversationMarking(conversation);
+	const result = await conversation.sendSession({ sessionId: "s1", prompt: () => Promise.resolve("sent") });
+	assert.equal(result, "sent");
+	dispose(); booted.disposeAll();
+});
+
+test("a timed-out marker still allows prompt submission", async () => {
+	const booted = bootClient({ mode: "mobile", narrow: true, schedule: (fn) => setTimeout(fn, 0), fetchImpl(url, options) {
+		if (!String(url).endsWith("/push/mobile-send")) return Promise.resolve(stub());
+		return new Promise((_resolve, reject) => options.signal.addEventListener("abort", () => reject(new Error("timeout")), { once: true }));
+	} });
+	const conversation = { sendSession: (session) => session.prompt([], "queue", undefined, "rpc-timeout") };
+	const dispose = booted.sandbox.__RDSH_MOBILE_UX__.installConversationMarking(conversation);
+	assert.equal(await conversation.sendSession({ sessionId: "s1", prompt: () => Promise.resolve("sent") }), "sent");
+	dispose(); booted.disposeAll();
 });
 
 /**
@@ -4596,6 +4648,34 @@ test("disabling during a pending re-subscribe leaves notifications disabled", as
 	assert.equal(h.activeEndpoint, "");
 	assert.equal(h.booted.sandbox.localStorage.getItem("rdsh-mobile-ux:push-enabled"), "false");
 	assert.equal(h.subscribePosts.length, 0);
+	h.booted.disposeAll();
+});
+
+test("disabling while the permission prompt is open does not opt back in", async () => {
+	let resolvePermission;
+	const permission = new Promise((resolve) => { resolvePermission = resolve; });
+	const h = localNoticeHarness({ endpoint: "", recoverEndpoint: "https://web.push.apple.com/new", notification: { permission: "granted", requestPermission: () => permission }, storage: { "rdsh-mobile-ux:push-enabled": "false" } });
+	const enabling = h.api.enableNotifications();
+	await h.api.disableNotifications();
+	resolvePermission("granted");
+	await enabling;
+	assert.equal(h.subscribeAttempts, 0);
+	assert.equal(h.booted.sandbox.localStorage.getItem("rdsh-mobile-ux:push-enabled"), "false");
+	h.booted.disposeAll();
+});
+
+test("disabling waits for an explicit enable in flight and removes its subscription", async () => {
+	let release;
+	const gate = new Promise((resolve) => { release = resolve; });
+	const h = localNoticeHarness({ endpoint: "", recoverEndpoint: "https://web.push.apple.com/new", notification: { permission: "granted", requestPermission: async () => "granted" }, storage: { "rdsh-mobile-ux:push-enabled": "false" }, subscribeGate: gate });
+	const enabling = h.api.enableNotifications();
+	await settleNoticeWork();
+	assert.equal(h.subscribeAttempts, 1);
+	const disabling = h.api.disableNotifications();
+	release();
+	await Promise.all([enabling, disabling]);
+	assert.equal(h.activeEndpoint, "");
+	assert.equal(h.booted.sandbox.localStorage.getItem("rdsh-mobile-ux:push-enabled"), "false");
 	h.booted.disposeAll();
 });
 

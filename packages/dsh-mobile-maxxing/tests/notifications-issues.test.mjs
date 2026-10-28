@@ -199,6 +199,7 @@ function turn(instance, id, type) {
 	const listener = instance.listeners.get("session/event");
 	assert.ok(listener !== undefined, "the session listener is mounted");
 	listener({ id }, { type, data: { reason: { kind: "completed" } } });
+	if (type === "turn/start") listener({ id }, { type: "user/message", data: { source: { rpcId: "mobile-test-id" } } });
 }
 
 /** Fire the plugin's question listener. */
@@ -516,6 +517,37 @@ test("restart restores only each profile's learned subscribed origin", withHome(
 	} finally { recorder.restore(); }
 }));
 
+test("request IDs prevent queued mobile sends from marking the running turn and survive restart", withHome(async (_home, file) => {
+	mkdirSync(dirname(file), { recursive: true });
+	const endpoint = "https://web.push.apple.com/queued";
+	seed(file, endpoint, NEW_ORIGIN);
+	const app = makeInstance({ profileName: "queued" });
+	app.addRoot("session-1");
+	const event = app.listeners.get("session/event");
+	event({ id: "session-1" }, { type: "turn/start", data: { turn: 1 } });
+	assert.equal((await request(app, "/api/dsh-mobile-maxxing/push/mobile-send", { body: { sessionId: "session-1", requestId: "queued-rpc" }, origin: NEW_ORIGIN })).status, 200);
+	const recorder = withFetch(() => ({ status: 201, ok: true }));
+	try {
+		event({ id: "session-1" }, { type: "user/message", data: { source: { kind: "user", rpcId: "desktop-rpc" } } });
+		event({ id: "session-1" }, { type: "turn/end", data: { reason: { kind: "completed" } } });
+		await settle();
+		assert.deepEqual(recorder.calls, [], "the unrelated running turn must not notify");
+		const restarted = makeInstance({ profileName: "queued" });
+		restarted.addRoot("session-1");
+		const next = restarted.listeners.get("session/event");
+		next({ id: "session-1" }, { type: "turn/start", data: { turn: 2 } });
+		next({ id: "session-1" }, { type: "user/message", data: { source: { kind: "user", rpcId: "queued-rpc" } } });
+		next({ id: "session-1" }, { type: "turn/end", data: { reason: { kind: "completed" } } });
+		await settle();
+		assert.deepEqual(recorder.calls, [endpoint], "only the matching queued request must notify");
+	} finally { recorder.restore(); }
+}));
+
+test("legacy markers without a request ID are rejected instead of marking a later turn", withHome(async () => {
+	const app = makeInstance({ profileName: "legacy" });
+	assert.equal((await request(app, "/api/dsh-mobile-maxxing/push/mobile-send", { body: { sessionId: "session-1" }, origin: NEW_ORIGIN })).status, 400);
+}));
+
 test("a phone turn only notifies the app that started it, even with the other app configured", withHome(async (home, file) => {
 	mkdirSync(dirname(file), { recursive: true });
 	const phone = subscription("https://web.push.apple.com/phone");
@@ -533,7 +565,7 @@ test("a phone turn only notifies the app that started it, even with the other ap
 	const fetchRecorder = withFetch(() => ({ status: 201, ok: true }));
 	try {
 		assert.equal(
-			(await request(newApp, "/api/dsh-mobile-maxxing/push/mobile-send", { body: { sessionId: "session-1" }, origin: NEW_ORIGIN })).status,
+			(await request(newApp, "/api/dsh-mobile-maxxing/push/mobile-send", { body: { sessionId: "session-1", requestId: "mobile-test-id" }, origin: NEW_ORIGIN })).status,
 			200,
 		);
 		turn(newApp, "session-1", "turn/start");
@@ -715,7 +747,7 @@ test("a session opened in both apps is notified once per event", withHome(async 
 		// a turn: exactly that app's subscription is targeted.
 		fetchRecorder.calls.length = 0;
 		assert.equal(
-			(await request(app, "/api/dsh-mobile-maxxing/push/mobile-send", { body: { sessionId: "session-1" }, origin: NEW_ORIGIN })).status,
+			(await request(app, "/api/dsh-mobile-maxxing/push/mobile-send", { body: { sessionId: "session-1", requestId: "mobile-test-id" }, origin: NEW_ORIGIN })).status,
 			200,
 		);
 		turn(app, "session-1", "turn/start");

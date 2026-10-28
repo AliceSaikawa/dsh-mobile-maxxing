@@ -210,7 +210,7 @@ test("push endpoints must be real https push services", () => {
 	assert.equal(store.add({ endpoint: "https://web.push.apple.com/abc", keys }, { origin: "https://app.example" }), 1);
 });
 
-test("a phone send marks the next turn; a desktop send does not", async () => {
+test("a phone send marks its own turn; a desktop send does not", async () => {
 	const home = mkdtempSync(join(tmpdir(), "rdsh-fromphone-"));
 	const file = join(home, "dsh-mobile-maxxing", "push.json");
 	mkdirSync(join(home, "dsh-mobile-maxxing"), { recursive: true });
@@ -270,8 +270,9 @@ test("a phone send marks the next turn; a desktop send does not", async () => {
 		};
 		const wait = () => new Promise((resolve) => setTimeout(resolve, 1550));
 
-		assert.equal(await post("/api/dsh-mobile-maxxing/push/mobile-send", { sessionId: "s1" }), 200);
+		assert.equal(await post("/api/dsh-mobile-maxxing/push/mobile-send", { sessionId: "s1", requestId: "mobile-test-id" }), 200);
 		listeners.get("session/event")({ id: "s1" }, { type: "turn/start" });
+		listeners.get("session/event")({ id: "s1" }, { type: "user/message", data: { source: { rpcId: "mobile-test-id" } } });
 		listeners.get("session/event")({ id: "s1" }, { type: "turn/end", data: { reason: { kind: "completed" } } });
 		await wait();
 		assert.deepEqual(calls, ["https://web.push.apple.com/phone"], "only the origin that sent the turn is pushed");
@@ -354,7 +355,11 @@ test("notification fan-out targets the app that started the turn or request, nev
 		if (capture !== undefined) capture.text = responseBody;
 		return status;
 	};
-	const turn = (target, id, type) => target.listeners.get("session/event")({ id }, { type, data: { reason: { kind: "completed" } } });
+	const turn = (target, id, type) => {
+		const listener = target.listeners.get("session/event");
+		listener({ id }, { type, data: { reason: { kind: "completed" } } });
+		if (type === "turn/start") listener({ id }, { type: "user/message", data: { source: { rpcId: "mobile-test-id" } } });
+	};
 	const question = (target) => target.listeners.get("user-questions/request")({ agent: { id: "s1", session: { id: "s1" } }, questions: [{ header: "Q", question: "Continue?" }] }, () => {});
 
 	const warnings = [];
@@ -375,7 +380,7 @@ test("notification fan-out targets the app that started the turn or request, nev
 		// dropped and logged, not sent to every app.
 		calls.length = 0;
 		warnings.length = 0;
-		assert.equal(await request(legacy, "/api/dsh-mobile-maxxing/push/mobile-send", { body: { sessionId: "s1" } }), 200);
+		assert.equal(await request(legacy, "/api/dsh-mobile-maxxing/push/mobile-send", { body: { sessionId: "s1", requestId: "mobile-test-id" } }), 200);
 		turn(legacy, "s1", "turn/start");
 		turn(legacy, "s1", "turn/end");
 		await wait();
@@ -391,7 +396,7 @@ test("notification fan-out targets the app that started the turn or request, nev
 		// Once an app has talked to the process, an event without an origin of
 		// its own uses that app rather than every subscription.
 		calls.length = 0;
-		assert.equal(await request(legacy, "/api/dsh-mobile-maxxing/push/mobile-send", { body: { sessionId: "s1" } }), 200);
+		assert.equal(await request(legacy, "/api/dsh-mobile-maxxing/push/mobile-send", { body: { sessionId: "s1", requestId: "mobile-test-id" } }), 200);
 		turn(legacy, "s1", "turn/start");
 		turn(legacy, "s1", "turn/end");
 		await wait();
@@ -399,7 +404,7 @@ test("notification fan-out targets the app that started the turn or request, nev
 
 		// mobile-send with the page origin pins turn/end to that app.
 		calls.length = 0;
-		assert.equal(await request(legacy, "/api/dsh-mobile-maxxing/push/mobile-send", { body: { sessionId: "s1", origin: "https://app.example:8446" } }), 200);
+		assert.equal(await request(legacy, "/api/dsh-mobile-maxxing/push/mobile-send", { body: { sessionId: "s1", requestId: "mobile-test-id", origin: "https://app.example:8446" } }), 200);
 		turn(legacy, "s1", "turn/start");
 		turn(legacy, "s1", "turn/end");
 		await wait();
@@ -430,7 +435,7 @@ test("notification fan-out targets the app that started the turn or request, nev
 
 		// Question priority: the turn's origin wins over the learned origin.
 		calls.length = 0;
-		assert.equal(await request(own, "/api/dsh-mobile-maxxing/push/mobile-send", { body: { sessionId: "s1", origin: "https://app.example:8446" } }), 200);
+		assert.equal(await request(own, "/api/dsh-mobile-maxxing/push/mobile-send", { body: { sessionId: "s1", requestId: "mobile-test-id", origin: "https://app.example:8446" } }), 200);
 		turn(own, "s1", "turn/start");
 		question(own);
 		await wait();

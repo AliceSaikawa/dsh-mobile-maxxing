@@ -14523,6 +14523,21 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
     flex: 1 0 100%; min-width: 0;
     white-space: normal; overflow-wrap: break-word; word-break: normal;
   }
+  /* The terminal header reserves room for its status and copy action. Let the
+     command use the prompt's full width on the next line instead of squeezing
+     it into the few pixels left beside the cwd. Output wraps for the same
+     reason; long tokens may still break when no word boundary fits. */
+  [data-chat-flow-kind] [data-terminal] [class*="_promptLine"] { flex-wrap: wrap; }
+  [data-chat-flow-kind] [data-terminal] [data-command-text] {
+    flex: 1 0 100%; min-width: 0; overflow-x: hidden;
+    white-space: pre-wrap; overflow-wrap: break-word; word-break: normal;
+  }
+  [data-chat-flow-kind] [data-terminal] [class*="_output"] {
+    max-width: 100%; overflow-x: hidden;
+  }
+  [data-chat-flow-kind] [data-terminal] [class*="_output"] [class*="_line"] {
+    white-space: pre-wrap; overflow-wrap: anywhere; word-break: normal;
+  }
   [data-rdsh-question-card] [class*="_options"] { padding: 4px 8px !important; }
   [data-rdsh-question-card] [class*="_options"] > button[class*="_option"],
   [data-rdsh-question-card] [class*="_options"] > [class*="_customRow"] { padding: 8px !important; }

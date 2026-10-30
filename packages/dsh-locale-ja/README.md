@@ -4,11 +4,18 @@ Separate, optional Japanese locale package for DSH. It implements the final
 ownership and packaging migration of
 [#80](https://github.com/kuraneko1/dsh-mobile-maxxing/issues/80).
 
-**This package is the only owner of `ja`.** The mobile package no longer
+**On DSH 0.2.1-rc.2 / rc.3 this package is the only owner of `ja`.** The mobile package no longer
 registers a language or injects a locale pack; its `COPY.ja` is only its own
 UI copy. This package is not installed or enabled by the mobile tarball, is
 not added to a profile automatically, and never writes the shared display
 language: the phone picker only projects the catalog for this device.
+
+**DSH 0.2.2-alpha.2 ships `ja` itself.** The peer range is
+`0.2.1-rc.2 || 0.2.1-rc.3 || 0.2.2-alpha.2`. When `ja` is already in the
+locale catalog, the client registers nothing: a second `ja` definition or a
+second `ja` dictionary throws, and the web boot then fails as a whole. On
+0.2.2-alpha.2 the DSH translation is shown; the catalog below is used on
+0.2.1-rc.2 / rc.3 only.
 
 **Current catalog (2026-10-28):** DSH 0.2.1-rc.3, **65 namespaces / 2915
 keys**, with zero English fallback. The previous rc.2 snapshot had 64 / 2906;

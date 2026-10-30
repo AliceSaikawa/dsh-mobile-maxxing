@@ -204,6 +204,10 @@ test('the installed client is the single ja owner and coexists/disposes cleanly'
 			return dispose;
 		},
 		locale: {
+			// DSH 0.2.1-rc.2 / rc.3 ship only zh and en.
+			getSnapshot() {
+				return { locales: [{ id: 'zh' }, { id: 'en' }, ...(registered.has('__language__') ? [registered.get('__language__')] : [])] };
+			},
 			addLanguage(input) {
 				languages.push({ ...input });
 				registered.set('__language__', input);
